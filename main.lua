@@ -7,6 +7,36 @@
 --   • Automatic tool selection (Chainsaw → Strong Axe → Good Axe → Old Axe)
 --   • Tree-chopping logic extracted cleanly from Combat module
 --=====================================================
+--[[====================================================================
+ 🧠 GPT INTEGRATION NOTE
+ ----------------------------------------------------------------------
+ All modules in this project (main.lua, visuals.lua, combat.lua, etc.)
+ share a unified global environment:
+     _G.C  → Global Config, State, Services, Shared tables
+     _G.R  → Shared runtime helpers (functions used across modules)
+     _G.UI → WindUI instance (window + tabs)
+ 
+ This structure is intentional — it allows every module to:
+   • Access WindUI tabs (Main, Combat, Visuals, etc.) directly
+   • React to shared toggles (C.State.Toggles.*) instantly
+   • Communicate between modules without return values or dependencies
+   • Keep logic modular but globally synced at runtime
+
+ ⚠️ IMPORTANT:
+ When generating or editing new modules, GPT should **not** rewrite
+ `main.lua` loader logic or add redundant returns. All new code should
+ assume `_G.C`, `_G.R`, and `_G.UI` already exist and are populated.
+
+ Example for new modules:
+ --------------------------------------------------------
+ local C, R, UI = _G.C, _G.R, _G.UI
+ local MyTab = UI.Tabs.MyTab
+ MyTab:Toggle({ Title = "Example", Value = false, Callback = ... })
+ --------------------------------------------------------
+
+ This ensures seamless integration with existing systems and prevents
+ cyclic require issues, redundant returns, and inconsistent UI states.
+====================================================================]]
 
 repeat task.wait() until game:IsLoaded()
 
