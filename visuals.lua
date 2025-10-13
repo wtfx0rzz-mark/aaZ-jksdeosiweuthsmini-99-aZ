@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Visuals Module
+-- 1337 Nights | Visuals Module (Revised)
 --=====================================================
 -- Adds toggles to the Visuals tab:
 --   • "Track Team" — highlights other players' characters
@@ -9,7 +9,7 @@
 
 return function(C, R, UI)
     -----------------------------------------------------
-    -- Services and state
+    -- Services and shared state
     -----------------------------------------------------
     local Players = C.Services.Players
     local RunService = C.Services.Run
@@ -17,26 +17,27 @@ return function(C, R, UI)
     local LocalPlayer = C.LocalPlayer
 
     local VisualsTab = UI.Tabs.Visuals
-    local highlightFolder = Instance.new("Folder")
-    highlightFolder.Name = "__VisualHighlights__"
-    highlightFolder.Parent = WS
+    assert(VisualsTab, "Visuals tab missing from UI")
+
+    -----------------------------------------------------
+    -- Folders for highlight management
+    -----------------------------------------------------
+    local teamFolder = Instance.new("Folder")
+    teamFolder.Name = "__TeamHighlights__"
+    teamFolder.Parent = WS
 
     local treeFolder = Instance.new("Folder")
     treeFolder.Name = "__TreeHighlights__"
     treeFolder.Parent = WS
 
-    local trackTeamEnabled = false
-    local invisibleSelfEnabled = false
-    local highlightTreesEnabled = false
-
     -----------------------------------------------------
-    -- Helpers
+    -- Highlight helpers
     -----------------------------------------------------
-    local OUTLINE_COLOR = Color3.fromRGB(255, 255, 100)
-    local TREE_COLOR = Color3.fromRGB(0, 255, 100)
+    local COLOR_TEAM = Color3.fromRGB(255, 255, 100)
+    local COLOR_TREE = Color3.fromRGB(255, 255, 100)
 
     local function ensureHighlight(model, color)
-        if not model or not model:IsA("Model") then return end
+        if not model or not model:IsA("Model") then return nil end
         local hl = model:FindFirstChildOfClass("Highlight")
         if not hl then
             hl = Instance.new("Highlight")
@@ -45,8 +46,8 @@ return function(C, R, UI)
             hl.OutlineTransparency = 0
             hl.Parent = model
         end
-        hl.FillColor = color or OUTLINE_COLOR
-        hl.OutlineColor = color or OUTLINE_COLOR
+        hl.FillColor = color or COLOR_TEAM
+        hl.OutlineColor = color or COLOR_TEAM
         return hl
     end
 
@@ -63,24 +64,52 @@ return function(C, R, UI)
     end
 
     -----------------------------------------------------
-    -- Track Team (Show Hitboxes)
+    -- Track Team (player highlights)
     -----------------------------------------------------
-    local function applyTrackTeam()
-        clearFolder(highlightFolder)
+    local trackEnabled = false
+    local teamConnAdd, teamConnChar
+
+    local function applyTrackHighlights()
+        clearFolder(teamFolder)
         for _,plr in ipairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer and plr.Character then
-                local c = plr.Character
-                local hl = ensureHighlight(c, OUTLINE_COLOR)
-                if hl then hl.Parent = highlightFolder end
+                local hl = ensureHighlight(plr.Character, COLOR_TEAM)
+                if hl then hl.Parent = teamFolder end
             end
         end
     end
 
-    local function removeTrackTeam()
-        clearFolder(highlightFolder)
+    local function stopTrackHighlights()
+        clearFolder(teamFolder)
         for _,plr in ipairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer and plr.Character then
                 removeHighlight(plr.Character)
+            end
+        end
+        if teamConnAdd then teamConnAdd:Disconnect() teamConnAdd=nil end
+        if teamConnChar then teamConnChar:Disconnect() teamConnChar=nil end
+    end
+
+    local function startTrackHighlights()
+        applyTrackHighlights()
+        teamConnAdd = Players.PlayerAdded:Connect(function(plr)
+            if plr ~= LocalPlayer then
+                plr.CharacterAdded:Connect(function(char)
+                    task.wait(1)
+                    if trackEnabled then
+                        ensureHighlight(char, COLOR_TEAM)
+                    end
+                end)
+            end
+        end)
+        for _,plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then
+                plr.CharacterAdded:Connect(function(char)
+                    task.wait(1)
+                    if trackEnabled then
+                        ensureHighlight(char, COLOR_TEAM)
+                    end
+                end)
             end
         end
     end
@@ -101,17 +130,20 @@ return function(C, R, UI)
     -----------------------------------------------------
     -- Highlight Trees in Aura
     -----------------------------------------------------
+    local highlightTreesEnabled = false
     local auraConnection
-    local function highlightTreesInRange()
-        clearFolder(treeFolder)
-        if not LocalPlayer.Character then return end
-        local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
+
+    local function getTreesInAura()
+        local results = {}
+        local char = LocalPlayer.Character
+        if not char then return results end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return results end
         local origin = hrp.Position
         local radius = tonumber(C.State.AuraRadius) or 150
 
         local map = WS:FindFirstChild("Map")
-        if not map then return end
+        if not map then return results end
 
         local function scan(folder)
             if not folder then return end
@@ -119,10 +151,7 @@ return function(C, R, UI)
                 if obj:IsA("Model") and obj.Name == C.Config.TREE_NAME then
                     local trunk = obj:FindFirstChild("Trunk") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
                     if trunk and (trunk.Position - origin).Magnitude <= radius then
-                        local hl = ensureHighlight(obj, TREE_COLOR)
-                        if hl then hl.Parent = treeFolder end
-                    else
-                        removeHighlight(obj)
+                        table.insert(results, obj)
                     end
                 end
             end
@@ -130,79 +159,104 @@ return function(C, R, UI)
 
         scan(map:FindFirstChild("Foliage"))
         scan(map:FindFirstChild("Landmarks"))
+        return results
     end
 
-    local function startTreeAura()
-        if auraConnection then auraConnection:Disconnect() end
-        auraConnection = RunService.Heartbeat:Connect(function(dt)
-            highlightTreesInRange()
-        end)
-    end
-
-    local function stopTreeAura()
-        if auraConnection then auraConnection:Disconnect(); auraConnection = nil end
+    local function updateTreeHighlights()
         clearFolder(treeFolder)
-        local map = WS:FindFirstChild("Map")
-        if map then
-            local function clean(folder)
-                if not folder then return end
-                for _, obj in ipairs(folder:GetChildren()) do
-                    if obj:IsA("Model") and obj.Name == C.Config.TREE_NAME then
-                        removeHighlight(obj)
-                    end
-                end
-            end
-            clean(map:FindFirstChild("Foliage"))
-            clean(map:FindFirstChild("Landmarks"))
+        local trees = getTreesInAura()
+        for _,tree in ipairs(trees) do
+            local hl = ensureHighlight(tree, COLOR_TREE)
+            if hl then hl.Parent = treeFolder end
         end
     end
 
+    local function startTreeHighlight()
+        if auraConnection then auraConnection:Disconnect() end
+        auraConnection = RunService.Heartbeat:Connect(function()
+            updateTreeHighlights()
+        end)
+    end
+
+    local function stopTreeHighlight()
+        if auraConnection then auraConnection:Disconnect(); auraConnection=nil end
+        clearFolder(treeFolder)
+        local map = WS:FindFirstChild("Map")
+        if not map then return end
+        local function clean(folder)
+            if not folder then return end
+            for _,obj in ipairs(folder:GetChildren()) do
+                if obj:IsA("Model") and obj.Name == C.Config.TREE_NAME then
+                    removeHighlight(obj)
+                end
+            end
+        end
+        clean(map:FindFirstChild("Foliage"))
+        clean(map:FindFirstChild("Landmarks"))
+    end
+
     -----------------------------------------------------
-    -- UI Setup
+    -- UI: Visuals tab toggles
     -----------------------------------------------------
     VisualsTab:Section({ Title = "Visual Options" })
 
-    -- Track Team toggle
+    -- Track Team
     VisualsTab:Toggle({
         Title = "Track Team",
         Value = false,
         Callback = function(state)
-            trackTeamEnabled = state
+            trackEnabled = state
             if state then
-                applyTrackTeam()
-                Players.PlayerAdded:Connect(function(plr)
-                    task.wait(1)
-                    if trackTeamEnabled and plr.Character then
-                        ensureHighlight(plr.Character, OUTLINE_COLOR)
-                    end
-                end)
+                startTrackHighlights()
             else
-                removeTrackTeam()
+                stopTrackHighlights()
             end
         end
     })
 
-    -- Invisible toggle
+    -- Invisible
     VisualsTab:Toggle({
         Title = "Invisible",
         Value = false,
         Callback = function(state)
-            invisibleSelfEnabled = state
             setSelfInvisible(state)
         end
     })
 
-    -- Highlight Trees toggle
-    VisualsTab:Toggle({
+    -- Highlight Trees In Aura
+    local treeToggle
+    treeToggle = VisualsTab:Toggle({
         Title = "Highlight Trees In Aura",
         Value = false,
         Callback = function(state)
+            -- Prevent enabling if aura is off
+            if state and not C.State.Toggles.SmallTreeAura then
+                warn("[Visuals] Cannot highlight trees — Small Tree Aura is OFF")
+                if treeToggle and treeToggle.Set then
+                    treeToggle:Set(false)
+                end
+                return
+            end
+
             highlightTreesEnabled = state
             if state then
-                startTreeAura()
+                startTreeHighlight()
             else
-                stopTreeAura()
+                stopTreeHighlight()
             end
         end
     })
+
+    -----------------------------------------------------
+    -- Auto-disable tree highlight if aura stops
+    -----------------------------------------------------
+    RunService.Heartbeat:Connect(function()
+        if highlightTreesEnabled and not C.State.Toggles.SmallTreeAura then
+            highlightTreesEnabled = false
+            stopTreeHighlight()
+            if treeToggle and treeToggle.Set then
+                treeToggle:Set(false)
+            end
+        end
+    end)
 end
