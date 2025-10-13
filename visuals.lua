@@ -1,21 +1,27 @@
 --=====================================================
--- 1337 Nights | Visuals Module (Clean OUTLINE-Only)
+-- 1337 Nights | Visuals Module (Outline-Only, Bolder/Darker Edge)
 --=====================================================
--- Goal
---   • Draw a single, clean outline around whole player models and tree models.
---   • NO per-part boxes, NO silhouette fill, NO internal seam lines.
+-- Goals
+--   • Single, clean OUTLINE around whole player models and tree models (no internal seams).
+--   • Player/Tree surfaces remain fully visible (no silhouette fill).
+--   • Edge looks darker and a bit “bolder”.
 --
--- Key Technique
---   • Use exactly ONE Highlight per Model:
---       - FillTransparency = 1 (no fill at all)
---       - OutlineTransparency = 0 (fully visible outline)
---       - DepthMode = AlwaysOnTop (keeps outline visible through props)
---   • DO NOT add SelectionBox / BoxHandleAdornment — those cause per-part seams.
+-- How we achieve the look
+--   • We use *only* Roblox Highlight objects (NO SelectionBox/BoxHandleAdornment).
+--   • FillTransparency = 1 (no fill) so the normal colors are fully visible.
+--   • To make the outline appear “bolder”, we stack TWO Highlights per model:
+--       - Base HL (Occluded)   → helps darken the edge where it intersects world geometry.
+--       - Top  HL (AlwaysOnTop)→ guarantees a strong visible outline in front.
+--     While Roblox doesn’t expose a true “line thickness” for Highlight, this layering
+--     increases perceived edge weight/contrast without causing per-part seam lines.
+--
+-- Requested color
+--   • Use a *single* outline color = (255, 255, 100) for both players and trees.
 --
 -- UI
 --   • Visuals → Track Team (outlines other players only; excludes local player)
 --   • Visuals → Invisible (local-only transparency via LocalTransparencyModifier)
---   • Visuals → Highlight Trees In Aura (outlines trees within aura radius)
+--   • Visuals → Highlight Trees In Aura (outlines “Small Tree” models within aura radius)
 --
 -- Project rules (persisting):
 --   • Always provide full, top-to-bottom code.
@@ -52,8 +58,18 @@ return function(C, R, UI)
     -----------------------------------------------------
     -- Style
     -----------------------------------------------------
-    -- Requested color: (255, 255, 100)
+    -- Requested outline color (players & trees)
     local OUTLINE_COLOR = Color3.fromRGB(255, 255, 100)
+
+    -- No fill at all (so body/tree colors are fully visible)
+    local FILL_TRANSPARENCY     = 1
+    local OUTLINE_TRANSPARENCY  = 0
+
+    -- When true, we place TWO Highlights on each model:
+    --   1) Occluded (behind geometry) to deepen/darken intersections
+    --   2) AlwaysOnTop to ensure a strong edge in front
+    -- This increases perceived boldness without adding per-part seams.
+    local USE_DOUBLE_EDGE = true
 
     -----------------------------------------------------
     -- Utilities
@@ -66,38 +82,48 @@ return function(C, R, UI)
         end
     end
 
-    -- Remove any Highlights on a model that we previously added
-    local function removeOurOutline(model: Model)
+    -- Remove only our Highlights on a model (identified by Name prefix)
+    local function removeOurOutlines(model: Model)
         if not model then return end
         for _,h in ipairs(model:GetChildren()) do
-            if h:IsA("Highlight") and h.Name == "ModelOutline" then
+            if h:IsA("Highlight") and (h.Name == "ModelOutline_TOP" or h.Name == "ModelOutline_OCC") then
                 h:Destroy()
             end
         end
     end
 
-    -- Ensure exactly one clean outline Highlight on the supplied model.
-    -- No fill, only a bright outline, always on top.
+    -- Ensure one or two Highlights (based on USE_DOUBLE_EDGE) on the supplied model.
+    --   • Both are outline-only (FillTransparency=1).
+    --   • Same color for consistency (dark/strong look).
+    --   • Different DepthMode pairing to enhance perceived boldness:
+    --        - Occluded first, then AlwaysOnTop.
     local function ensureModelOutline(model: Model, parentFolder: Instance)
         if not (model and model:IsA("Model")) then return end
 
-        -- Nuke any prior outline we created to avoid duplicates
-        removeOurOutline(model)
+        -- Clean any prior outline we created to avoid duplicates
+        removeOurOutlines(model)
 
-        -- Create a single Highlight that adorns the entire model as one unit
-        local hl = Instance.new("Highlight")
-        hl.Name = "ModelOutline"
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.FillTransparency = 1                 -- NO FILL (prevents silhouette effect)
-        hl.OutlineTransparency = 0              -- fully visible outline
-        hl.OutlineColor = OUTLINE_COLOR
-        hl.Parent = model
+        -- (A) Occluded layer (deepens/darkens edge behind geometry)
+        if USE_DOUBLE_EDGE then
+            local occ = Instance.new("Highlight")
+            occ.Name = "ModelOutline_OCC"
+            occ.DepthMode = Enum.HighlightDepthMode.Occluded
+            occ.FillTransparency = FILL_TRANSPARENCY     -- no fill (fully see-through body)
+            occ.OutlineTransparency = OUTLINE_TRANSPARENCY
+            occ.OutlineColor = OUTLINE_COLOR
+            occ.Parent = model
+            local tO = Instance.new("ObjectValue"); tO.Name = "HL_TOKEN"; tO.Value = occ; tO.Parent = parentFolder
+        end
 
-        -- Token in our folder (helps with mass cleanup if needed)
-        local token = Instance.new("ObjectValue")
-        token.Name = "HL_TOKEN"
-        token.Value = hl
-        token.Parent = parentFolder
+        -- (B) Always-on-top layer (frontmost clean edge)
+        local top = Instance.new("Highlight")
+        top.Name = "ModelOutline_TOP"
+        top.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        top.FillTransparency = FILL_TRANSPARENCY         -- no fill (fully see-through body)
+        top.OutlineTransparency = OUTLINE_TRANSPARENCY
+        top.OutlineColor = OUTLINE_COLOR
+        top.Parent = model
+        local tT = Instance.new("ObjectValue"); tT.Name = "HL_TOKEN"; tT.Value = top; tT.Parent = parentFolder
     end
 
     -----------------------------------------------------
@@ -115,7 +141,6 @@ return function(C, R, UI)
         -- Apply to existing players (excluding local)
         for _,plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP then
-                -- (Re)connect CharacterAdded; apply immediately if spawned
                 if teamConns[plr] then teamConns[plr]:Disconnect() end
                 teamConns[plr] = plr.CharacterAdded:Connect(function(newChar)
                     task.wait(0.25)
@@ -146,7 +171,7 @@ return function(C, R, UI)
         if not teamConns["_PlayerRemoving"] then
             teamConns["_PlayerRemoving"] = Players.PlayerRemoving:Connect(function(plr)
                 if teamConns[plr] then teamConns[plr]:Disconnect() end
-                if plr.Character then removeOurOutline(plr.Character) end
+                if plr.Character then removeOurOutlines(plr.Character) end
             end)
         end
     end
@@ -164,7 +189,7 @@ return function(C, R, UI)
         clearChildren(teamFolder)
         for _,plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP and plr.Character then
-                removeOurOutline(plr.Character)
+                removeOurOutlines(plr.Character)
             end
         end
     end
@@ -198,7 +223,7 @@ return function(C, R, UI)
         local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return out end
         local origin = hrp.Position
 
-        -- Read your shared aura radius (falls back to 150 if not set)
+        -- Read shared aura radius (falls back to 150 if not set)
         local radius = tonumber(C.State.AuraRadius) or 150
 
         local map = WS:FindFirstChild("Map"); if not map then return out end
@@ -257,7 +282,7 @@ return function(C, R, UI)
                 if not folder then return end
                 for _,m in ipairs(folder:GetChildren()) do
                     if m:IsA("Model") and m.Name == C.Config.TREE_NAME then
-                        removeOurOutline(m)
+                        removeOurOutlines(m)
                     end
                 end
             end
@@ -273,7 +298,7 @@ return function(C, R, UI)
 
     -- Track Team (other players)
     VisualsTab:Toggle({
-        Title = "Track Team (Outline Only)",
+        Title = "Track Team (Outline Only, Darker/Bolder)",
         Value = false,
         Callback = function(state)
             trackEnabled = state
