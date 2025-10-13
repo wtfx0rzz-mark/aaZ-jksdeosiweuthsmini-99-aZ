@@ -8,7 +8,7 @@ end
 
 -- Load the UI module (WindUI-based)
 local success, UI = pcall(function()
-    return loadstring(httpget("https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/ui.lua"))()
+    return loadstring(httpget("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/ui.lua"))()
 end)
 
 if not success or not UI then
