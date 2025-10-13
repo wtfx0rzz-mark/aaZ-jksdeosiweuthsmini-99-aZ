@@ -1,26 +1,30 @@
 --=====================================================
--- 1337 Nights | Visuals Module (Silhouette-Only Outlines)
+-- 1337 Nights | Visuals Module (Clean OUTLINE-Only)
 --=====================================================
--- What this iteration changes:
---   • Replaces per-part SelectionBox/BoxHandleAdornment with a *dual-Highlight* technique
---     to produce a **single-body silhouette outline** (no internal cut lines).
---   • Uses an opaque fill to eliminate “torso/leg seam” lines entirely.
---   • Brighter outline with a yellow→orange tint for extra pop.
+-- Goal
+--   • Draw a single, clean outline around whole player models and tree models.
+--   • NO per-part boxes, NO silhouette fill, NO internal seam lines.
 --
--- Notes:
---   • The dual-Highlight stack = (1) OUTLINE-ONLY + (2) OPAQUE-FILL (+ outline).
---     The opaque fill prevents internal part edges from showing through.
---   • DepthMode = AlwaysOnTop ensures the outline stays visible even behind world props.
---   • Trees use the same silhouette approach.
+-- Key Technique
+--   • Use exactly ONE Highlight per Model:
+--       - FillTransparency = 1 (no fill at all)
+--       - OutlineTransparency = 0 (fully visible outline)
+--       - DepthMode = AlwaysOnTop (keeps outline visible through props)
+--   • DO NOT add SelectionBox / BoxHandleAdornment — those cause per-part seams.
 --
--- Project rules (persist for future iterations / continuation files):
---   • Always provide **full, top-to-bottom** code.
---   • Roblox/Lua code must include **helpful comments** throughout.
+-- UI
+--   • Visuals → Track Team (outlines other players only; excludes local player)
+--   • Visuals → Invisible (local-only transparency via LocalTransparencyModifier)
+--   • Visuals → Highlight Trees In Aura (outlines trees within aura radius)
+--
+-- Project rules (persisting):
+--   • Always provide full, top-to-bottom code.
+--   • Roblox/Lua code must include helpful comments throughout.
 --=====================================================
 
 return function(C, R, UI)
     -----------------------------------------------------
-    -- Services & short-hands
+    -- Services / Short-hands
     -----------------------------------------------------
     local Players    = C.Services.Players
     local RunService = C.Services.Run
@@ -31,149 +35,124 @@ return function(C, R, UI)
     assert(VisualsTab, "Visuals tab missing from UI")
 
     -----------------------------------------------------
-    -- Visual containers (easy mass-clean + GC-friendly)
+    -- Visual Containers (for easy cleanup)
     -----------------------------------------------------
-    local rootFolder      = Instance.new("Folder"); rootFolder.Name = "__Visuals_Root__"; rootFolder.Parent = WS
-    local teamFolder      = Instance.new("Folder"); teamFolder.Name = "__Team_Silhouette__"; teamFolder.Parent = rootFolder
-    local treeFolder      = Instance.new("Folder"); treeFolder.Name = "__Tree_Silhouette__"; treeFolder.Parent = rootFolder
+    local rootFolder = Instance.new("Folder")
+    rootFolder.Name = "__Visuals_Root__"
+    rootFolder.Parent = WS
 
-    -- We no longer create per-part adornments — silhouettes only.
-    -- (No teamEdgeFolder / treeEdgeFolder necessary in this version)
+    local teamFolder = Instance.new("Folder")
+    teamFolder.Name = "__Team_Outlines__"
+    teamFolder.Parent = rootFolder
+
+    local treeFolder = Instance.new("Folder")
+    treeFolder.Name = "__Tree_Outlines__"
+    treeFolder.Parent = rootFolder
 
     -----------------------------------------------------
-    -- Styling (hint of orange added to bright yellow)
+    -- Style
     -----------------------------------------------------
-    -- Base “pop” color with a small orange push
-    local SILH_FILL  = Color3.fromRGB(255, 208, 64)  -- yellow with orange hint
-    local SILH_EDGE  = Color3.fromRGB(255, 232, 96)  -- brighter/yellower edge for contrast
-
-    -- Outline/fill transparency:
-    --  • FillTransparency = 0   → fully opaque interior (hides internal seams completely)
-    --  • OutlineTransparency = 0 → maximum edge visibility
-    local FILL_TRANSPARENCY   = 0
-    local OUTLINE_TRANSPARENCY= 0
+    -- Requested color: (255, 255, 100)
+    local OUTLINE_COLOR = Color3.fromRGB(255, 255, 100)
 
     -----------------------------------------------------
     -- Utilities
     -----------------------------------------------------
 
-    -- Remove all children of a folder (fast reset each tick when needed)
+    -- Remove all children (used to clear our folders)
     local function clearChildren(folder: Instance)
         for _,v in ipairs(folder:GetChildren()) do
             v:Destroy()
         end
     end
 
-    -- Destroy any Highlight children on a Model we didn’t create (fresh start)
-    local function nukeHighlightsOnModel(model: Model)
-        for _,h in ipairs(model:GetChildren()) do
-            if h:IsA("Highlight") then
-                h:Destroy()
-            end
-        end
-    end
-
-    -- Build a *dual-Highlight* silhouette on a model.
-    --   A) outlineHL: outline only (no fill) — punches a strong border
-    --   B) fillHL:    solid fill + outline — kills internal seams and boosts brightness
-    --
-    -- We also store small marker Objects in parentFolder for quick mass cleanup.
-    local function applySilhouette(model: Model, parentFolder: Instance)
-        if not (model and model:IsA("Model")) then return end
-
-        -- Clean any previous highlights on this model
-        nukeHighlightsOnModel(model)
-
-        -- (A) OUTLINE-ONLY highlight (thin “ink” pass)
-        local outlineHL = Instance.new("Highlight")
-        outlineHL.Name = "SilhouetteOutline"
-        outlineHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        outlineHL.FillTransparency = 1                 -- no fill here
-        outlineHL.OutlineTransparency = OUTLINE_TRANSPARENCY
-        outlineHL.OutlineColor = SILH_EDGE
-        outlineHL.Parent = model
-
-        -- (B) OPAQUE FILL highlight (removes internal cut lines)
-        local fillHL = Instance.new("Highlight")
-        fillHL.Name = "SilhouetteFill"
-        fillHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        fillHL.FillTransparency = FILL_TRANSPARENCY    -- solid body
-        fillHL.FillColor = SILH_FILL
-        fillHL.OutlineTransparency = OUTLINE_TRANSPARENCY
-        fillHL.OutlineColor = SILH_EDGE
-        fillHL.Parent = model
-
-        -- Tokens to tie these to our folder for easy cleanup
-        local t1 = Instance.new("ObjectValue"); t1.Name = "HL_TOKEN"; t1.Value = outlineHL; t1.Parent = parentFolder
-        local t2 = Instance.new("ObjectValue"); t2.Name = "HL_TOKEN"; t2.Value = fillHL;    t2.Parent = parentFolder
-    end
-
-    -- Remove *our* silhouettes from a model
-    local function removeSilhouette(model: Model)
+    -- Remove any Highlights on a model that we previously added
+    local function removeOurOutline(model: Model)
         if not model then return end
         for _,h in ipairs(model:GetChildren()) do
-            if h:IsA("Highlight") and (h.Name == "SilhouetteOutline" or h.Name == "SilhouetteFill") then
+            if h:IsA("Highlight") and h.Name == "ModelOutline" then
                 h:Destroy()
             end
         end
+    end
+
+    -- Ensure exactly one clean outline Highlight on the supplied model.
+    -- No fill, only a bright outline, always on top.
+    local function ensureModelOutline(model: Model, parentFolder: Instance)
+        if not (model and model:IsA("Model")) then return end
+
+        -- Nuke any prior outline we created to avoid duplicates
+        removeOurOutline(model)
+
+        -- Create a single Highlight that adorns the entire model as one unit
+        local hl = Instance.new("Highlight")
+        hl.Name = "ModelOutline"
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.FillTransparency = 1                 -- NO FILL (prevents silhouette effect)
+        hl.OutlineTransparency = 0              -- fully visible outline
+        hl.OutlineColor = OUTLINE_COLOR
+        hl.Parent = model
+
+        -- Token in our folder (helps with mass cleanup if needed)
+        local token = Instance.new("ObjectValue")
+        token.Name = "HL_TOKEN"
+        token.Value = hl
+        token.Parent = parentFolder
     end
 
     -----------------------------------------------------
-    -- TRACK TEAM (other players) — silhouettes only
+    -- Track Team (players other than local player)
     -----------------------------------------------------
     local trackEnabled = false
     local teamConns: {[any]: RBXScriptConnection} = {}
 
-    local function applyTeamToCharacter(char: Model)
+    local function applyTeamOutlineToCharacter(char: Model)
         if not char then return end
-        applySilhouette(char, teamFolder)
+        ensureModelOutline(char, teamFolder)
     end
 
     local function startTrackTeam()
-        -- existing players
+        -- Apply to existing players (excluding local)
         for _,plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP then
-                if teamConns[plr] then teamConns[plr]:Disconnect(); teamConns[plr]=nil end
-
-                -- initial apply if character is already present
-                if plr.Character then
-                    applyTeamToCharacter(plr.Character)
-                end
-
-                -- future spawns
+                -- (Re)connect CharacterAdded; apply immediately if spawned
+                if teamConns[plr] then teamConns[plr]:Disconnect() end
                 teamConns[plr] = plr.CharacterAdded:Connect(function(newChar)
                     task.wait(0.25)
-                    if trackEnabled then applyTeamToCharacter(newChar) end
+                    if trackEnabled then applyTeamOutlineToCharacter(newChar) end
                 end)
+                if plr.Character then
+                    applyTeamOutlineToCharacter(plr.Character)
+                end
             end
         end
 
-        -- roster changes
+        -- Handle roster changes
         if not teamConns["_PlayerAdded"] then
             teamConns["_PlayerAdded"] = Players.PlayerAdded:Connect(function(plr)
                 if plr == LP then return end
-                if teamConns[plr] then teamConns[plr]:Disconnect(); teamConns[plr]=nil end
+                if teamConns[plr] then teamConns[plr]:Disconnect() end
                 teamConns[plr] = plr.CharacterAdded:Connect(function(newChar)
                     task.wait(0.25)
-                    if trackEnabled then applyTeamToCharacter(newChar) end
+                    if trackEnabled then applyTeamOutlineToCharacter(newChar) end
                 end)
                 if plr.Character then
                     task.wait(0.25)
-                    if trackEnabled then applyTeamToCharacter(plr.Character) end
+                    if trackEnabled then applyTeamOutlineToCharacter(plr.Character) end
                 end
             end)
         end
 
         if not teamConns["_PlayerRemoving"] then
             teamConns["_PlayerRemoving"] = Players.PlayerRemoving:Connect(function(plr)
-                if teamConns[plr] then teamConns[plr]:Disconnect(); teamConns[plr]=nil end
-                if plr.Character then removeSilhouette(plr.Character) end
+                if teamConns[plr] then teamConns[plr]:Disconnect() end
+                if plr.Character then removeOurOutline(plr.Character) end
             end)
         end
     end
 
     local function stopTrackTeam()
-        -- disconnect all signals
+        -- Disconnect all signals
         for k,conn in pairs(teamConns) do
             if typeof(conn) == "RBXScriptConnection" then
                 conn:Disconnect()
@@ -181,31 +160,31 @@ return function(C, R, UI)
             teamConns[k] = nil
         end
 
-        -- remove our visuals
+        -- Remove visuals
         clearChildren(teamFolder)
         for _,plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP and plr.Character then
-                removeSilhouette(plr.Character)
+                removeOurOutline(plr.Character)
             end
         end
     end
 
     -----------------------------------------------------
-    -- INVISIBLE (local player only)
+    -- Invisible (local player only)
     -----------------------------------------------------
     local function setSelfInvisible(state: boolean)
         local char = LP.Character
         if not char then return end
         for _, d in ipairs(char:GetDescendants()) do
             if d:IsA("BasePart") then
-                -- Local-only transparency; does not affect server
+                -- LocalTransparencyModifier is client-only; server won’t see it.
                 d.LocalTransparencyModifier = state and 1 or 0
             end
         end
     end
 
     -----------------------------------------------------
-    -- TREE SILHOUETTES (within Aura radius)
+    -- Tree Outlines (within Aura radius)
     -----------------------------------------------------
     local treeHLRunning = false
     local treeHeartbeatConn: RBXScriptConnection? = nil
@@ -214,10 +193,12 @@ return function(C, R, UI)
     -- Collect all “Small Tree” models within the current Aura radius of the local player
     local function collectTreesInAura(): {Model}
         local out = {}
+
         local char = LP.Character; if not char then return out end
         local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return out end
-
         local origin = hrp.Position
+
+        -- Read your shared aura radius (falls back to 150 if not set)
         local radius = tonumber(C.State.AuraRadius) or 150
 
         local map = WS:FindFirstChild("Map"); if not map then return out end
@@ -239,13 +220,13 @@ return function(C, R, UI)
         return out
     end
 
-    local function refreshTreeSilhouettes()
-        -- Full refresh each tick (safe & simple; can add caching later if needed)
+    local function refreshTreeOutlines()
+        -- Simple full refresh (safe & robust). If needed, we can cache later.
         clearChildren(treeFolder)
 
         local trees = collectTreesInAura()
         for _,t in ipairs(trees) do
-            applySilhouette(t, treeFolder)
+            ensureModelOutline(t, treeFolder)
         end
     end
 
@@ -253,13 +234,13 @@ return function(C, R, UI)
         if treeHeartbeatConn then treeHeartbeatConn:Disconnect(); treeHeartbeatConn=nil end
         treeHLRunning = true
 
-        -- Throttle to ~6–7 updates per second (enough responsiveness; avoids work every frame)
+        -- Throttle refresh to reduce work while staying responsive.
         treeHeartbeatConn = RunService.Heartbeat:Connect(function()
             if not treeHLRunning then return end
             local now = os.clock()
-            if now - lastTreeTick >= 0.15 then
+            if now - lastTreeTick >= 0.20 then
                 lastTreeTick = now
-                refreshTreeSilhouettes()
+                refreshTreeOutlines()
             end
         end)
     end
@@ -269,14 +250,14 @@ return function(C, R, UI)
         if treeHeartbeatConn then treeHeartbeatConn:Disconnect(); treeHeartbeatConn=nil end
         clearChildren(treeFolder)
 
-        -- Best-effort removal on existing map trees (cleans any leftover)
+        -- Defensive cleanup on map trees (if any lingering)
         local map = WS:FindFirstChild("Map")
         if map then
             local function clean(folder: Instance?)
                 if not folder then return end
                 for _,m in ipairs(folder:GetChildren()) do
                     if m:IsA("Model") and m.Name == C.Config.TREE_NAME then
-                        removeSilhouette(m)
+                        removeOurOutline(m)
                     end
                 end
             end
@@ -286,13 +267,13 @@ return function(C, R, UI)
     end
 
     -----------------------------------------------------
-    -- UI Wiring
+    -- UI
     -----------------------------------------------------
     VisualsTab:Section({ Title = "Visual Options" })
 
     -- Track Team (other players)
     VisualsTab:Toggle({
-        Title = "Track Team (Silhouette)",
+        Title = "Track Team (Outline Only)",
         Value = false,
         Callback = function(state)
             trackEnabled = state
@@ -300,7 +281,7 @@ return function(C, R, UI)
         end
     })
 
-    -- Invisible (self)
+    -- Invisible (self only)
     VisualsTab:Toggle({
         Title = "Invisible (Local Only)",
         Value = false,
@@ -309,13 +290,13 @@ return function(C, R, UI)
         end
     })
 
-    -- Highlight Trees In Aura
+    -- Highlight Trees In Aura (outline only)
     local treeToggle
     treeToggle = VisualsTab:Toggle({
-        Title = "Highlight Trees In Aura (Silhouette)",
+        Title = "Highlight Trees In Aura (Outline Only)",
         Value = false,
         Callback = function(state)
-            -- Honor your existing guard: only when Small Tree Aura is active
+            -- Honor your existing dependency: requires Small Tree Aura to be ON
             if state and not C.State.Toggles.SmallTreeAura then
                 warn("[Visuals] Cannot highlight trees — Small Tree Aura is OFF")
                 if treeToggle and treeToggle.Set then treeToggle:Set(false) end
@@ -325,7 +306,7 @@ return function(C, R, UI)
         end
     })
 
-    -- Auto-disable tree highlighting if aura turns off mid-run
+    -- Auto-disable if aura gets turned off elsewhere
     RunService.Heartbeat:Connect(function()
         if treeHLRunning and not C.State.Toggles.SmallTreeAura then
             stopTreeHL()
