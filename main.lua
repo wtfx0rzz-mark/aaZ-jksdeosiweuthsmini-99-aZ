@@ -163,15 +163,24 @@ local function stopSmallTreeAura()
     running.SmallTree = false
 end
 
-local MainTab = UI and UI.Tabs and UI.Tabs.Main
-if not MainTab then error("Main tab unavailable") end
+local Main = UI and UI.Tabs and UI.Tabs.Main
+if not Main then error("Main tab unavailable") end
 
-MainTab:Section({ Title = "Small Tree Aura" })
-MainTab:Toggle({
+Main:Section({ Title = "Small Tree Aura" })
+Main:Toggle({
     Title = "Small Tree Aura",
     Value = false,
     Callback = function(on)
         C.State.Toggles.SmallTreeAura = on
         if on then startSmallTreeAura() else stopSmallTreeAura() end
+    end
+})
+
+Main:Section({ Title = "Aura Distance" })
+Main:Slider({
+    Title = "Distance",
+    Value = { Min = 0, Max = 1000, Default = C.State.AuraRadius or 150 },
+    Callback = function(v)
+        C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 1000)
     end
 })
