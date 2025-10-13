@@ -10,29 +10,49 @@ local Tabs = {
 local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
 
-local function findWindowRootFrame()
-    local pg = lp:FindFirstChild("PlayerGui")
-    if not pg then return nil end
-    local best, bestScore = nil, -1
-    for _, d in ipairs(pg:GetDescendants()) do
-        if d:IsA("Frame") and d.Visible then
-            local score = d.AbsoluteSize.X * d.AbsoluteSize.Y
-            for _, t in ipairs(d:GetDescendants()) do
-                if t:IsA("TextLabel") and type(t.Text) == "string" and (t.Text == "99 Nights" or string.find(t.Text, "99 Nights")) then
-                    score = score + 1e7
+local function containsTexts(inst, texts)
+    local found = 0
+    for _,d in ipairs(inst:GetDescendants()) do
+        if d:IsA("TextLabel") or d:IsA("TextButton") then
+            local t = tostring(d.Text or "")
+            for _,needle in ipairs(texts) do
+                if t == needle or string.find(t, needle, 1, true) then
+                    found += 1
                     break
                 end
             end
-            if score > bestScore then
-                bestScore = score
-                best = d
+        end
+    end
+    return found
+end
+
+local function findWindowRootFrame()
+    local pg = lp:WaitForChild("PlayerGui", 5)
+    if not pg then return nil end
+    local best, scoreBest = nil, -1
+    for _,sg in ipairs(pg:GetChildren()) do
+        if sg:IsA("ScreenGui") and sg.Enabled then
+            for _,f in ipairs(sg:GetDescendants()) do
+                if f:IsA("Frame") and f.Visible then
+                    local score = 0
+                    score += containsTexts(f, {"99 Nights"}) * 100000
+                    score += containsTexts(f, {"Main","Combat","Auto"}) * 1000
+                    score += math.floor(f.AbsoluteSize.X * f.AbsoluteSize.Y)
+                    if score > scoreBest then
+                        scoreBest = score
+                        best = f
+                    end
+                end
             end
         end
     end
-    return best
+    if not best then return nil end
+    local root = best
+    while root and root.Parent and root.Parent ~= root.Parent.Parent and root.Parent:IsA("Frame") do
+        root = root.Parent
+    end
+    return root
 end
-
-local root = findWindowRootFrame()
 
 local function createBadge(parentFrame)
     local frame = Instance.new("Frame")
@@ -56,6 +76,7 @@ local function createBadge(parentFrame)
     avatar.Position = UDim2.fromOffset(10, 9)
     avatar.ZIndex = 1001
     avatar.Parent = frame
+
     local mask = Instance.new("UICorner")
     mask.CornerRadius = UDim.new(1, 0)
     mask.Parent = avatar
@@ -90,7 +111,7 @@ local function createBadge(parentFrame)
     return frame
 end
 
-local parentFrame = root or lp:WaitForChild("PlayerGui")
-local UserBadge = createBadge(parentFrame)
+local root = findWindowRootFrame() or lp:WaitForChild("PlayerGui")
+local UserBadge = createBadge(root)
 
 return { Lib = WindUI, Window = Window, Tabs = Tabs, UserBadge = UserBadge }
