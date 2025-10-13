@@ -1,5 +1,18 @@
+--=====================================================
+-- 1337 Nights | Main Module
+--=====================================================
+-- Adds: 
+--   • “Small Tree Aura” toggle on Main tab
+--   • “Aura Distance” slider to control range (0–1000)
+--   • Automatic tool selection (Chainsaw → Strong Axe → Good Axe → Old Axe)
+--   • Tree-chopping logic extracted cleanly from Combat module
+--=====================================================
+
 repeat task.wait() until game:IsLoaded()
 
+-------------------------------------------------------
+-- Load UI (WindUI wrapper)
+-------------------------------------------------------
 local function httpget(u) return game:HttpGet(u) end
 
 local UI = (function()
@@ -10,6 +23,9 @@ local UI = (function()
     error("ui.lua failed to load")
 end)()
 
+-------------------------------------------------------
+-- Environment + Config
+-------------------------------------------------------
 local C = {}
 C.Services = {
     Players = game:GetService("Players"),
@@ -18,25 +34,34 @@ C.Services = {
     Run     = game:GetService("RunService"),
 }
 C.LocalPlayer = C.Services.Players.LocalPlayer
+
 C.Config = {
-    CHOP_SWING_DELAY = 0.55,
-    TREE_NAME        = "Small Tree",
-    UID_SUFFIX       = "0000000000",
-    ChopPrefer       = { "Chainsaw", "Old Axe", "Axe", "Stone Axe" },
+    CHOP_SWING_DELAY = 0.55,                 -- Delay between tree hits
+    TREE_NAME        = "Small Tree",         -- Model name to detect
+    UID_SUFFIX       = "0000000000",         -- Unique ID suffix for hit tracking
+    ChopPrefer       = { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }, -- Tool priority
 }
+
 C.State = C.State or { AuraRadius = 150, Toggles = {} }
 
+-------------------------------------------------------
+-- Helper Functions
+-------------------------------------------------------
+
+-- Incremental hit ID for RPC calls
 local _hitCounter = 0
 local function nextHitId()
     _hitCounter += 1
     return tostring(_hitCounter) .. "_" .. C.Config.UID_SUFFIX
 end
 
+-- Locate a tool in the player's Inventory
 local function findInInventory(name)
     local inv = C.LocalPlayer and C.LocalPlayer:FindFirstChild("Inventory")
     return inv and inv:FindFirstChild(name) or nil
 end
 
+-- Return currently equipped tool name
 local function equippedToolName()
     local ch = C.LocalPlayer and C.LocalPlayer.Character
     if not ch then return nil end
@@ -44,6 +69,7 @@ local function equippedToolName()
     return t and t.Name or nil
 end
 
+-- Safely equip a tool by firing server event
 local function SafeEquip(tool)
     if not tool then return end
     local ev = C.Services.RS:FindFirstChild("RemoteEvents")
@@ -51,6 +77,7 @@ local function SafeEquip(tool)
     if ev then ev:FireServer("FireAllClients", tool) end
 end
 
+-- Ensure the correct tool is equipped
 local function ensureEquipped(wantedName)
     if not wantedName then return nil end
     if equippedToolName() == wantedName then
@@ -61,6 +88,7 @@ local function ensureEquipped(wantedName)
     return tool
 end
 
+-- Find the best BasePart on the tree to hit
 local function bestTreeHitPart(tree)
     if not tree or not tree:IsA("Model") then return nil end
     local hr = tree:FindFirstChild("HitRegisters")
@@ -75,6 +103,7 @@ local function bestTreeHitPart(tree)
     return tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
 end
 
+-- Compute impact position + rotation for RPC call
 local function computeImpactCFrame(model, hitPart)
     if not (model and hitPart and hitPart:IsA("BasePart")) then
         return hitPart and CFrame.new(hitPart.Position) or CFrame.new()
@@ -93,6 +122,7 @@ local function computeImpactCFrame(model, hitPart)
     return CFrame.new(pos) * rot
 end
 
+-- Send hit request to the server
 local function HitTree(tree, tool, hitId, impactCF)
     local evs = C.Services.RS:FindFirstChild("RemoteEvents")
     local dmg = evs and evs:FindFirstChild("ToolDamageObject")
@@ -100,8 +130,13 @@ local function HitTree(tree, tool, hitId, impactCF)
     dmg:InvokeServer(tree, tool, hitId, impactCF)
 end
 
+-------------------------------------------------------
+-- Core Logic
+-------------------------------------------------------
+
 local running = { SmallTree=false }
 
+-- Perform one chop "wave" across all nearby trees
 local function chopWaveForTrees(trees, swingDelay)
     local toolName
     for _, n in ipairs(C.Config.ChopPrefer) do
@@ -110,6 +145,7 @@ local function chopWaveForTrees(trees, swingDelay)
     if not toolName then task.wait(0.35) return end
     local tool = ensureEquipped(toolName)
     if not tool then task.wait(0.35) return end
+
     for _, tree in ipairs(trees) do
         task.spawn(function()
             local hitPart = bestTreeHitPart(tree)
@@ -120,9 +156,11 @@ local function chopWaveForTrees(trees, swingDelay)
             end
         end)
     end
+
     task.wait(swingDelay)
 end
 
+-- Main chop loop
 local function startSmallTreeAura()
     if running.SmallTree then return end
     running.SmallTree = true
@@ -135,6 +173,7 @@ local function startSmallTreeAura()
             local radius = tonumber(C.State.AuraRadius) or 150
             local trees = {}
             local map = C.Services.WS:FindFirstChild("Map")
+
             local function scan(folder)
                 if not folder then return end
                 for _, obj in ipairs(folder:GetChildren()) do
@@ -146,10 +185,12 @@ local function startSmallTreeAura()
                     end
                 end
             end
+
             if map then
                 scan(map:FindFirstChild("Foliage"))
                 scan(map:FindFirstChild("Landmarks"))
             end
+
             if #trees > 0 then
                 chopWaveForTrees(trees, C.Config.CHOP_SWING_DELAY)
             else
@@ -159,13 +200,19 @@ local function startSmallTreeAura()
     end)
 end
 
+-- Stop loop
 local function stopSmallTreeAura()
     running.SmallTree = false
 end
 
+-------------------------------------------------------
+-- UI Binding
+-------------------------------------------------------
+
 local Main = UI and UI.Tabs and UI.Tabs.Main
 if not Main then error("Main tab unavailable") end
 
+-- Main toggle
 Main:Section({ Title = "Small Tree Aura" })
 Main:Toggle({
     Title = "Small Tree Aura",
@@ -176,6 +223,7 @@ Main:Toggle({
     end
 })
 
+-- Aura distance slider
 Main:Section({ Title = "Aura Distance" })
 Main:Slider({
     Title = "Distance",
