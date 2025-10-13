@@ -232,3 +232,14 @@ Main:Slider({
         C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 1000)
     end
 })
+
+-------------------------------------------------------
+-- 🔧 MODULE LOADER SECTION
+-- Use this area to include additional modules such as Visuals, Combat, etc.
+
+-- Apply both lines for each new tab. 
+local Visuals = loadstring(game:HttpGet("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua"))()
+Visuals(C, R, UI)
+
+-------------------------------------------------------
+
