@@ -1,26 +1,64 @@
--- ui.lua
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 local Window = WindUI:CreateWindow({ Title = "99 Nights" })
- 
--- Define UI Tabs
+
 local Tabs = {
-    Main   = Window:Tab({ Title = "Main" }),
+    Main = Window:Tab({ Title = "Main" }),
     Combat = Window:Tab({ Title = "Combat" }),
-    Auto   = Window:Tab({ Title = "Auto" }),
+    Auto = Window:Tab({ Title = "Auto" }),
 }
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local lp = Players.LocalPlayer
 
--- Create the bottom left badge in the UI
-local function createUserBadge(parentGui, attachFrame)
+local function findWindowScreenGui()
+    local pg = lp:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+    local bestSG, bestScore = nil, -1
+    for _, sg in ipairs(pg:GetChildren()) do
+        if sg:IsA("ScreenGui") and sg.Enabled then
+            local score = 0
+            for _, d in ipairs(sg:GetDescendants()) do
+                if d:IsA("TextLabel") and type(d.Text) == "string" then
+                    if d.Text == "99 Nights" or d.Text:find("99 Nights") then
+                        score = score + 10
+                    end
+                end
+                if d:IsA("Frame") then
+                    score = score + 1
+                end
+            end
+            if score > bestScore then
+                bestScore = score
+                bestSG = sg
+            end
+        end
+    end
+    return bestSG
+end
+
+local function findMainFrame(sg)
+    if not sg then return nil end
+    local best, area = nil, 0
+    for _, d in ipairs(sg:GetDescendants()) do
+        if d:IsA("Frame") and d.Visible then
+            local a = d.AbsoluteSize.X * d.AbsoluteSize.Y
+            if a > area then
+                area = a
+                best = d
+            end
+        end
+    end
+    return best
+end
+
+local function createBadge(parentSG)
     local sg = Instance.new("ScreenGui")
     sg.Name = "NN_UserBadge"
     sg.IgnoreGuiInset = true
     sg.ResetOnSpawn = false
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    sg.Parent = parentGui
+    sg.Parent = parentSG or lp:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
     frame.Name = "Badge"
@@ -36,7 +74,6 @@ local function createUserBadge(parentGui, attachFrame)
     corner.Parent = frame
 
     local avatar = Instance.new("ImageLabel")
-    avatar.Name = "Avatar"
     avatar.BackgroundTransparency = 1
     avatar.Size = UDim2.fromOffset(48, 48)
     avatar.Position = UDim2.fromOffset(10, 9)
@@ -47,10 +84,8 @@ local function createUserBadge(parentGui, attachFrame)
     mask.Parent = avatar
 
     local display = Instance.new("TextLabel")
-    display.Name = "DisplayName"
     display.BackgroundTransparency = 1
     display.Font = Enum.Font.GothamSemibold
-    display.TextScaled = false
     display.TextSize = 16
     display.TextXAlignment = Enum.TextXAlignment.Left
     display.TextColor3 = Color3.fromRGB(235, 235, 235)
@@ -59,10 +94,8 @@ local function createUserBadge(parentGui, attachFrame)
     display.Parent = frame
 
     local username = Instance.new("TextLabel")
-    username.Name = "UserName"
     username.BackgroundTransparency = 1
     username.Font = Enum.Font.Gotham
-    username.TextScaled = false
     username.TextSize = 14
     username.TextXAlignment = Enum.TextXAlignment.Left
     username.TextColor3 = Color3.fromRGB(170, 170, 170)
@@ -70,73 +103,33 @@ local function createUserBadge(parentGui, attachFrame)
     username.Size = UDim2.new(1, -78, 0, 20)
     username.Parent = frame
 
-    local thumb, _ = Players:GetUserThumbnailAsync(lp.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+    local thumb = Players:GetUserThumbnailAsync(lp.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
     avatar.Image = thumb
     display.Text = lp.DisplayName or lp.Name
     username.Text = "@" .. (lp.Name or "")
 
-    local function place()
-        if attachFrame and attachFrame.AbsoluteSize.X > 0 then
-            local pos = attachFrame.AbsolutePosition
-            local size = attachFrame.AbsoluteSize
-            frame.Position = UDim2.fromOffset(pos.X + 12, pos.Y + size.Y - 12)
-        else
-            frame.Position = UDim2.new(0, 12, 1, -12)
-        end
-    end
+    return sg, frame
+end
 
-    place()
-    local conn1, conn2
-    if attachFrame then
-        conn1 = attachFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(place)
-        conn2 = attachFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
+local containerSG = findWindowScreenGui()
+local attachFrame = findMainFrame(containerSG)
+local badgeSG, badge = createBadge(containerSG or lp:WaitForChild("PlayerGui"))
+
+local function place()
+    if attachFrame and attachFrame.AbsoluteSize.X > 0 and attachFrame.Visible then
+        local p = attachFrame.AbsolutePosition
+        local s = attachFrame.AbsoluteSize
+        badge.Position = UDim2.fromOffset(p.X + 12, p.Y + s.Y - 12)
     else
-        RunService.RenderStepped:Connect(place)
+        badge.Position = UDim2.new(0, 12, 1, -12)
     end
-
-    return frame
 end
 
-local function findWindowRoot(win)
-    local candidate
-    pcall(function()
-        if win and win.Gui then
-            candidate = win.Gui
-        end
-    end)
-    if candidate then return candidate end
-    local pg = lp:WaitForChild("PlayerGui", 5)
-    return pg
+place()
+if attachFrame then
+    attachFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(place)
+    attachFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
 end
+RunService.RenderStepped:Connect(place)
 
-local function findAttachFrame()
-    local pg = lp:FindFirstChild("PlayerGui")
-    if not pg then return nil end
-    for _,sg in ipairs(pg:GetChildren()) do
-        if sg:IsA("ScreenGui") and sg.Enabled then
-            local maxArea, best = 0, nil
-            for _,d in ipairs(sg:GetDescendants()) do
-                if d:IsA("Frame") then
-                    local a = d.AbsoluteSize.X * d.AbsoluteSize.Y
-                    if a > maxArea then
-                        maxArea = a
-                        best = d
-                    end
-                end
-            end
-            if best then return best end
-        end
-    end
-    return nil
-end
-
-local parentGui = findWindowRoot(Window)
-local attach = findAttachFrame()
-local UserBadge = createUserBadge(parentGui, attach)
-
-return {
-    Lib = WindUI,
-    Window = Window,
-    Tabs = Tabs,
-    UserBadge = UserBadge,
-}
+return { Lib = WindUI, Window = Window, Tabs = Tabs, UserBadge = badge }
