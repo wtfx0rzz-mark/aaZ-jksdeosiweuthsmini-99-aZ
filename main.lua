@@ -270,6 +270,7 @@ Main:Slider({
 -- Apply both lines for each new tab. 
 local Visuals = loadstring(game:HttpGet("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua"))()
 Visuals(C, R, UI)
-
+local Combat = loadstring(game:HttpGet("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/combat.lua"))()
+Combat(C, R, UI)
 -------------------------------------------------------
 
