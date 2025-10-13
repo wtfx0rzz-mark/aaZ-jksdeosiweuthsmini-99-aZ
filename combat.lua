@@ -2,33 +2,45 @@
 -- 1337 Nights | Combat Module
 --=====================================================
 -- Adds to Combat tab:
---   • “Small Tree Aura” toggle
---   • “Aura Distance” slider (shared radius for combat auras)
---   • Full chop-aura implementation for Small Trees
+--   • “Small Tree Aura” toggle + distance slider
+--   • “Character Aura” toggle + distance slider
+--   • Both loops use the same damage pipeline:
+--       - Tool priority equip (Chainsaw → Strong Axe → Good Axe → Old Axe)
+--       - Computes best hit part (Trunk or HRP)
+--       - Performs InvokeServer() hits at fixed swing delay
 --=====================================================
 --[[====================================================================
  🧠 GPT INTEGRATION NOTE
  ----------------------------------------------------------------------
- Assumes _G.C, _G.R, _G.UI already exist (set by main.lua).
- This module does not return context; it binds to UI.Tabs.Combat directly.
-====================================================================]]
+ This module runs within the unified 1337 Nights global runtime, shared
+ by all modules (main.lua, visuals.lua, player.lua, etc.):
 
+     _G.C  → Global Config, State, Services, Shared tables
+     _G.R  → Shared runtime helpers
+     _G.UI → WindUI instance (window + tabs)
+
+ ✅ EXPECTED BEHAVIOR:
+   • Never return `UI`, `C`, or `R` from this module
+   • All references should assume these exist globally
+   • Each aura or feature should run in its own thread loop
+   • Avoid cyclic dependencies or direct requires — main.lua handles loading
+
+ ⚙️ DESIGN GOALS:
+   • Keep Tree and Character Aura isolated (independent toggles)
+   • Maintain shared equip + impact logic for RPC consistency
+   • Honor per-aura distance sliders (C.State.AuraRadius / CharacterAuraRadius)
+   • Exclude NPCs whose name contains "horse" (case-insensitive)
+====================================================================]]
 return function(C, R, UI)
-    -- ---------- guards ----------
     C = C or _G.C
     UI = UI or _G.UI
-    assert(C and UI and UI.Tabs and UI.Tabs.Combat, "combat.lua: missing context or Combat tab")
+    assert(C and UI and UI.Tabs and UI.Tabs.Combat, "combat.lua: missing context")
 
-    local Players = C.Services.Players
-    local RS      = C.Services.RS
-    local WS      = C.Services.WS
-    local Run     = C.Services.Run
-    local lp      = C.LocalPlayer
+    local RS  = C.Services.RS
+    local WS  = C.Services.WS
+    local lp  = C.LocalPlayer
 
-    local CombatTab = UI.Tabs.Combat
-
-    -- ---------- shared state ----------
-    C.State = C.State or { AuraRadius = 150, Toggles = {} }
+    C.State  = C.State or { AuraRadius = 150, CharacterAuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {
         CHOP_SWING_DELAY = 0.55,
         TREE_NAME        = "Small Tree",
@@ -36,10 +48,11 @@ return function(C, R, UI)
         ChopPrefer       = { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" },
     }
 
+    local CombatTab = UI.Tabs.Combat
     local running = running or {}
     running.SmallTree = running.SmallTree or false
+    running.Character = running.Character or false
 
-    -- ---------- helpers ----------
     local _hitCounter = 0
     local function nextHitId()
         _hitCounter += 1
@@ -89,6 +102,14 @@ return function(C, R, UI)
         return tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
     end
 
+    local function bestCharacterHitPart(model)
+        if not model or not model:IsA("Model") then return nil end
+        local hrp = model:FindFirstChild("HumanoidRootPart")
+        if hrp and hrp:IsA("BasePart") then return hrp end
+        if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then return model.PrimaryPart end
+        return model:FindFirstChildWhichIsA("BasePart")
+    end
+
     local function computeImpactCFrame(model, hitPart)
         if not (model and hitPart and hitPart:IsA("BasePart")) then
             return hitPart and CFrame.new(hitPart.Position) or CFrame.new()
@@ -107,15 +128,14 @@ return function(C, R, UI)
         return CFrame.new(pos) * rot
     end
 
-    local function HitTree(tree, tool, hitId, impactCF)
+    local function HitTarget(targetModel, tool, hitId, impactCF)
         local evs = RS:FindFirstChild("RemoteEvents")
         local dmg = evs and evs:FindFirstChild("ToolDamageObject")
         if not dmg then return end
-        dmg:InvokeServer(tree, tool, hitId, impactCF)
+        dmg:InvokeServer(targetModel, tool, hitId, impactCF)
     end
 
-    -- ---------- core aura logic ----------
-    local function chopWaveForTrees(trees, swingDelay)
+    local function chopWave(tModels, swingDelay, hitPartGetter)
         local toolName
         for _, n in ipairs(C.Config.ChopPrefer) do
             if findInInventory(n) then toolName = n break end
@@ -124,13 +144,13 @@ return function(C, R, UI)
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
 
-        for _, tree in ipairs(trees) do
+        for _, mdl in ipairs(tModels) do
             task.spawn(function()
-                local hitPart = bestTreeHitPart(tree)
+                local hitPart = hitPartGetter(mdl)
                 if hitPart then
-                    local impactCF = computeImpactCFrame(tree, hitPart)
+                    local impactCF = computeImpactCFrame(mdl, hitPart)
                     local hitId = nextHitId()
-                    HitTree(tree, tool, hitId, impactCF)
+                    HitTarget(mdl, tool, hitId, impactCF)
                 end
             end)
         end
@@ -143,8 +163,8 @@ return function(C, R, UI)
         running.SmallTree = true
         task.spawn(function()
             while running.SmallTree do
-                local character = lp.Character or lp.CharacterAdded:Wait()
-                local hrp = character:FindFirstChild("HumanoidRootPart")
+                local ch = lp.Character or lp.CharacterAdded:Wait()
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then task.wait(0.2) break end
 
                 local origin = hrp.Position
@@ -170,7 +190,7 @@ return function(C, R, UI)
                 end
 
                 if #trees > 0 then
-                    chopWaveForTrees(trees, C.Config.CHOP_SWING_DELAY)
+                    chopWave(trees, C.Config.CHOP_SWING_DELAY, bestTreeHitPart)
                 else
                     task.wait(0.3)
                 end
@@ -178,11 +198,48 @@ return function(C, R, UI)
         end)
     end
 
-    local function stopSmallTreeAura()
-        running.SmallTree = false
+    local function stopSmallTreeAura() running.SmallTree = false end
+
+    local function startCharacterAura()
+        if running.Character then return end
+        running.Character = true
+        task.spawn(function()
+            while running.Character do
+                local ch = lp.Character or lp.CharacterAdded:Wait()
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if not hrp then task.wait(0.2) break end
+
+                local origin = hrp.Position
+                local radius = tonumber(C.State.CharacterAuraRadius) or 150
+                local targets = {}
+                local charsFolder = WS:FindFirstChild("Characters")
+
+                if charsFolder then
+                    for _, obj in ipairs(charsFolder:GetChildren()) do
+                        repeat
+                            if not obj:IsA("Model") then break end
+                            local nameLower = string.lower(obj.Name or "")
+                            if string.find(nameLower, "horse", 1, true) then break end
+                            local hit = bestCharacterHitPart(obj)
+                            if not hit then break end
+                            if (hit.Position - origin).Magnitude > radius then break end
+                            targets[#targets+1] = obj
+                        until true
+                    end
+                end
+
+                if #targets > 0 then
+                    chopWave(targets, C.Config.CHOP_SWING_DELAY, bestCharacterHitPart)
+                else
+                    task.wait(0.3)
+                end
+            end
+        end)
     end
 
-    -- ---------- UI (Combat tab) ----------
+    local function stopCharacterAura() running.Character = false end
+
+    -- UI: Trees
     CombatTab:Section({ Title = "Aura (Trees)" })
     CombatTab:Toggle({
         Title = "Small Tree Aura",
@@ -192,13 +249,31 @@ return function(C, R, UI)
             if on then startSmallTreeAura() else stopSmallTreeAura() end
         end
     })
-
-    CombatTab:Section({ Title = "Aura Distance" })
+    CombatTab:Section({ Title = "Aura Distance (Trees)" })
     CombatTab:Slider({
         Title = "Distance",
         Value = { Min = 0, Max = 1000, Default = C.State.AuraRadius or 150 },
         Callback = function(v)
             C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 1000)
+        end
+    })
+
+    -- UI: Characters (NPCs)
+    CombatTab:Section({ Title = "Character Aura" })
+    CombatTab:Toggle({
+        Title = "Character Aura",
+        Value = C.State.Toggles.CharacterAura or false,
+        Callback = function(on)
+            C.State.Toggles.CharacterAura = on
+            if on then startCharacterAura() else stopCharacterAura() end
+        end
+    })
+    CombatTab:Section({ Title = "Aura Distance (Characters)" })
+    CombatTab:Slider({
+        Title = "Distance",
+        Value = { Min = 0, Max = 1000, Default = C.State.CharacterAuraRadius or (C.State.AuraRadius or 150) },
+        Callback = function(v)
+            C.State.CharacterAuraRadius = math.clamp(tonumber(v) or 150, 0, 1000)
         end
     })
 end
