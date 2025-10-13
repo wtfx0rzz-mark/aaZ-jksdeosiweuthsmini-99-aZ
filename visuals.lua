@@ -1,10 +1,10 @@
 --=====================================================
--- 1337 Nights | Visuals Module (Revised)
+-- 1337 Nights | Visuals Module (Outline Only)
 --=====================================================
 -- Adds toggles to the Visuals tab:
---   • "Track Team" — highlights other players' characters
+--   • "Track Team" — bright yellow outline for other players
 --   • "Invisible"  — toggles local player invisibility
---   • "Highlight Trees In Aura" — outlines trees within aura distance
+--   • "Highlight Trees In Aura" — outlines nearby trees (aura-based)
 --=====================================================
 
 return function(C, R, UI)
@@ -31,23 +31,23 @@ return function(C, R, UI)
     treeFolder.Parent = WS
 
     -----------------------------------------------------
-    -- Highlight helpers
+    -- Highlight helpers (outline-only)
     -----------------------------------------------------
-    local COLOR_TEAM = Color3.fromRGB(255, 255, 100)
-    local COLOR_TREE = Color3.fromRGB(255, 255, 100)
+    local COLOR_OUTLINE = Color3.fromRGB(255, 255, 80) -- bright yellow
 
-    local function ensureHighlight(model, color)
+    local function ensureHighlight(model)
         if not model or not model:IsA("Model") then return nil end
         local hl = model:FindFirstChildOfClass("Highlight")
         if not hl then
             hl = Instance.new("Highlight")
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.FillTransparency = 0.8
-            hl.OutlineTransparency = 0
             hl.Parent = model
         end
-        hl.FillColor = color or COLOR_TEAM
-        hl.OutlineColor = color or COLOR_TEAM
+
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.FillTransparency = 1          -- fully transparent center
+        hl.OutlineTransparency = 0       -- solid outline
+        hl.OutlineColor = COLOR_OUTLINE  -- bright bold outline
+        hl.FillColor = Color3.new(0, 0, 0) -- irrelevant (hidden)
         return hl
     end
 
@@ -73,7 +73,7 @@ return function(C, R, UI)
         clearFolder(teamFolder)
         for _,plr in ipairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer and plr.Character then
-                local hl = ensureHighlight(plr.Character, COLOR_TEAM)
+                local hl = ensureHighlight(plr.Character)
                 if hl then hl.Parent = teamFolder end
             end
         end
@@ -97,7 +97,7 @@ return function(C, R, UI)
                 plr.CharacterAdded:Connect(function(char)
                     task.wait(1)
                     if trackEnabled then
-                        ensureHighlight(char, COLOR_TEAM)
+                        ensureHighlight(char)
                     end
                 end)
             end
@@ -107,7 +107,7 @@ return function(C, R, UI)
                 plr.CharacterAdded:Connect(function(char)
                     task.wait(1)
                     if trackEnabled then
-                        ensureHighlight(char, COLOR_TEAM)
+                        ensureHighlight(char)
                     end
                 end)
             end
@@ -166,7 +166,7 @@ return function(C, R, UI)
         clearFolder(treeFolder)
         local trees = getTreesInAura()
         for _,tree in ipairs(trees) do
-            local hl = ensureHighlight(tree, COLOR_TREE)
+            local hl = ensureHighlight(tree)
             if hl then hl.Parent = treeFolder end
         end
     end
