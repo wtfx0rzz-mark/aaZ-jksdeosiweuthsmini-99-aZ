@@ -1,5 +1,6 @@
 --=====================================================
 -- 1337 Nights | Auto Tab • Edge Buttons (Phase 10 / Teleport / Plant Saplings)
+--  - Plant position uses a sky→down raycast directly IN FRONT of the player
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -31,18 +32,12 @@ return function(C, R, UI)
         local remotesFolder = RS:WaitForChild("RemoteEvents", 5)
         return remotesFolder and remotesFolder:FindFirstChild(name) or nil
     end
-    local function groundAt(pos)
-        local start = pos + Vector3.new(0, 500, 0)
-        local rc    = WS:Raycast(start, Vector3.new(0, -2000, 0))
-        return rc and rc.Position or pos
-    end
 
     --========================
     -- Edge buttons (no Rayfield)
     --========================
-    local PHASE_DIST = 10 -- forward distance for Phase 10
+    local PHASE_DIST = 10 -- Phase 10 distance forward
 
-    -- one ScreenGui we reuse; persists through respawns
     local edgeGui = lp:WaitForChild("PlayerGui"):FindFirstChild("EdgeButtons")
     if not edgeGui then
         edgeGui = Instance.new("ScreenGui")
@@ -141,6 +136,11 @@ return function(C, R, UI)
     --========================
     -- Plant Saplings behavior
     --========================
+    -- Raycast params + placement tuning
+    local AHEAD_DIST  = 1     -- how far in front of the player to plant
+    local RAY_HEIGHT  = 500   -- how high above target point to start the ray
+    local RAY_DEPTH   = 2000  -- how far down to raycast
+
     local function findClosestSapling()
         -- Prefer Workspace.Items children named exactly "Sapling"
         local items = WS:FindFirstChild("Items")
@@ -162,67 +162,64 @@ return function(C, R, UI)
         return closest
     end
 
-    local function plantNearestSaplingAtPlayer()
+    local function groundAhead(root)
+        -- point AHEAD of the player, then raycast from sky straight down to get ground
+        local base    = root.Position + root.CFrame.LookVector * AHEAD_DIST
+        local start   = base + Vector3.new(0, RAY_HEIGHT, 0)
+        local result  = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
+        return result and result.Position or base
+    end
+
+    local function plantNearestSaplingInFront()
         local sapling = findClosestSapling()
         if not sapling then return end
 
         local startDrag = getRemote("RequestStartDraggingItem")
         local stopDrag  = getRemote("StopDraggingItem")
-        local plantRF   = getRemote("RequestPlantItem") -- typically a RemoteFunction
+        local plantRF   = getRemote("RequestPlantItem")  -- RemoteFunction in most games; use :InvokeServer if so
 
         local root = hrp()
         if not root then return end
 
-        -- FOOT-LEVEL POSITION: offset downward by hip height (fallback ~3)
-        local hum = humanoid()
-        local offsetY = (hum and hum.HipHeight) or 3
-        local feetPos = root.Position - Vector3.new(0, offsetY, 0)
-        local plantPos = groundAt(feetPos)
+        -- Plant point: sky→down raycast IN FRONT of player
+        local plantPos = groundAhead(root)
 
-        -- drag
+        -- Begin drag (real sapling; if server expects dummy, we also try that)
         if startDrag then
             pcall(function() startDrag:FireServer(sapling) end)
-            pcall(function() startDrag:FireServer(Instance.new("Model")) end) -- fallback style
+            pcall(function() startDrag:FireServer(Instance.new("Model")) end)
         end
 
         task.wait(0.05)
 
-        -- plant
+        -- Plant (prefer InvokeServer; fallback to FireServer & dummy arg pattern)
         if plantRF then
-            local planted = false
-            -- prefer InvokeServer (if RemoteFunction)
-            local okInvoke = pcall(function()
-                plantRF:InvokeServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
+            local didPlant = pcall(function()
+                return plantRF:InvokeServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
             end)
-            planted = planted or okInvoke
-            if not planted then
-                -- try dummy model pattern you provided
-                pcall(function()
-                    plantRF:InvokeServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
+            if not didPlant then
+                local dummy = Instance.new("Model")
+                didPlant = pcall(function()
+                    return plantRF:InvokeServer(dummy, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
                 end)
             end
-            if not planted then
-                -- if it's actually a RemoteEvent (misnamed), try FireServer variants
-                pcall(function()
-                    plantRF:FireServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
-                end)
-                pcall(function()
-                    plantRF:FireServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
-                end)
+            if not didPlant then
+                pcall(function() plantRF:FireServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
+                pcall(function() plantRF:FireServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
             end
         end
 
         task.wait(0.05)
 
-        -- undrag
+        -- Stop drag
         if stopDrag then
             pcall(function() stopDrag:FireServer(sapling) end)
-            pcall(function() stopDrag:FireServer(Instance.new("Model")) end) -- fallback
+            pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
         end
     end
 
     plantBtn.MouseButton1Click:Connect(function()
-        plantNearestSaplingAtPlayer()
+        plantNearestSaplingInFront()
     end)
 
     --========================
