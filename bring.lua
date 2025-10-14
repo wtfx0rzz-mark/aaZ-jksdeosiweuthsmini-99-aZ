@@ -1,7 +1,11 @@
+--=====================================================
+-- 1337 Nights | Bring Tab (farthest-first, drag-held settle, scoped noclip)
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
     local RS      = C.Services.RS
+    local Run     = C.Services.Run
     local lp      = Players.LocalPlayer
 
     local Tabs = UI and UI.Tabs or {}
@@ -11,6 +15,7 @@ return function(C, R, UI)
     local AMOUNT_TO_BRING = 50
     local DROP_FORWARD = 5
     local DROP_UP      = 5
+    local SETTLE_HOLD  = 0.60   -- keep item pinned here (seconds) so server accepts the move
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
@@ -23,6 +28,7 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
+    -- ---------- utils ----------
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -47,6 +53,17 @@ return function(C, R, UI)
             return obj:FindFirstChildWhichIsA("BasePart")
         end
         return nil
+    end
+
+    local function largestBasePart(model) -- fallback if PrimaryPart is odd
+        local best, mass = nil, -1
+        for _,d in ipairs(model:GetDescendants()) do
+            if d:IsA("BasePart") then
+                local m = d:GetMass()
+                if m > mass then best, mass = d, m end
+            end
+        end
+        return best
     end
 
     local function allParts(target)
@@ -80,15 +97,16 @@ return function(C, R, UI)
         return f and f:FindFirstChild(n) or nil
     end
 
-    local function quickDrag(model)
-        local startRE = getRemote("RequestStartDraggingItem")
-        local stopRE  = getRemote("StopDraggingItem")
-        if not (startRE and stopRE) then return end
-        pcall(function() startRE:FireServer(model) end)
-        task.wait(0.04)
-        pcall(function() stopRE:FireServer(model) end)
+    local function startDrag(model)
+        local re = getRemote("RequestStartDraggingItem")
+        if re then pcall(function() re:FireServer(model) end) end
+    end
+    local function stopDrag(model)
+        local re = getRemote("StopDraggingItem")
+        if re then pcall(function() re:FireServer(model) end) end
     end
 
+    -- temp noclip + unanchor with restore handle
     local function applyNoClip(model)
         local parts = allParts(model)
         local orig = {}
@@ -96,6 +114,8 @@ return function(C, R, UI)
             orig[p] = {cc=p.CanCollide, an=p.Anchored}
             p.CanCollide = false
             p.Anchored   = false
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
             pcall(function() p:SetNetworkOwner(lp) end)
         end
         return function()
@@ -108,12 +128,36 @@ return function(C, R, UI)
         end
     end
 
+    -- Keep the model pinned at dropCF for SETTLE_HOLD seconds (client-side), while drag is active.
+    local function holdAtCFrame(model, dropCF, holdSeconds)
+        local t0 = os.clock()
+        local conn
+        conn = Run.Heartbeat:Connect(function()
+            if not model or not model.Parent then
+                if conn then conn:Disconnect() end
+                return
+            end
+            -- pivot every frame; also zero velocities so it doesn't drift
+            if model:IsA("Model") then
+                model:PivotTo(dropCF)
+            end
+            for _,p in ipairs(allParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            if os.clock() - t0 >= (holdSeconds or SETTLE_HOLD) then
+                if conn then conn:Disconnect() end
+            end
+        end)
+        -- small yield so we don't return before first frame pins it
+        task.wait(0.03)
+    end
+
     local function dropAndNudgeAsync(model, forward)
         task.defer(function()
             if not (model and model.Parent) then return end
-            quickDrag(model)
-            task.wait(0.06)
-            local v = forward * 6 + Vector3.new(0, -5, 0)
+            -- mild settle impulse (downward tiny)
+            local v = forward * 4 + Vector3.new(0, -2, 0)
             for _,p in ipairs(allParts(model)) do
                 p.AssemblyLinearVelocity = v
             end
@@ -124,19 +168,38 @@ return function(C, R, UI)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
         if not entry.model.Parent then return false end
+
+        -- ensure we have a sane part (some items' PrimaryPart is decorative)
+        if not entry.part or not entry.part.Parent then
+            entry.part = mainPart(entry.model) or largestBasePart(entry.model)
+            if not entry.part then return false end
+        end
+
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
+
+        -- 1) enable noclip, 2) start drag, 3) move & hold, 4) stop drag, 5) restore noclip, 6) light nudge
         local restore = applyNoClip(entry.model)
+        startDrag(entry.model)
+        task.wait(0.02)
+
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
         else
             entry.part.CFrame = dropCF
         end
+
+        -- hold it in place for the server to accept; prevents "poof back" and sinking
+        holdAtCFrame(entry.model, dropCF, SETTLE_HOLD)
+
+        stopDrag(entry.model)
         restore()
+
         dropAndNudgeAsync(entry.model, forward)
         return true
     end
 
+    -- ---------- collectors (now farthest-first) ----------
     local function sortFarthest(list)
         local root = hrp()
         if not root then return list end
@@ -152,7 +215,7 @@ return function(C, R, UI)
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) then
-                    local mp = mainPart(model)
+                    local mp = mainPart(model) or largestBasePart(model)
                     if mp then
                         n = n + 1
                         found[#found+1] = {model=model, part=mp}
@@ -170,7 +233,7 @@ return function(C, R, UI)
             if m:IsA("Model") and not isExcludedModel(m) then
                 local nm = m.Name
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
-                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
+                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart") or largestBasePart(m)
                     if mp then
                         n = n + 1
                         out[#out+1] = {model=m, part=mp}
@@ -187,7 +250,7 @@ return function(C, R, UI)
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
                 if hasHumanoid(m) then
-                    local mp = mainPart(m)
+                    local mp = mainPart(m) or largestBasePart(m)
                     if mp then
                         n = n + 1
                         out[#out+1] = {model=m, part=mp}
@@ -205,7 +268,7 @@ return function(C, R, UI)
         if not items then return out end
         for _,m in ipairs(items:GetChildren()) do
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
-                local mp = mainPart(m)
+                local mp = mainPart(m) or largestBasePart(m)
                 if mp then
                     n = n + 1
                     out[#out+1] = {model=m, part=mp}
@@ -228,7 +291,7 @@ return function(C, R, UI)
                     (which == "Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar")) or
                     (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
                 if ok then
-                    local mp = mainPart(m)
+                    local mp = mainPart(m) or largestBasePart(m)
                     if mp then
                         n = n + 1
                         out[#out+1] = {model=m, part=mp}
@@ -240,9 +303,11 @@ return function(C, R, UI)
         return sortFarthest(out)
     end
 
+    -- ---------- dispatcher ----------
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
+
         local list
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
@@ -256,16 +321,18 @@ return function(C, R, UI)
             list = collectByNameLoose(name, want)
         end
         if #list == 0 then return end
+
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= want then break end
             if teleportOne(entry) then
                 brought = brought + 1
-                task.wait(0.08)
+                task.wait(0.06)
             end
         end
     end
 
+    -- ---------- UI ----------
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
