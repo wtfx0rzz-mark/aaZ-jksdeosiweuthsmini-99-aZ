@@ -22,7 +22,7 @@ return function(C, R, UI)
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
-        return ch:FindFirstChild("HumanoidRootPart")
+        return ch and ch:FindFirstChild("HumanoidRootPart")
     end
 
     local function berryPart(m)
@@ -46,17 +46,17 @@ return function(C, R, UI)
     end
 
     local function getAllParts(target)
-        local parts = {}
+        local t = {}
         if target:IsA("BasePart") then
-            parts[1] = target
+            t[1] = target
         elseif target:IsA("Model") then
             for _,d in ipairs(target:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    parts[#parts+1] = d
+                    t[#t+1] = d
                 end
             end
         end
-        return parts
+        return t
     end
 
     local function computeDropCF()
@@ -96,57 +96,46 @@ return function(C, R, UI)
         return out
     end
 
-    local function getRemote(name)
-        local reFolder = RS:FindFirstChild("RemoteEvents")
-        if not reFolder then return nil end
-        return reFolder:FindFirstChild(name)
+    local function getRemote(n)
+        local f = RS:FindFirstChild("RemoteEvents")
+        return f and f:FindFirstChild(n) or nil
     end
 
-    local function dragDropTry(model, dropPos)
-        local ok = false
+    local function quickDrag(model)
         local startRE = getRemote("RequestStartDraggingItem")
-        local plantRF = getRemote("RequestPlantItem")
         local stopRE  = getRemote("StopDraggingItem")
-        if not (startRE and stopRE) then return false end
+        if not (startRE and stopRE) then return end
         pcall(function() startRE:FireServer(model) end)
-        if plantRF and typeof(plantRF) == "Instance" and plantRF.ClassName == "RemoteFunction" then
-            local successA = pcall(function() return plantRF:InvokeServer(model, dropPos) end)
-            ok = successA or ok
-            if not successA then
-                pcall(function() plantRF:InvokeServer(dropPos) end)
-            end
-        end
+        task.wait(0.04)
         pcall(function() stopRE:FireServer(model) end)
-        return ok
     end
 
-    local function dropOne(entry)
+    local function dropAndNudgeAsync(entry, dropCF, forward)
+        task.defer(function()
+            if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
+            quickDrag(entry.model)
+            task.wait(0.08)
+            local v = forward * 1 + Vector3.new(0, -30, 0)
+            for _,p in ipairs(getAllParts(entry.model)) do
+                p.AssemblyLinearVelocity = v
+            end
+        end)
+    end
+
+    local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
         if not entry.model.Parent then return false end
         if entry.part.Anchored then return false end
-
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
-        local dropPos = dropCF.Position
-
         pcall(function() entry.part:SetNetworkOwner(lp) end)
-
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
         else
             entry.part.CFrame = dropCF
         end
-
-        task.wait(0.1)
-
-        local v = forward * 1 + Vector3.new(0, -30, 0)
-        for _,p in ipairs(getAllParts(entry.model)) do
-            p.AssemblyLinearVelocity = v
-        end
-
-        dragDropTry(entry.model, dropPos)
-
+        dropAndNudgeAsync(entry, dropCF, forward)
         return true
     end
 
@@ -155,14 +144,12 @@ return function(C, R, UI)
         if want <= 0 then return end
         local list = collectByName(name, want)
         if #list == 0 then return end
-
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= want then break end
-            local ok = dropOne(entry)
-            if ok then
+            if teleportOne(entry) then
                 brought = brought + 1
-                task.wait(0.3)
+                task.wait(0.12)
             end
         end
     end
