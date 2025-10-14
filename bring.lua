@@ -16,7 +16,7 @@ return function(C, R, UI)
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
 
-    -- Added "Mossy Coin" and "Cultist"
+    -- Includes new options
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist"}
 
     -- New Pelts section
@@ -80,7 +80,6 @@ return function(C, R, UI)
     -- Collect helpers
     --========================
 
-    -- Top-level search (used for Bolt)
     local function collectByNameStrictTop(name, limit)
         local items = WS:FindFirstChild("Items")
         if not items then return {} end
@@ -101,8 +100,22 @@ return function(C, R, UI)
         return out
     end
 
-    -- Descendant search with a flexible name matcher for the *top-level* model under Items
-    local function collectByMatcherLoose(limit, matcher)
+    -- Detect whether a model looks like a humanoid/NPC
+    local function hasHumanoidBits(model)
+        if not (model and model:IsA("Model")) then return false end
+        if model:FindFirstChildOfClass("Humanoid") then return true end
+        if model:FindFirstChild("HumanoidRootPart") then return true end
+        local limbNames = { "Head","Torso","UpperTorso","LowerTorso","Left Arm","Right Arm","Left Leg","Right Leg",
+                            "LeftHand","RightHand","LeftFoot","RightFoot","LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm",
+                            "LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg" }
+        for _,n in ipairs(limbNames) do
+            if model:FindFirstChild(n) then return true end
+        end
+        return false
+    end
+
+    -- Descendant search with name matcher and optional filter on the *top-level* model under Items
+    local function collectByMatcherLoose(limit, matcher, filterFn)
         local items = WS:FindFirstChild("Items")
         if not items then return {} end
         local root = hrp()
@@ -117,7 +130,7 @@ return function(C, R, UI)
                         top = top.Parent
                     end
                     if top.Parent == items and top:IsA("Model") then
-                        if matcher(top.Name) then
+                        if matcher(top.Name) and (not filterFn or filterFn(top)) then
                             local mp = mainPart(top)
                             if mp then
                                 found[#found+1] = {model=top, part=mp, dist=(mp.Position - root.Position).Magnitude}
@@ -133,7 +146,7 @@ return function(C, R, UI)
         return out
     end
 
-    -- Basic exact/substring/prefix matchers
+    -- Match helpers
     local function exactMatcher(target)
         return function(name) return name == target end
     end
@@ -214,31 +227,26 @@ return function(C, R, UI)
         local want = tonumber(count) or 0
         if want <= 0 then return end
 
-        -- Special “smart” matchers
-        local matcher = nil
+        local matcher, filterFn = nil, nil
 
         if name == "Mossy Coin" then
-            -- Matches Mossy Coin, Mossy Coin2, Mossy Coin10, etc.
-            matcher = prefixMatcher("Mossy Coin")
+            matcher = prefixMatcher("Mossy Coin") -- Mossy Coin, Mossy Coin2, ...
         elseif name == "Cultist" then
-            -- Anything with "cultist" in the name (e.g., Crossbow Cultist)
-            matcher = containsMatcher("cultist")
+            matcher  = containsMatcher("cultist")  -- Crossbow Cultist, etc.
+            filterFn = hasHumanoidBits             -- ensure it's an NPC-like model
         elseif name == "Alpha Wolf Pelt" then
-            -- Prefer Alpha, but allow any Wolf Pelt as fallback
             matcher = anyOfMatcher({ exactMatcher("Alpha Wolf Pelt"), containsMatcher("Wolf Pelt") })
         elseif name == "Bear Pelt" then
-            -- Prefer Bear Pelt, but allow Polar Bear Pelt as fallback
             matcher = anyOfMatcher({ exactMatcher("Bear Pelt"), exactMatcher("Polar Bear Pelt"), containsMatcher("Bear Pelt") })
         else
             matcher = exactMatcher(name)
         end
 
-        -- Keep Bolt as strict top-level only, everything else uses the matcher-based loose search
         local list
         if name == "Bolt" then
             list = collectByNameStrictTop(name, want)
         else
-            list = collectByMatcherLoose(want, matcher)
+            list = collectByMatcherLoose(want, matcher, filterFn)
         end
 
         bringFromList(list, want)
@@ -283,7 +291,6 @@ return function(C, R, UI)
     singleSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(v) selMisc = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
 
-    -- New Pelts section
     tab:Section({ Title = "Pelts" })
     singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
