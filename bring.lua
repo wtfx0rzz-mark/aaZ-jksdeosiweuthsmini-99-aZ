@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, adjustable drop offsets)
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -12,16 +12,9 @@ return function(C, R, UI)
     assert(tab, "Bring tab not found in UI")
 
     local AMOUNT_TO_BRING = 50
+    local DROP_FORWARD = 6
+    local DROP_UP      = 6
 
-    --=====================================================
-    -- Adjustable drop offsets
-    --=====================================================
-    local DROP_FORWARD = 6   -- how far in front of player items appear
-    local DROP_UP      = 6   -- how high above ground items appear
-
-    --=====================================================
-    -- Item categories
-    --=====================================================
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
@@ -34,11 +27,17 @@ return function(C, R, UI)
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
     -------------------------------------------------------
-    -- Utility helpers
+    -- Utility
     -------------------------------------------------------
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function isExcludedModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local n = m.Name:lower()
+        return n == "pelt trader" or n:find("trader") or n:find("shopkeeper")
     end
 
     local function hasHumanoid(model)
@@ -46,20 +45,10 @@ return function(C, R, UI)
         return model:FindFirstChildOfClass("Humanoid") ~= nil
     end
 
-    local function berryPart(m)
-        if not (m and m:IsA("Model") and m.Name == "Berry") then return nil end
-        local p = m:FindFirstChild("Part")
-        if p and p:IsA("BasePart") then return p end
-        local h = m:FindFirstChild("Handle")
-        if h and h:IsA("BasePart") then return h end
-        return m:FindFirstChildWhichIsA("BasePart")
-    end
-
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
         if obj:IsA("Model") then
-            if obj.Name == "Berry" then return berryPart(obj) end
             if obj.PrimaryPart then return obj.PrimaryPart end
             return obj:FindFirstChildWhichIsA("BasePart")
         end
@@ -87,19 +76,14 @@ return function(C, R, UI)
         local root = hrp()
         if not root then return nil, nil end
         local forward = root.CFrame.LookVector
-
         local ahead   = root.Position + forward * DROP_FORWARD
         local start   = ahead + Vector3.new(0, 500, 0)
         local rc      = WS:Raycast(start, Vector3.new(0, -2000, 0))
         local basePos = rc and rc.Position or ahead
         local dropPos = basePos + Vector3.new(0, DROP_UP, 0)
-
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
 
-    -------------------------------------------------------
-    -- Networking helpers
-    -------------------------------------------------------
     local function getRemote(n)
         local f = RS:FindFirstChild("RemoteEvents")
         return f and f:FindFirstChild(n) or nil
@@ -119,7 +103,7 @@ return function(C, R, UI)
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
             quickDrag(entry.model)
             task.wait(0.08)
-            local v = forward * 6 + Vector3.new(0, -30, 0) -- push farther away now
+            local v = forward * 6 + Vector3.new(0, -30, 0)
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
             end
@@ -129,8 +113,8 @@ return function(C, R, UI)
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
-        if not entry.model.Parent then return false end
-        if entry.part.Anchored then return false end
+        if not entry.model.Parent or entry.part.Anchored then return false end
+        if isExcludedModel(entry.model) then return false end
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
         pcall(function() entry.part:SetNetworkOwner(lp) end)
@@ -144,7 +128,7 @@ return function(C, R, UI)
     end
 
     -------------------------------------------------------
-    -- Collection logic
+    -- Collectors
     -------------------------------------------------------
     local function sortedNear(list)
         local root = hrp()
@@ -160,7 +144,7 @@ return function(C, R, UI)
         for _,d in ipairs(WS:GetDescendants()) do
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
-                if model and model:IsA("Model") then
+                if model and model:IsA("Model") and not isExcludedModel(model) then
                     local mp = mainPart(model)
                     if mp then
                         n += 1
@@ -173,23 +157,18 @@ return function(C, R, UI)
         return sortedNear(found)
     end
 
-    local function isMossyCoinModel(m)
-        if not (m and m:IsA("Model")) then return false end
-        local nm = tostring(m.Name)
-        if nm == "Mossy Coin" then return true end
-        local base, num = nm:match("^(Mossy Coin)(%d+)$")
-        return base ~= nil and tonumber(num) ~= nil
-    end
-
     local function collectMossyCoins(limit)
         local out, n = {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and isMossyCoinModel(m) then
-                local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
-                if mp then
-                    n += 1
-                    out[#out+1] = {model=m, part=mp}
-                    if limit and n >= limit then break end
+            if m:IsA("Model") and not isExcludedModel(m) then
+                local nm = m.Name
+                if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
+                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
+                    if mp then
+                        n += 1
+                        out[#out+1] = {model=m, part=mp}
+                        if limit and n >= limit then break end
+                    end
                 end
             end
         end
@@ -199,7 +178,7 @@ return function(C, R, UI)
     local function collectCultists(limit)
         local out, n = {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) then
+            if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
                     if mp then
@@ -213,27 +192,18 @@ return function(C, R, UI)
         return sortedNear(out)
     end
 
-    local function isAlphaWolfPeltName(nm)
-        nm = nm:lower()
-        return nm == "alpha wolf pelt" or nm == "wolf pelt alpha" or nm:find("alpha") and nm:find("wolf") and nm:find("pelt")
-    end
-
-    local function isBearPeltName(nm)
-        nm = nm:lower()
-        return (nm == "bear pelt") or (nm:find("bear") and nm:find("pelt") and not nm:find("polar"))
-    end
-
     local function collectPelts(which, limit)
         local out, n = {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") then
+            if m:IsA("Model") and not isExcludedModel(m) then
                 local nm = m.Name
-                local ok = false
-                if which == "Bunny Foot" then ok = (nm == "Bunny Foot")
-                elseif which == "Wolf Pelt" then ok = (nm == "Wolf Pelt")
-                elseif which == "Alpha Wolf Pelt" then ok = isAlphaWolfPeltName(nm)
-                elseif which == "Bear Pelt" then ok = isBearPeltName(nm)
-                elseif which == "Polar Bear Pelt" then ok = (nm == "Polar Bear Pelt") end
+                local ok =
+                    (which == "Bunny Foot" and nm == "Bunny Foot") or
+                    (which == "Wolf Pelt" and nm == "Wolf Pelt") or
+                    (which == "Alpha Wolf Pelt" and nm:lower():find("alpha") and nm:lower():find("wolf")) or
+                    (which == "Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar")) or
+                    (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
+
                 if ok then
                     local mp = mainPart(m)
                     if mp then
@@ -253,14 +223,13 @@ return function(C, R, UI)
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
-
         local list = {}
+
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
         elseif name == "Cultist" then
             list = collectCultists(want)
-        elseif name == "Bunny Foot" or name == "Wolf Pelt" or name == "Alpha Wolf Pelt"
-            or name == "Bear Pelt" or name == "Polar Bear Pelt" then
+        elseif table.find(pelts, name) then
             list = collectPelts(name, want)
         else
             list = collectByNameLoose(name, want)
