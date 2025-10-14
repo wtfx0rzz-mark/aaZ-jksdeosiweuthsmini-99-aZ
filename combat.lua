@@ -6,7 +6,8 @@
 --   • Small Tree Aura (targets "Small Tree" and "Snowy Small Tree")
 --   • Shared Aura Distance slider
 --   • Common damage pipeline (priority equip → impact CFrame → InvokeServer)
---   • Writes per-hit attributes on trees: "N_<UID_SUFFIX>" (e.g., 1_0000000000)
+--   • Writes per-hit attributes on trees (under Model.HitRegisters if present):
+--       "N_<UID_SUFFIX>"  e.g., "1_0000000000"
 --=====================================================
 --[[====================================================================
  🧠 GPT INTEGRATION NOTE
@@ -56,6 +57,12 @@ return function(C, R, UI)
         return n and tonumber(n) or nil
     end
 
+    local function attrContainerForTree(treeModel)
+        -- Prefer Model.HitRegisters if it exists; else the model itself.
+        local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
+        return (hr and hr:IsA("Instance")) and hr or treeModel
+    end
+
     local function primeCounterFromWorld()
         if _counterPrimed then return end
         _counterPrimed = true
@@ -63,7 +70,9 @@ return function(C, R, UI)
 
         local function scanModel(m)
             if not (m and m:IsA("Model") and TREE_NAMES[m.Name]) then return end
-            local attrs = m:GetAttributes()
+            local bucket = attrContainerForTree(m)
+            local attrs = bucket and bucket:GetAttributes() or nil
+            if not attrs then return end
             for k, _ in pairs(attrs) do
                 local n = parseHitAttr(k)
                 if n and n > maxSeen then maxSeen = n end
@@ -203,7 +212,6 @@ return function(C, R, UI)
             if n >= maxCount then break end
             walk(root)
         end
-        -- stable deterministic ordering: nearest first, then by name
         table.sort(out, function(a, b)
             local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
             local da = pa and (pa.Position - origin).Magnitude or math.huge
@@ -239,9 +247,9 @@ return function(C, R, UI)
     end
 
     --------------------------------------------------------------------
-    -- Wave executor (now also tags hit attributes on trees)
+    -- Wave executor (tags attributes on Model.HitRegisters when present)
     --------------------------------------------------------------------
-    local function chopWave(targetModels, swingDelay, hitPartGetter, tagAttributesOnModels)
+    local function chopWave(targetModels, swingDelay, hitPartGetter, tagAttributesOnTrees)
         local toolName
         for _, n in ipairs(C.Config.ChopPrefer) do
             if findInInventory(n) then toolName = n break end
@@ -256,12 +264,11 @@ return function(C, R, UI)
                 if hitPart then
                     local impactCF = computeImpactCFrame(mdl, hitPart)
 
-                    -- Assign ordered ID and (optionally) write attribute to the model
                     local hitId = nextHitId()
-                    if tagAttributesOnModels then
-                        -- Store as boolean true for visibility; key encodes the order.
+                    if tagAttributesOnTrees then
                         pcall(function()
-                            mdl:SetAttribute(hitId, true)
+                            local bucket = attrContainerForTree(mdl)
+                            if bucket then bucket:SetAttribute(hitId, true) end
                         end)
                     end
 
@@ -291,7 +298,6 @@ return function(C, R, UI)
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
 
                 if #targets > 0 then
-                    -- Characters: no attribute tagging needed
                     chopWave(targets, C.Config.CHOP_SWING_DELAY, bestCharacterHitPart, false)
                 else
                     task.wait(0.3)
@@ -324,7 +330,7 @@ return function(C, R, UI)
 
                 local trees = collectTreesInRadius(roots, origin, radius, 64)
                 if #trees > 0 then
-                    -- Trees: tag attributes on the *model* to reflect the hit order
+                    -- Trees: tag attributes on HitRegisters (or model fallback)
                     chopWave(trees, C.Config.CHOP_SWING_DELAY, bestTreeHitPart, true)
                 else
                     task.wait(0.3)
@@ -355,7 +361,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Saving this as an example for later just incase: CombatTab:Section({ Title = "Aura Distance" })
     CombatTab:Slider({
         Title = "Distance",
         Value = { Min = 0, Max = 1000, Default = C.State.AuraRadius or 150 },
