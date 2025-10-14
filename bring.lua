@@ -71,20 +71,46 @@ return function(C, R, UI)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
 
-    local function collectByName(name, limit)
+    local function collectByNameStrictTop(name, limit)
+        local items = WS:FindFirstChild("Items")
+        if not items then return {} end
+        local root = hrp()
+        if not root then return {} end
+        local found = {}
+        for _,m in ipairs(items:GetChildren()) do
+            if m:IsA("Model") and m.Name == name then
+                local mp = mainPart(m)
+                if mp then
+                    found[#found+1] = {model=m, part=mp, dist=(mp.Position - root.Position).Magnitude}
+                end
+            end
+        end
+        table.sort(found, function(a,b) return a.dist < b.dist end)
+        local out, n = {}, math.min(limit or #found, #found)
+        for i=1,n do out[i] = found[i] end
+        return out
+    end
+
+    local function collectByNameLoose(name, limit)
         local items = WS:FindFirstChild("Items")
         if not items then return {} end
         local root = hrp()
         if not root then return {} end
         local found = {}
         for _,d in ipairs(items:GetDescendants()) do
-            if d:IsA("Model") or d:IsA("BasePart") then
-                if d.Name == name then
-                    local mp = mainPart(d)
-                    if mp then
-                        local model = d:IsA("Model") and d or d.Parent
-                        if model and model:IsA("Model") then
-                            found[#found+1] = {model=model, part=mp, dist=(mp.Position - root.Position).Magnitude}
+            if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
+                local model = d:IsA("Model") and d or d.Parent
+                if model and model:IsA("Model") then
+                    local top = model
+                    while top.Parent and top.Parent ~= items do
+                        top = top.Parent
+                    end
+                    if top.Parent == items and top:IsA("Model") then
+                        if top.Name == name then
+                            local mp = mainPart(top)
+                            if mp then
+                                found[#found+1] = {model=top, part=mp, dist=(mp.Position - root.Position).Magnitude}
+                            end
                         end
                     end
                 end
@@ -142,7 +168,8 @@ return function(C, R, UI)
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
-        local list = collectByName(name, want)
+        local strictTop = (name == "Bolt")
+        local list = strictTop and collectByNameStrictTop(name, want) or collectByNameLoose(name, want)
         if #list == 0 then return end
         local brought = 0
         for _,entry in ipairs(list) do
