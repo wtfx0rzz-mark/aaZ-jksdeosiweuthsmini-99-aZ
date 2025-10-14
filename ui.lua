@@ -34,7 +34,7 @@ Window:SetToggleKey(Enum.KeyCode.V)
 local Tabs = {
     Main   = Window:Tab({ Title = "Main",   Icon = "home",  Desc = "Main controls" }),
     Combat = Window:Tab({ Title = "Combat", Icon = "sword", Desc = "Combat options" }),
-    Bring   = Window:Tab({ Title = "Bring",   Icon = "backpack",   Desc = "Bring Items" }),
+    --Bring   = Window:Tab({ Title = "Bring",   Icon = "backpack",   Desc = "Bring Items" }),
     Auto   = Window:Tab({ Title = "Auto",   Icon = "cpu",   Desc = "Automation" }),
     Visuals   = Window:Tab({ Title = "Visuals",   Icon = "eye",   Desc = "Visuals" }),
 }
