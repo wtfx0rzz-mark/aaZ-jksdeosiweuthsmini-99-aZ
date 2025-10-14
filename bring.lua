@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
+-- 1337 Nights | Bring Tab (farthest-first, temp noclip, robust teleport)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -26,9 +26,6 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    -------------------------------------------------------
-    -- Utility
-    -------------------------------------------------------
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -55,7 +52,7 @@ return function(C, R, UI)
         return nil
     end
 
-    local function getAllParts(target)
+    local function allParts(target)
         local t = {}
         if target:IsA("BasePart") then
             t[1] = target
@@ -69,9 +66,6 @@ return function(C, R, UI)
         return t
     end
 
-    -------------------------------------------------------
-    -- Drop positioning
-    -------------------------------------------------------
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -98,13 +92,32 @@ return function(C, R, UI)
         pcall(function() stopRE:FireServer(model) end)
     end
 
-    local function dropAndNudgeAsync(entry, dropCF, forward)
+    local function tempNoClip(model, duration)
+        local parts = allParts(model)
+        local orig = {}
+        for _,p in ipairs(parts) do
+            orig[p] = {cc=p.CanCollide, an=p.Anchored}
+            p.CanCollide = false
+            p.Anchored = false
+            pcall(function() p:SetNetworkOwner(lp) end)
+        end
+        task.delay(duration or 1, function()
+            for p,st in pairs(orig) do
+                if p and p.Parent then
+                    p.CanCollide = st.cc
+                    p.Anchored   = st.an
+                end
+            end
+        end)
+    end
+
+    local function dropAndNudgeAsync(model, forward)
         task.defer(function()
-            if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            quickDrag(entry.model)
+            if not (model and model.Parent) then return end
+            quickDrag(model)
             task.wait(0.08)
             local v = forward * 6 + Vector3.new(0, -30, 0)
-            for _,p in ipairs(getAllParts(entry.model)) do
+            for _,p in ipairs(allParts(model)) do
                 p.AssemblyLinearVelocity = v
             end
         end)
@@ -113,28 +126,24 @@ return function(C, R, UI)
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
-        if not entry.model.Parent or entry.part.Anchored then return false end
-        if isExcludedModel(entry.model) then return false end
+        if not entry.model.Parent then return false end
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
-        pcall(function() entry.part:SetNetworkOwner(lp) end)
+        tempNoClip(entry.model, 1.2)
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
         else
             entry.part.CFrame = dropCF
         end
-        dropAndNudgeAsync(entry, dropCF, forward)
+        dropAndNudgeAsync(entry.model, forward)
         return true
     end
 
-    -------------------------------------------------------
-    -- Collectors
-    -------------------------------------------------------
-    local function sortedNear(list)
+    local function sortFarthest(list)
         local root = hrp()
         if not root then return list end
         table.sort(list, function(a,b)
-            return (a.part.Position - root.Position).Magnitude < (b.part.Position - root.Position).Magnitude
+            return (a.part.Position - root.Position).Magnitude > (b.part.Position - root.Position).Magnitude
         end)
         return list
     end
@@ -154,7 +163,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedNear(found)
+        return sortFarthest(found)
     end
 
     local function collectMossyCoins(limit)
@@ -172,7 +181,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedNear(out)
+        return sortFarthest(out)
     end
 
     local function collectCultists(limit)
@@ -189,7 +198,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedNear(out)
+        return sortFarthest(out)
     end
 
     local function collectSaplings(limit)
@@ -206,7 +215,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedNear(out)
+        return sortFarthest(out)
     end
 
     local function collectPelts(which, limit)
@@ -220,7 +229,6 @@ return function(C, R, UI)
                     (which == "Alpha Wolf Pelt" and nm:lower():find("alpha") and nm:lower():find("wolf")) or
                     (which == "Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar")) or
                     (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
-
                 if ok then
                     local mp = mainPart(m)
                     if mp then
@@ -231,17 +239,13 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedNear(out)
+        return sortFarthest(out)
     end
 
-    -------------------------------------------------------
-    -- Dispatcher
-    -------------------------------------------------------
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
-        local list = {}
-
+        local list
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
         elseif name == "Cultist" then
@@ -253,21 +257,17 @@ return function(C, R, UI)
         else
             list = collectByNameLoose(name, want)
         end
-
         if #list == 0 then return end
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= want then break end
             if teleportOne(entry) then
                 brought += 1
-                task.wait(0.12)
+                task.wait(0.10)
             end
         end
     end
 
-    -------------------------------------------------------
-    -- UI
-    -------------------------------------------------------
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
