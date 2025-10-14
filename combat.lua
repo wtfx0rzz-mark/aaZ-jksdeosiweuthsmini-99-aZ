@@ -8,6 +8,7 @@
 --   • Common damage pipeline (priority equip → impact CFrame → InvokeServer)
 --   • Per-tree hit attributes under Model.HitRegisters:
 --       1_0000000000, 2_0000000000, 3_0000000000, ...
+--   • Round-robin batches so ALL trees in range get processed over time
 --=====================================================
 --[[====================================================================
  🧠 GPT INTEGRATION NOTE
@@ -34,12 +35,13 @@ return function(C, R, UI)
     local CombatTab = UI.Tabs.Combat
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
-    C.Config = C.Config or {
-        CHOP_SWING_DELAY = 0.55,
-        TREE_NAME        = "Small Tree",
-        UID_SUFFIX       = "0000000000",
-        ChopPrefer       = { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" },
-    }
+    C.Config = C.Config or {}
+    -- Tunables
+    C.Config.CHOP_SWING_DELAY     = C.Config.CHOP_SWING_DELAY     or 0.55
+    C.Config.TREE_NAME            = C.Config.TREE_NAME            or "Small Tree"
+    C.Config.UID_SUFFIX           = C.Config.UID_SUFFIX           or "0000000000"
+    C.Config.ChopPrefer           = C.Config.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
+    C.Config.MAX_TARGETS_PER_WAVE = C.Config.MAX_TARGETS_PER_WAVE or 80 -- how many we hit per wave
 
     local running = { SmallTree = false, Character = false }
 
@@ -156,10 +158,9 @@ return function(C, R, UI)
     --------------------------------------------------------------------
     -- Collectors (trees recursive, characters flat) + deterministic order
     --------------------------------------------------------------------
-    local function collectTreesInRadius(roots, origin, radius, maxCount)
+    local function collectTreesInRadius(roots, origin, radius)
         local out, n = {}, 0
         local function walk(node)
-            if n >= maxCount then return end
             if not node then return end
             if node:IsA("Model") and TREE_NAMES[node.Name] then
                 local trunk = bestTreeHitPart(node)
@@ -168,20 +169,17 @@ return function(C, R, UI)
                     if d <= radius then
                         n += 1
                         out[n] = node
-                        if n >= maxCount then return end
                     end
                 end
             end
             local ok, children = pcall(node.GetChildren, node)
             if ok and children then
                 for _, ch in ipairs(children) do
-                    if n >= maxCount then break end
                     walk(ch)
                 end
             end
         end
         for _, root in ipairs(roots) do
-            if n >= maxCount then break end
             walk(root)
         end
         -- Sort nearest-first; tie-break by name for determinism
@@ -275,7 +273,15 @@ return function(C, R, UI)
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
 
                 if #targets > 0 then
-                    chopWave(targets, C.Config.CHOP_SWING_DELAY, bestCharacterHitPart, false)
+                    -- We simply hit everyone we found (no round-robin needed usually)
+                    local batch = targets
+                    if C.Config.MAX_TARGETS_PER_WAVE and #batch > C.Config.MAX_TARGETS_PER_WAVE then
+                        batch = {}
+                        for i = 1, C.Config.MAX_TARGETS_PER_WAVE do
+                            batch[i] = targets[i]
+                        end
+                    end
+                    chopWave(batch, C.Config.CHOP_SWING_DELAY, bestCharacterHitPart, false)
                 else
                     task.wait(0.3)
                 end
@@ -283,6 +289,9 @@ return function(C, R, UI)
         end)
     end
     local function stopCharacterAura() running.Character = false end
+
+    -- Cursor used for round-robin of trees across waves
+    C.State._treeCursor = C.State._treeCursor or 1
 
     local function startSmallTreeAura()
         if running.SmallTree then return end
@@ -302,9 +311,19 @@ return function(C, R, UI)
                     RS:FindFirstChild("CutsceneSets"),      -- fallback if Assets nests differently
                 }
 
-                local trees = collectTreesInRadius(roots, origin, radius, 64)
-                if #trees > 0 then
-                    chopWave(trees, C.Config.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                local allTrees = collectTreesInRadius(roots, origin, radius)
+                local total = #allTrees
+                if total > 0 then
+                    -- round-robin slice
+                    local batchSize = math.min(C.Config.MAX_TARGETS_PER_WAVE, total)
+                    if C.State._treeCursor > total then C.State._treeCursor = 1 end
+                    local batch = table.create(batchSize)
+                    for i = 1, batchSize do
+                        local idx = ((C.State._treeCursor + i - 2) % total) + 1
+                        batch[i] = allTrees[idx]
+                    end
+                    C.State._treeCursor = C.State._treeCursor + batchSize
+                    chopWave(batch, C.Config.CHOP_SWING_DELAY, bestTreeHitPart, true)
                 else
                     task.wait(0.3)
                 end
