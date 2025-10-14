@@ -251,7 +251,6 @@ return function(C, R, UI)
     local function stopSmallTreeAura() running.SmallTree = false end
 
     -- UI (Character first, then Small Tree; shared slider)
-    CombatTab:Section({ Title = "Character Aura" })
     CombatTab:Toggle({
         Title = "Character Aura",
         Value = C.State.Toggles.CharacterAura or false,
@@ -261,7 +260,6 @@ return function(C, R, UI)
         end
     })
 
-    CombatTab:Section({ Title = "Small Tree Aura" })
     CombatTab:Toggle({
         Title = "Small Tree Aura",
         Value = C.State.Toggles.SmallTreeAura or false,
@@ -270,8 +268,7 @@ return function(C, R, UI)
             if on then startSmallTreeAura() else stopSmallTreeAura() end
         end
     })
-
-    CombatTab:Section({ Title = "Aura Distance" })
+-- Saving this as an example for later just incase: CombatTab:Section({ Title = "Aura Distance" })
     CombatTab:Slider({
         Title = "Distance",
         Value = { Min = 0, Max = 1000, Default = C.State.AuraRadius or 150 },
