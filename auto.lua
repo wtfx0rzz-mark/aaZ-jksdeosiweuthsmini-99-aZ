@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Auto Tab • Edge Buttons (Phase 10 / Teleport / Plant Saplings / Instant Open / Bring Lost Child)
+-- 1337 Nights | Auto Tab • Edge Buttons (Phase 10 / Teleport / Plant Saplings / Instant Open / Bring Lost Child w/ temp noclip)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -30,8 +30,8 @@ return function(C, R, UI)
         return remotesFolder and remotesFolder:FindFirstChild(name) or nil
     end
 
-    -- ========= edge buttons =========
     local PHASE_DIST = 10
+
     local edgeGui = lp:WaitForChild("PlayerGui"):FindFirstChild("EdgeButtons")
     if not edgeGui then
         edgeGui = Instance.new("ScreenGui")
@@ -40,6 +40,7 @@ return function(C, R, UI)
         edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         edgeGui.Parent = lp:WaitForChild("PlayerGui")
     end
+
     local function makeEdgeBtn(name, row, label)
         local b = edgeGui:FindFirstChild(name)
         if not b then
@@ -65,11 +66,11 @@ return function(C, R, UI)
         end
         return b
     end
+
     local phaseBtn = makeEdgeBtn("Phase10Edge", 1, "Phase 10")
     local tpBtn    = makeEdgeBtn("TpEdge",      2, "Teleport")
     local plantBtn = makeEdgeBtn("PlantEdge",   3, "Plant")
 
-    -- ========= phase 10 =========
     phaseBtn.MouseButton1Click:Connect(function()
         local root = hrp()
         if not root then return end
@@ -81,14 +82,15 @@ return function(C, R, UI)
         root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end)
 
-    -- ========= teleport mark/go =========
     local markedCF = nil
     local HOLD_THRESHOLD = 0.5
     local downAt, suppressClick = 0, false
+
     tpBtn.MouseButton1Down:Connect(function()
         downAt = os.clock()
         suppressClick = false
     end)
+
     tpBtn.MouseButton1Up:Connect(function()
         local held = os.clock() - (downAt or 0)
         if held >= HOLD_THRESHOLD then
@@ -104,6 +106,7 @@ return function(C, R, UI)
             end
         end
     end)
+
     tpBtn.MouseButton1Click:Connect(function()
         if suppressClick then suppressClick = false return end
         local root = hrp()
@@ -115,10 +118,10 @@ return function(C, R, UI)
         root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end)
 
-    -- ========= plant saplings =========
     local AHEAD_DIST  = 3
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
+
     local function findClosestSapling()
         local items = WS:FindFirstChild("Items")
         local root  = hrp()
@@ -138,26 +141,33 @@ return function(C, R, UI)
         end
         return closest
     end
+
     local function groundAhead(root)
         local base    = root.Position + root.CFrame.LookVector * AHEAD_DIST
         local start   = base + Vector3.new(0, RAY_HEIGHT, 0)
         local result  = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
         return result and result.Position or base
     end
+
     local function plantNearestSaplingInFront()
         local sapling = findClosestSapling()
         if not sapling then return end
+
         local startDrag = getRemote("RequestStartDraggingItem")
         local stopDrag  = getRemote("StopDraggingItem")
         local plantRF   = getRemote("RequestPlantItem")
+
         local root = hrp()
         if not root then return end
         local plantPos = groundAhead(root)
+
         if startDrag then
             pcall(function() startDrag:FireServer(sapling) end)
             pcall(function() startDrag:FireServer(Instance.new("Model")) end)
         end
+
         task.wait(0.05)
+
         if plantRF then
             local did = pcall(function()
                 return plantRF:InvokeServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
@@ -173,21 +183,24 @@ return function(C, R, UI)
                 pcall(function() plantRF:FireServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
             end
         end
+
         task.wait(0.05)
+
         if stopDrag then
             pcall(function() stopDrag:FireServer(sapling) end)
             pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
         end
     end
+
     plantBtn.MouseButton1Click:Connect(function()
         plantNearestSaplingInFront()
     end)
 
-    -- ========= instant open =========
     local instantOpen = false
     local promptShownConn
     local KEYWORDS_NAME   = {"chest","crate","locker","cabinet","cupboard","safe","case","stash","cache","box"}
     local KEYWORDS_ACTION = {"open","unlock","search","loot"}
+
     local function containsAny(s, list)
         s = string.lower(s or "")
         for _,k in ipairs(list) do
@@ -195,6 +208,7 @@ return function(C, R, UI)
         end
         return false
     end
+
     local function shouldTargetPrompt(prompt)
         if not prompt or not prompt:IsA("ProximityPrompt") then return false end
         if containsAny(prompt.ActionText or "", KEYWORDS_ACTION) then return true end
@@ -205,12 +219,14 @@ return function(C, R, UI)
         end
         return false
     end
+
     local function patchPrompt(prompt)
         if not (prompt and prompt:IsA("ProximityPrompt")) then return end
         if not shouldTargetPrompt(prompt) then return end
         prompt.HoldDuration = 0
         prompt.RequiresLineOfSight = false
     end
+
     local function scanExistingPrompts()
         for _,d in ipairs(WS:GetDescendants()) do
             if d:IsA("ProximityPrompt") then
@@ -218,6 +234,7 @@ return function(C, R, UI)
             end
         end
     end
+
     local function enableInstantOpen()
         if instantOpen then return end
         instantOpen = true
@@ -226,14 +243,15 @@ return function(C, R, UI)
         end)
         scanExistingPrompts()
     end
+
     local function disableInstantOpen()
         instantOpen = false
         if promptShownConn then promptShownConn:Disconnect() promptShownConn = nil end
     end
 
-    -- ========= bring-style helpers (for Lost Child) =========
     local DROP_FORWARD = 5
     local DROP_UP      = 5
+
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -245,6 +263,7 @@ return function(C, R, UI)
         local dropPos = basePos + Vector3.new(0, DROP_UP, 0)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
+
     local function getAllParts(target)
         local t = {}
         if target:IsA("BasePart") then
@@ -258,6 +277,7 @@ return function(C, R, UI)
         end
         return t
     end
+
     local function quickDrag(model)
         local startRE = getRemote("RequestStartDraggingItem")
         local stopRE  = getRemote("StopDraggingItem")
@@ -266,6 +286,7 @@ return function(C, R, UI)
         task.wait(0.04)
         pcall(function() stopRE:FireServer(model) end)
     end
+
     local function dropAndNudgeAsync(entry, dropCF, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
@@ -277,6 +298,7 @@ return function(C, R, UI)
             end
         end)
     end
+
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
@@ -292,6 +314,7 @@ return function(C, R, UI)
         dropAndNudgeAsync(entry, dropCF, forward)
         return true
     end
+
     local function sortedNear(list)
         local root = hrp()
         if not root then return list end
@@ -300,13 +323,15 @@ return function(C, R, UI)
         end)
         return list
     end
+
     local function collectLostChildren()
         local out = {}
         local chars = WS:FindFirstChild("Characters")
         if not chars then return out end
         for _,m in ipairs(chars:GetChildren()) do
             if m:IsA("Model") then
-                local nm = (m.Name or ""):lower():gsub("%s+", "")
+                local raw = (m.Name or "")
+                local nm  = raw:lower():gsub("%s+", "")
                 if nm == "lostchild" or nm:match("^lostchild%d+$") then
                     local mp = mainPart(m)
                     if mp and not mp.Anchored then
@@ -317,20 +342,36 @@ return function(C, R, UI)
         end
         return sortedNear(out)
     end
+
+    local function withTemporaryNoClip(model, duration)
+        local parts = getAllParts(model)
+        local orig = {}
+        for _,p in ipairs(parts) do
+            orig[p] = p.CanCollide
+            p.CanCollide = false
+        end
+        task.delay(duration or 1, function()
+            for p,cc in pairs(orig) do
+                if p and p.Parent then
+                    p.CanCollide = cc
+                end
+            end
+        end)
+    end
+
     local function bringLostChildren()
         local list = collectLostChildren()
         if #list == 0 then return end
-        local brought = 0
         for _,entry in ipairs(list) do
+            withTemporaryNoClip(entry.model, 1.2)
             if teleportOne(entry) then
-                brought = brought + 1
                 task.wait(0.12)
             end
         end
     end
 
-    -- ========= UI =========
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
+
     tab:Toggle({
         Title = "Show Phase 10 button",
         Value = false,
@@ -338,6 +379,7 @@ return function(C, R, UI)
             phaseBtn.Visible = state
         end
     })
+
     tab:Toggle({
         Title = "Show Teleport button",
         Value = false,
@@ -345,6 +387,7 @@ return function(C, R, UI)
             tpBtn.Visible = state
         end
     })
+
     tab:Toggle({
         Title = "Plant Saplings",
         Value = false,
@@ -352,6 +395,7 @@ return function(C, R, UI)
             plantBtn.Visible = state
         end
     })
+
     tab:Toggle({
         Title = "Instant Open (chests)",
         Value = false,
@@ -360,7 +404,6 @@ return function(C, R, UI)
         end
     })
 
-    -- === new: Bring Lost Child button (below Instant Open) ===
     tab:Section({ Title = "Rescue" })
     tab:Button({
         Title = "Bring Lost Child",
@@ -370,6 +413,5 @@ return function(C, R, UI)
     })
 
     lp.CharacterAdded:Connect(function()
-        -- If PlayerGui ever gets rebuilt externally, re-parent edgeGui here.
     end)
 end
