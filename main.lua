@@ -59,14 +59,23 @@ _G.UI = UI
 -------------------------------------------------------
 -- 🔧 MODULE LOADER SECTION
 -------------------------------------------------------
-local Visuals = loadstring(game:HttpGet("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua"))()
-Visuals(C, _G.R, UI)
+-- Each module attaches its features to the corresponding tab
+-- defined in ui.lua (Tabs.Main, Tabs.Combat, Tabs.Bring, Tabs.Auto, Tabs.Visuals)
 
-local Combat  = loadstring(game:HttpGet("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/combat.lua"))()
-Combat(C, _G.R, UI)
+local paths = {
+    Visuals = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua",
+    Combat  = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/combat.lua",
+    Bring   = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/bring.lua",
+    Auto    = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/auto.lua"
+}
 
-local Bring  = loadstring(game:HttpGet("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/bring.lua"))()
-Bring(C, _G.R, UI)
-
---local Auto  = loadstring(game:HttpGet("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/combat.lua"))()
---Auto(C, _G.R, UI)
+for name, url in pairs(paths) do
+    local ok, mod = pcall(function()
+        return loadstring(game:HttpGet(url))()
+    end)
+    if ok and type(mod) == "function" then
+        pcall(mod, _G.C, _G.R, _G.UI)
+    else
+        warn(("Failed to load module %s from %s"):format(name, url))
+    end
+end
