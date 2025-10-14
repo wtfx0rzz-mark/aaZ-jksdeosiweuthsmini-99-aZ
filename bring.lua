@@ -1,6 +1,3 @@
---=====================================================
--- 1337 Nights | Bring Tab (farthest-first, drag-held settle, scoped noclip)
---=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -15,7 +12,6 @@ return function(C, R, UI)
     local AMOUNT_TO_BRING = 50
     local DROP_FORWARD = 5
     local DROP_UP      = 5
-    local SETTLE_HOLD  = 0.60   -- keep item pinned here (seconds) so server accepts the move
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
@@ -28,7 +24,6 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    -- ---------- utils ----------
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -55,7 +50,7 @@ return function(C, R, UI)
         return nil
     end
 
-    local function largestBasePart(model) -- fallback if PrimaryPart is odd
+    local function largestBasePart(model)
         local best, mass = nil, -1
         for _,d in ipairs(model:GetDescendants()) do
             if d:IsA("BasePart") then
@@ -106,8 +101,7 @@ return function(C, R, UI)
         if re then pcall(function() re:FireServer(model) end) end
     end
 
-    -- temp noclip + unanchor with restore handle
-    local function applyNoClip(model)
+    local function tempNoClip(model, duration)
         local parts = allParts(model)
         local orig = {}
         for _,p in ipairs(parts) do
@@ -118,45 +112,47 @@ return function(C, R, UI)
             p.AssemblyAngularVelocity = Vector3.new()
             pcall(function() p:SetNetworkOwner(lp) end)
         end
-        return function()
+        task.delay(duration or 0.3, function()
             for p,st in pairs(orig) do
                 if p and p.Parent then
                     p.CanCollide = st.cc
                     p.Anchored   = st.an
                 end
             end
-        end
+        end)
     end
 
-    -- Keep the model pinned at dropCF for SETTLE_HOLD seconds (client-side), while drag is active.
-    local function holdAtCFrame(model, dropCF, holdSeconds)
-        local t0 = os.clock()
-        local conn
-        conn = Run.Heartbeat:Connect(function()
-            if not model or not model.Parent then
-                if conn then conn:Disconnect() end
-                return
+    local function lockPlayer(dt)
+        local root = hrp()
+        if not root then return function() end end
+        local orig = {an=root.Anchored, lv=root.AssemblyLinearVelocity, av=root.AssemblyAngularVelocity}
+        root.Anchored = true
+        root.AssemblyLinearVelocity  = Vector3.new()
+        root.AssemblyAngularVelocity = Vector3.new()
+        local released = false
+        local function release()
+            if released then return end
+            released = true
+            if root and root.Parent then
+                root.Anchored = orig.an
+                root.AssemblyLinearVelocity  = orig.lv
+                root.AssemblyAngularVelocity = orig.av
             end
-            -- pivot every frame; also zero velocities so it doesn't drift
-            if model:IsA("Model") then
-                model:PivotTo(dropCF)
-            end
-            for _,p in ipairs(allParts(model)) do
-                p.AssemblyLinearVelocity  = Vector3.new()
-                p.AssemblyAngularVelocity = Vector3.new()
-            end
-            if os.clock() - t0 >= (holdSeconds or SETTLE_HOLD) then
-                if conn then conn:Disconnect() end
-            end
-        end)
-        -- small yield so we don't return before first frame pins it
-        task.wait(0.03)
+        end
+        task.delay(dt or 0.35, release)
+        return release
+    end
+
+    local function quickSettle(model, dropCF)
+        if model and model.Parent and model:IsA("Model") then
+            model:PivotTo(dropCF)
+        end
+        task.wait(0.02)
     end
 
     local function dropAndNudgeAsync(model, forward)
         task.defer(function()
             if not (model and model.Parent) then return end
-            -- mild settle impulse (downward tiny)
             local v = forward * 4 + Vector3.new(0, -2, 0)
             for _,p in ipairs(allParts(model)) do
                 p.AssemblyLinearVelocity = v
@@ -169,7 +165,6 @@ return function(C, R, UI)
         if not (root and entry and entry.model and entry.part) then return false end
         if not entry.model.Parent then return false end
 
-        -- ensure we have a sane part (some items' PrimaryPart is decorative)
         if not entry.part or not entry.part.Parent then
             entry.part = mainPart(entry.model) or largestBasePart(entry.model)
             if not entry.part then return false end
@@ -178,10 +173,9 @@ return function(C, R, UI)
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
 
-        -- 1) enable noclip, 2) start drag, 3) move & hold, 4) stop drag, 5) restore noclip, 6) light nudge
-        local restore = applyNoClip(entry.model)
+        local release = lockPlayer(0.35)
+        tempNoClip(entry.model, 0.25)
         startDrag(entry.model)
-        task.wait(0.02)
 
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
@@ -189,17 +183,13 @@ return function(C, R, UI)
             entry.part.CFrame = dropCF
         end
 
-        -- hold it in place for the server to accept; prevents "poof back" and sinking
-        holdAtCFrame(entry.model, dropCF, SETTLE_HOLD)
-
+        quickSettle(entry.model, dropCF)
         stopDrag(entry.model)
-        restore()
-
+        release()
         dropAndNudgeAsync(entry.model, forward)
         return true
     end
 
-    -- ---------- collectors (now farthest-first) ----------
     local function sortFarthest(list)
         local root = hrp()
         if not root then return list end
@@ -303,7 +293,6 @@ return function(C, R, UI)
         return sortFarthest(out)
     end
 
-    -- ---------- dispatcher ----------
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -332,7 +321,6 @@ return function(C, R, UI)
         end
     end
 
-    -- ---------- UI ----------
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
