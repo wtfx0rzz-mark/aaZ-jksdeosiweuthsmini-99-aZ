@@ -1,3 +1,7 @@
+-- 1337 Nights | Bring Tab Module
+-- Note: Full file provided; only change is replacing `brought += 1` with `brought = brought + 1`
+-- (Luau does not support the `+=` augmented assignment operator.)
+
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -19,11 +23,13 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1]
 
+    -- HRP helper
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
 
+    -- Special-case resolver for Berry model
     local function berryPart(m)
         if not (m and m:IsA("Model") and m.Name == "Berry") then return nil end
         local p = m:FindFirstChild("Part")
@@ -33,6 +39,7 @@ return function(C, R, UI)
         return m:FindFirstChildWhichIsA("BasePart")
     end
 
+    -- Get main part for a model or part
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -44,6 +51,7 @@ return function(C, R, UI)
         return nil
     end
 
+    -- Choose a ground drop CFrame slightly ahead of player
     local function groundDropCF()
         local root = hrp()
         if not root then return nil end
@@ -55,6 +63,7 @@ return function(C, R, UI)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
 
+    -- Nudge physics so items settle instead of floating
     local function nudge(modelOrPart, forward)
         local parts = {}
         if modelOrPart:IsA("Model") then
@@ -69,6 +78,7 @@ return function(C, R, UI)
         end
     end
 
+    -- Move model or part to CFrame
     local function pivotTo(modelOrPart, cf)
         if modelOrPart:IsA("Model") then
             modelOrPart:PivotTo(cf)
@@ -77,6 +87,7 @@ return function(C, R, UI)
         end
     end
 
+    -- Find items by name in Workspace.Items, nearest first
     local function collectByName(name, limit)
         local items = WS:FindFirstChild("Items")
         if not items then return {} end
@@ -97,6 +108,7 @@ return function(C, R, UI)
         return out
     end
 
+    -- Bring N of the selected item to a ground point in front of player
     local function bringSelected(name, count)
         local c = tonumber(count) or 0
         if c <= 0 then return end
@@ -110,7 +122,7 @@ return function(C, R, UI)
             if entry.model and entry.model.Parent then
                 pivotTo(entry.model, dropCF)
                 nudge(entry.model, forward)
-                brought += 1
+                brought = brought + 1    -- FIX: Luau does not support `+=`
                 task.wait(0.2)
             end
         end
