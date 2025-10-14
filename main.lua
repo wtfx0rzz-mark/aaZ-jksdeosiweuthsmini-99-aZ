@@ -63,10 +63,10 @@ _G.UI = UI
 -- defined in ui.lua (Tabs.Main, Tabs.Combat, Tabs.Bring, Tabs.Auto, Tabs.Visuals)
 
 local paths = {
-    Visuals = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua",
     Combat  = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/combat.lua",
     Bring   = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/bring.lua",
-    Auto    = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/auto.lua"
+    Auto    = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/auto.lua",
+    Visuals = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua",
 }
 
 for name, url in pairs(paths) do
