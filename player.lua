@@ -17,10 +17,15 @@ return function(C, R, UI)
     local flySpeed         = 1
     local walkSpeedValue   = 16
 
+    local forcePosEnabled  = false
+    local forcePosCF       = nil
+
     -- Connections / instances for cleanup
     local keyDownConn, keyUpConn, jumpConn, noclipConn, renderConn
     local mobileAddedConn, mobileRenderConn
     local bodyGyro, bodyVelocity
+
+    local forceConn
 
     -- Utilities
     local function hrp()
@@ -85,7 +90,8 @@ return function(C, R, UI)
         renderConn = RunService.RenderStepped:Connect(function()
             local cam = workspace.CurrentCamera
             if not cam or not root then return end
-            hum.PlatformStand = true
+            local hum2 = humanoid()
+            if hum2 then hum2.PlatformStand = true end
             bodyGyro.CFrame = cam.CFrame
 
             local moveVec = Vector3.new()
@@ -102,11 +108,7 @@ return function(C, R, UI)
                 bodyVelocity.Velocity = moveVec.Unit * (flySpeed * 50)
                 LAST = {F=CONTROL.F,B=CONTROL.B,L=CONTROL.L,R=CONTROL.R}
             else
-                if (LAST.F + LAST.B + LAST.L + LAST.R) ~= 0 then
-                    bodyVelocity.Velocity = Vector3.new()
-                else
-                    bodyVelocity.Velocity = Vector3.new()
-                end
+                bodyVelocity.Velocity = Vector3.new()
             end
         end)
     end
@@ -144,7 +146,6 @@ return function(C, R, UI)
         bodyVelocity.Velocity = Vector3.new()
         bodyVelocity.Parent = root
 
-        -- keep BG/BV across respawn
         mobileAddedConn = Players.LocalPlayer.CharacterAdded:Connect(function()
             root = hrp()
             if not root then return end
@@ -164,10 +165,10 @@ return function(C, R, UI)
             root = hrp()
             local cam = workspace.CurrentCamera
             if not root or not cam then return end
-            hum.PlatformStand = true
+            local hum2 = humanoid()
+            if hum2 then hum2.PlatformStand = true end
             bodyGyro.CFrame = cam.CFrame
 
-            -- Use Roblox PlayerModule move vector (safe fallback to UIS if absent)
             local move = Vector3.new()
             local ok, controlModule = pcall(function()
                 return require(lp.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
@@ -248,6 +249,33 @@ return function(C, R, UI)
     end
 
     --========================
+    -- Force Position
+    --========================
+    local function startForcePosition()
+        local root = hrp()
+        if not root then return end
+        forcePosCF = root.CFrame
+        disconnectConn(forceConn)
+        forceConn = RunService.RenderStepped:Connect(function()
+            local r = hrp()
+            if not r then return end
+            r.AssemblyLinearVelocity = Vector3.new()
+            r.AssemblyAngularVelocity = Vector3.new()
+            r.CFrame = forcePosCF
+        end)
+    end
+    local function stopForcePosition()
+        disconnectConn(forceConn); forceConn = nil
+        forcePosCF = nil
+        if not FLYING then
+            local hum = humanoid()
+            if hum then
+                hum.PlatformStand = false
+            end
+        end
+    end
+
+    --========================
     -- UI Controls
     --========================
     tab:Section({ Title = "Player • Movement", Icon = "activity" })
@@ -307,13 +335,30 @@ return function(C, R, UI)
         end
     })
 
-    -- Optional: safety cleanup if character resets while flying
+    tab:Toggle({
+        Title = "Force Position",
+        Value = false,
+        Callback = function(state)
+            forcePosEnabled = state
+            if state then
+                startForcePosition()
+            else
+                stopForcePosition()
+            end
+        end
+    })
+
     lp.CharacterAdded:Connect(function()
         if flyEnabled then
-            -- restart the chosen fly mode after respawn
             task.defer(function()
                 stopFly()
                 startFly()
+            end)
+        end
+        if forcePosEnabled then
+            task.defer(function()
+                stopForcePosition()
+                startForcePosition()
             end)
         end
     end)
