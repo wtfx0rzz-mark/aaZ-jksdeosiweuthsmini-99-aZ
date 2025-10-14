@@ -31,12 +31,18 @@ return function(C, R, UI)
         local remotesFolder = RS:WaitForChild("RemoteEvents", 5)
         return remotesFolder and remotesFolder:FindFirstChild(name) or nil
     end
+    local function groundAt(pos)
+        local start = pos + Vector3.new(0, 500, 0)
+        local rc    = WS:Raycast(start, Vector3.new(0, -2000, 0))
+        return rc and rc.Position or pos
+    end
 
     --========================
     -- Edge buttons (no Rayfield)
     --========================
-    local PHASE_DIST = 10 -- Phase 10 distance forward
+    local PHASE_DIST = 10 -- forward distance for Phase 10
 
+    -- one ScreenGui we reuse; persists through respawns
     local edgeGui = lp:WaitForChild("PlayerGui"):FindFirstChild("EdgeButtons")
     if not edgeGui then
         edgeGui = Instance.new("ScreenGui")
@@ -156,70 +162,62 @@ return function(C, R, UI)
         return closest
     end
 
-    local function groundAt(pos)
-        local start = pos + Vector3.new(0, 500, 0)
-        local rc    = WS:Raycast(start, Vector3.new(0, -2000, 0))
-        return rc and rc.Position or pos
-    end
-
     local function plantNearestSaplingAtPlayer()
         local sapling = findClosestSapling()
         if not sapling then return end
 
         local startDrag = getRemote("RequestStartDraggingItem")
         local stopDrag  = getRemote("StopDraggingItem")
-        local plantRF   = getRemote("RequestPlantItem")  -- appears to be RemoteFunction; use :InvokeServer when possible
+        local plantRF   = getRemote("RequestPlantItem") -- typically a RemoteFunction
 
-        -- Player feet/ground position
         local root = hrp()
         if not root then return end
-        local plantPos = groundAt(root.Position)
 
-        -- Try safest path: drag actual sapling model → plant with model + Vector3 → undrag.
-        -- If the server expects dummy instances (as in your example), we fall back to that.
-        local okDrag = false
+        -- FOOT-LEVEL POSITION: offset downward by hip height (fallback ~3)
+        local hum = humanoid()
+        local offsetY = (hum and hum.HipHeight) or 3
+        local feetPos = root.Position - Vector3.new(0, offsetY, 0)
+        local plantPos = groundAt(feetPos)
+
+        -- drag
         if startDrag then
-            local s, e = pcall(function() startDrag:FireServer(sapling) end)
-            okDrag = s
+            pcall(function() startDrag:FireServer(sapling) end)
+            pcall(function() startDrag:FireServer(Instance.new("Model")) end) -- fallback style
         end
 
         task.wait(0.05)
 
+        -- plant
         if plantRF then
-            -- Prefer InvokeServer if it's a RemoteFunction; otherwise FireServer if it's a RemoteEvent misnamed
-            local didPlant = false
-            local function tryInvoke()
-                local s, r = pcall(function() return plantRF:InvokeServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
-                didPlant = s
-                return s
+            local planted = false
+            -- prefer InvokeServer (if RemoteFunction)
+            local okInvoke = pcall(function()
+                plantRF:InvokeServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
+            end)
+            planted = planted or okInvoke
+            if not planted then
+                -- try dummy model pattern you provided
+                pcall(function()
+                    plantRF:InvokeServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
+                end)
             end
-            local function tryFire()
-                local s = pcall(function() plantRF:FireServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
-                didPlant = didPlant or s
-                return s
-            end
-
-            if not tryInvoke() then
-                -- Fallback to the pattern you provided (dummy instance + vector)
-                local dummy = Instance.new("Model")
-                if not tryInvoke() then
-                    pcall(function() plantRF:InvokeServer(dummy, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
-                end
-                if not didPlant then
-                    pcall(function() plantRF:FireServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
-                    if not didPlant then
-                        pcall(function() plantRF:FireServer(dummy, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
-                    end
-                end
+            if not planted then
+                -- if it's actually a RemoteEvent (misnamed), try FireServer variants
+                pcall(function()
+                    plantRF:FireServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
+                end)
+                pcall(function()
+                    plantRF:FireServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
+                end)
             end
         end
 
         task.wait(0.05)
 
+        -- undrag
         if stopDrag then
-            -- Try to end drag cleanly; also honor dummy version as backup
             pcall(function() stopDrag:FireServer(sapling) end)
-            pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
+            pcall(function() stopDrag:FireServer(Instance.new("Model")) end) -- fallback
         end
     end
 
