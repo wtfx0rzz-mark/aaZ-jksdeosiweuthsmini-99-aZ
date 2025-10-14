@@ -1,6 +1,3 @@
---=====================================================
--- 1337 Nights | Bring Tab (farthest-first, temp noclip, robust teleport)
---=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -92,31 +89,31 @@ return function(C, R, UI)
         pcall(function() stopRE:FireServer(model) end)
     end
 
-    local function tempNoClip(model, duration)
+    local function applyNoClip(model)
         local parts = allParts(model)
         local orig = {}
         for _,p in ipairs(parts) do
             orig[p] = {cc=p.CanCollide, an=p.Anchored}
             p.CanCollide = false
-            p.Anchored = false
+            p.Anchored   = false
             pcall(function() p:SetNetworkOwner(lp) end)
         end
-        task.delay(duration or 1, function()
+        return function()
             for p,st in pairs(orig) do
                 if p and p.Parent then
                     p.CanCollide = st.cc
                     p.Anchored   = st.an
                 end
             end
-        end)
+        end
     end
 
     local function dropAndNudgeAsync(model, forward)
         task.defer(function()
             if not (model and model.Parent) then return end
             quickDrag(model)
-            task.wait(0.08)
-            local v = forward * 6 + Vector3.new(0, -30, 0)
+            task.wait(0.06)
+            local v = forward * 6 + Vector3.new(0, -5, 0)
             for _,p in ipairs(allParts(model)) do
                 p.AssemblyLinearVelocity = v
             end
@@ -129,12 +126,13 @@ return function(C, R, UI)
         if not entry.model.Parent then return false end
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
-        tempNoClip(entry.model, 1.2)
+        local restore = applyNoClip(entry.model)
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
         else
             entry.part.CFrame = dropCF
         end
+        restore()
         dropAndNudgeAsync(entry.model, forward)
         return true
     end
@@ -156,7 +154,7 @@ return function(C, R, UI)
                 if model and model:IsA("Model") and not isExcludedModel(model) then
                     local mp = mainPart(model)
                     if mp then
-                        n += 1
+                        n = n + 1
                         found[#found+1] = {model=model, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -174,7 +172,7 @@ return function(C, R, UI)
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
                     local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
                     if mp then
-                        n += 1
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -191,7 +189,7 @@ return function(C, R, UI)
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
                     if mp then
-                        n += 1
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -209,7 +207,7 @@ return function(C, R, UI)
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
                 if mp then
-                    n += 1
+                    n = n + 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and n >= limit then break end
                 end
@@ -232,7 +230,7 @@ return function(C, R, UI)
                 if ok then
                     local mp = mainPart(m)
                     if mp then
-                        n += 1
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -262,8 +260,8 @@ return function(C, R, UI)
         for _,entry in ipairs(list) do
             if brought >= want then break end
             if teleportOne(entry) then
-                brought += 1
-                task.wait(0.10)
+                brought = brought + 1
+                task.wait(0.08)
             end
         end
     end
