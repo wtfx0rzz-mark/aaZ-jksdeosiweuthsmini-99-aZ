@@ -1,20 +1,3 @@
---=====================================================
--- 1337 Nights | Main Module
---=====================================================
--- Loader + global context. Combat/Visuals modules attach to WindUI tabs.
---=====================================================
---[[====================================================================
- 🧠 GPT INTEGRATION NOTE
- ----------------------------------------------------------------------
- All modules in this project (main.lua, visuals.lua, combat.lua, etc.)
- share a unified global environment:
-     _G.C  → Global Config, State, Services, Shared tables
-     _G.R  → Shared runtime helpers (functions used across modules)
-     _G.UI → WindUI instance (window + tabs)
-
- Modules should assume these exist and avoid returning UI/context.
-====================================================================]]
-
 repeat task.wait() until game:IsLoaded()
 
 -------------------------------------------------------
@@ -64,7 +47,7 @@ _G.UI = UI
 
 local paths = {
     Combat  = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/combat.lua",
-    Bring   = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/bring.lua",
+    --Bring   = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/bring.lua",
     Auto    = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/auto.lua",
     Visuals = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua",
 }
