@@ -14,8 +14,8 @@ return function(C, R, UI)
     local flyEnabled       = false
     local mobileFlyEnabled = false
     local FLYING           = false
-    local flySpeed         = 3
-    local walkSpeedValue   = 24
+    local flySpeed         = 3    -- default startup value
+    local walkSpeedValue   = 24   -- default startup value
 
     -- Force Fly state (UI-free engine)
     local forceFlyEnabled  = false
@@ -239,7 +239,7 @@ return function(C, R, UI)
             local mag = planar.Magnitude
             if mag > 1e-3 then planar = planar / mag else planar = Vector3.zero end
 
-            -- vertical from camera pitch when moving (matches your other script)
+            -- vertical from camera pitch when moving
             local lookY = cam.CFrame.LookVector.Y
             local vert = 0
             if mag > 1e-3 then
@@ -331,9 +331,10 @@ return function(C, R, UI)
     --========================
     tab:Section({ Title = "Player • Movement", Icon = "activity" })
 
+    -- Apply A: set slider defaults to desired startup values (3 and 24)
     tab:Slider({
         Title = "Fly Speed",
-        Value = { Min = 1, Max = 20, Default = 1 },
+        Value = { Min = 1, Max = 20, Default = 3 }, -- was 1
         Callback = function(v)
             flySpeed = tonumber(v) or flySpeed
         end
@@ -361,7 +362,7 @@ return function(C, R, UI)
 
     tab:Slider({
         Title = "Speed",
-        Value = { Min = 16, Max = 150, Default = 16 },
+        Value = { Min = 16, Max = 150, Default = 24 }, -- was 16
         Callback = function(v)
             walkSpeedValue = tonumber(v) or walkSpeedValue
         end
