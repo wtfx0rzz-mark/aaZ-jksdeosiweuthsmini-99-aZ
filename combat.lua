@@ -2,13 +2,10 @@
 -- 1337 Nights | Combat Module
 --=====================================================
 -- Adds to Combat tab:
---   • “Character Aura” toggle (NPCs under Workspace.Characters, excludes *horse*)
---   • “Small Tree Aura” toggle (targets C.Config.TREE_NAME)
---   • Shared “Aura Distance” slider for both auras
---   • Common damage pipeline:
---       - Tool priority equip (Chainsaw → Strong Axe → Good Axe → Old Axe)
---       - Computes best hit part (HRP/Primary/BasePart for NPCs; Trunk/etc. for trees)
---       - Performs InvokeServer() hits at fixed swing delay
+--   • Character Aura (NPCs under Workspace.Characters, excludes *horse*)
+--   • Small Tree Aura (targets "Small Tree" and "Snowy Small Tree")
+--   • Shared Aura Distance slider
+--   • Common damage pipeline (priority equip → impact CFrame → InvokeServer)
 --=====================================================
 --[[====================================================================
  🧠 GPT INTEGRATION NOTE
@@ -22,7 +19,7 @@
  • Do not return C/R/UI; main.lua owns setup and loading.
  • Each aura runs in its own thread; no cyclic requires.
  • Both auras honor the same distance: C.State.AuraRadius
- • Exclude NPCs whose name contains "horse" (case-insensitive).
+ • NPCs whose name contains "horse" (case-insensitive) are excluded.
 ====================================================================]]
 
 return function(C, R, UI)
@@ -33,14 +30,9 @@ return function(C, R, UI)
     local RS = C.Services.RS
     local WS = C.Services.WS
     local lp = C.LocalPlayer
-
     local CombatTab = UI.Tabs.Combat
 
-    -- -------- state/config (with migration to shared AuraRadius) --------
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
-    if not C.State.AuraRadius and C.State.CharacterAuraRadius then
-        C.State.AuraRadius = tonumber(C.State.CharacterAuraRadius) or 150
-    end
     C.Config = C.Config or {
         CHOP_SWING_DELAY = 0.55,
         TREE_NAME        = "Small Tree",
@@ -50,7 +42,6 @@ return function(C, R, UI)
 
     local running = { SmallTree = false, Character = false }
 
-    -- ---------------- helpers ----------------
     local _hitCounter = 0
     local function nextHitId()
         _hitCounter += 1
@@ -156,7 +147,41 @@ return function(C, R, UI)
         task.wait(swingDelay)
     end
 
-    -- ---------------- auras ----------------
+    -- Recursive tree finder for both "Small Tree" and "Snowy Small Tree"
+    local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
+    local function collectTreesInRadius(roots, origin, radius, maxCount)
+        local out, n = {}, 0
+        local function walk(node)
+            if n >= maxCount then return end
+            if not node then return end
+
+            if node:IsA("Model") and TREE_NAMES[node.Name] then
+                local trunk = bestTreeHitPart(node)
+                if trunk and (trunk.Position - origin).Magnitude <= radius then
+                    n += 1
+                    out[n] = node
+                    if n >= maxCount then return end
+                end
+            end
+
+            local children = nil
+            local ok, res = pcall(node.GetChildren, node)
+            if ok then children = res end
+            if not children then return end
+            for _, ch in ipairs(children) do
+                if n >= maxCount then break end
+                walk(ch)
+            end
+        end
+
+        for _, root in ipairs(roots) do
+            if n >= maxCount then break end
+            walk(root)
+        end
+        return out
+    end
+
+    -- Character Aura
     local function startCharacterAura()
         if running.Character then return end
         running.Character = true
@@ -195,6 +220,7 @@ return function(C, R, UI)
     end
     local function stopCharacterAura() running.Character = false end
 
+    -- Small Tree Aura (includes Snowy Small Tree)
     local function startSmallTreeAura()
         if running.SmallTree then return end
         running.SmallTree = true
@@ -206,26 +232,14 @@ return function(C, R, UI)
 
                 local origin = hrp.Position
                 local radius = tonumber(C.State.AuraRadius) or 150
-                local trees = {}
-                local map = WS:FindFirstChild("Map")
 
-                local function scan(folder)
-                    if not folder then return end
-                    for _, obj in ipairs(folder:GetChildren()) do
-                        if obj:IsA("Model") and obj.Name == C.Config.TREE_NAME then
-                            local trunk = bestTreeHitPart(obj)
-                            if trunk and (trunk.Position - origin).Magnitude <= radius then
-                                trees[#trees+1] = obj
-                            end
-                        end
-                    end
-                end
+                local roots = {
+                    WS,                                     -- covers Map, Foliage, Landmarks, FakeForest, etc.
+                    RS:FindFirstChild("Assets"),            -- ReplicatedStorage.Assets (CutsceneSets.*.Decor.*)
+                    RS:FindFirstChild("CutsceneSets"),      -- fallback if Assets nests differently
+                }
 
-                if map then
-                    scan(map:FindFirstChild("Foliage"))
-                    scan(map:FindFirstChild("Landmarks"))
-                end
-
+                local trees = collectTreesInRadius(roots, origin, radius, 64)
                 if #trees > 0 then
                     chopWave(trees, C.Config.CHOP_SWING_DELAY, bestTreeHitPart)
                 else
@@ -236,8 +250,7 @@ return function(C, R, UI)
     end
     local function stopSmallTreeAura() running.SmallTree = false end
 
-    -- ---------------- UI (order + shared slider) ----------------
-    -- Character Aura FIRST
+    -- UI (Character first, then Small Tree; shared slider)
     CombatTab:Section({ Title = "Character Aura" })
     CombatTab:Toggle({
         Title = "Character Aura",
@@ -248,7 +261,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Then Small Tree Aura
     CombatTab:Section({ Title = "Small Tree Aura" })
     CombatTab:Toggle({
         Title = "Small Tree Aura",
@@ -259,7 +271,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Shared distance slider
     CombatTab:Section({ Title = "Aura Distance" })
     CombatTab:Slider({
         Title = "Distance",
