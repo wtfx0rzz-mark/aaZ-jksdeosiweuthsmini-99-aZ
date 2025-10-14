@@ -1,4 +1,14 @@
 return function(C, R, UI)
+    local Tabs = UI and UI.Tabs or {}
+    local tab = Tabs.Bring or Tabs.br or Tabs.Main
+    assert(tab, "Bring tab not found in UI")
+
+    tab:Section({ Title = "Bring Module Loaded ✓" })
+    tab:Label({ Title = "This is a test placeholder for the Bring tab." })
+    tab:Label({ Title = "If you see this text, the tab loaded successfully." })
+end
+
+--[[return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
     local RS      = C.Services.RS
@@ -173,6 +183,7 @@ return function(C, R, UI)
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selWA, amountToBring) end })
 
     tab:Section({ Title = "Ammo and Misc." })
+]]
     singleSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(v) selMisc = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selMisc, amountToBring) end })
 end
