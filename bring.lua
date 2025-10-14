@@ -1,6 +1,7 @@
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
+    local RS      = C.Services.RS
     local lp      = Players.LocalPlayer
 
     local Tabs = UI and UI.Tabs or {}
@@ -95,6 +96,30 @@ return function(C, R, UI)
         return out
     end
 
+    local function getRemote(name)
+        local reFolder = RS:FindFirstChild("RemoteEvents")
+        if not reFolder then return nil end
+        return reFolder:FindFirstChild(name)
+    end
+
+    local function dragDropTry(model, dropPos)
+        local ok = false
+        local startRE = getRemote("RequestStartDraggingItem")
+        local plantRF = getRemote("RequestPlantItem")
+        local stopRE  = getRemote("StopDraggingItem")
+        if not (startRE and stopRE) then return false end
+        pcall(function() startRE:FireServer(model) end)
+        if plantRF and typeof(plantRF) == "Instance" and plantRF.ClassName == "RemoteFunction" then
+            local successA = pcall(function() return plantRF:InvokeServer(model, dropPos) end)
+            ok = successA or ok
+            if not successA then
+                pcall(function() plantRF:InvokeServer(dropPos) end)
+            end
+        end
+        pcall(function() stopRE:FireServer(model) end)
+        return ok
+    end
+
     local function dropOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
@@ -103,6 +128,7 @@ return function(C, R, UI)
 
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
+        local dropPos = dropCF.Position
 
         pcall(function() entry.part:SetNetworkOwner(lp) end)
 
@@ -112,10 +138,14 @@ return function(C, R, UI)
             entry.part.CFrame = dropCF
         end
 
+        task.wait(0.1)
+
         local v = forward * 1 + Vector3.new(0, -30, 0)
         for _,p in ipairs(getAllParts(entry.model)) do
             p.AssemblyLinearVelocity = v
         end
+
+        dragDropTry(entry.model, dropPos)
 
         return true
     end
@@ -132,7 +162,7 @@ return function(C, R, UI)
             local ok = dropOne(entry)
             if ok then
                 brought = brought + 1
-                task.wait(0.2)
+                task.wait(0.3)
             end
         end
     end
