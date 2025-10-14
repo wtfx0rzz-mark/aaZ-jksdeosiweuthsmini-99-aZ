@@ -6,8 +6,8 @@
 --   • Small Tree Aura (targets "Small Tree" and "Snowy Small Tree")
 --   • Shared Aura Distance slider
 --   • Common damage pipeline (priority equip → impact CFrame → InvokeServer)
---   • Writes per-hit attributes on trees (under Model.HitRegisters if present):
---       "N_<UID_SUFFIX>"  e.g., "1_0000000000"
+--   • Per-tree hit attributes under Model.HitRegisters:
+--       1_0000000000, 2_0000000000, 3_0000000000, ...
 --=====================================================
 --[[====================================================================
  🧠 GPT INTEGRATION NOTE
@@ -19,8 +19,7 @@
      _G.UI → WindUI instance (window + tabs)
 
  • Do not return C/R/UI; main.lua owns setup and loading.
- • Each aura runs in its own thread; no cyclic requires.
- • Both auras honor the same distance: C.State.AuraRadius
+ • Each aura runs in its own thread; both honor: C.State.AuraRadius
  • NPCs whose name contains "horse" (case-insensitive) are excluded.
 ====================================================================]]
 
@@ -36,7 +35,7 @@ return function(C, R, UI)
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {
-        CHOP_SWING_DELAY = 0.55,
+        CHOP_SWING_DELAY = 0.50,
         TREE_NAME        = "Small Tree",
         UID_SUFFIX       = "0000000000",
         ChopPrefer       = { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" },
@@ -45,66 +44,10 @@ return function(C, R, UI)
     local running = { SmallTree = false, Character = false }
 
     --------------------------------------------------------------------
-    -- Hit counter + initialization from existing attributes
+    -- Helpers
     --------------------------------------------------------------------
-    local _hitCounter = 0
-    local _counterPrimed = false
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
 
-    local function parseHitAttr(attrName)
-        local pat = "^(%d+)_" .. C.Config.UID_SUFFIX .. "$"
-        local n = string.match(attrName, pat)
-        return n and tonumber(n) or nil
-    end
-
-    local function attrContainerForTree(treeModel)
-        -- Prefer Model.HitRegisters if it exists; else the model itself.
-        local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
-        return (hr and hr:IsA("Instance")) and hr or treeModel
-    end
-
-    local function primeCounterFromWorld()
-        if _counterPrimed then return end
-        _counterPrimed = true
-        local maxSeen = 0
-
-        local function scanModel(m)
-            if not (m and m:IsA("Model") and TREE_NAMES[m.Name]) then return end
-            local bucket = attrContainerForTree(m)
-            local attrs = bucket and bucket:GetAttributes() or nil
-            if not attrs then return end
-            for k, _ in pairs(attrs) do
-                local n = parseHitAttr(k)
-                if n and n > maxSeen then maxSeen = n end
-            end
-        end
-
-        local function walk(node)
-            if not node then return end
-            if node:IsA("Model") then scanModel(node) end
-            local ok, children = pcall(node.GetChildren, node)
-            if not ok then return end
-            for _, ch in ipairs(children) do walk(ch) end
-        end
-
-        -- Check common roots (Workspace + some ReplicatedStorage paths where trees appear)
-        walk(WS)
-        local assets = RS:FindFirstChild("Assets")
-        if assets then walk(assets) end
-        local cuts = RS:FindFirstChild("CutsceneSets")
-        if cuts then walk(cuts) end
-
-        _hitCounter = math.max(_hitCounter, maxSeen)
-    end
-
-    local function nextHitId()
-        _hitCounter += 1
-        return tostring(_hitCounter) .. "_" .. C.Config.UID_SUFFIX
-    end
-
-    --------------------------------------------------------------------
-    -- Inventory, equip, hit part helpers
-    --------------------------------------------------------------------
     local function findInInventory(name)
         local inv = lp and lp:FindFirstChild("Inventory")
         return inv and inv:FindFirstChild(name) or nil
@@ -182,6 +125,35 @@ return function(C, R, UI)
     end
 
     --------------------------------------------------------------------
+    -- Attribute helpers (per-tree sequencing)
+    --------------------------------------------------------------------
+    local function attrBucket(treeModel)
+        local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
+        return (hr and hr:IsA("Instance")) and hr or treeModel
+    end
+
+    local function parseHitAttrKey(k)
+        -- matches "123_0000000000"
+        local n = string.match(k or "", "^(%d+)_" .. C.Config.UID_SUFFIX .. "$")
+        return n and tonumber(n) or nil
+    end
+
+    local function nextPerTreeHitId(treeModel)
+        -- Read attributes under HitRegisters; choose next N then return "N_SUFFIX"
+        local bucket = attrBucket(treeModel)
+        local maxN = 0
+        local attrs = bucket and bucket:GetAttributes() or nil
+        if attrs then
+            for k,_ in pairs(attrs) do
+                local n = parseHitAttrKey(k)
+                if n and n > maxN then maxN = n end
+            end
+        end
+        local nextN = maxN + 1
+        return tostring(nextN) .. "_" .. C.Config.UID_SUFFIX
+    end
+
+    --------------------------------------------------------------------
     -- Collectors (trees recursive, characters flat) + deterministic order
     --------------------------------------------------------------------
     local function collectTreesInRadius(roots, origin, radius, maxCount)
@@ -212,6 +184,7 @@ return function(C, R, UI)
             if n >= maxCount then break end
             walk(root)
         end
+        -- Sort nearest-first; tie-break by name for determinism
         table.sort(out, function(a, b)
             local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
             local da = pa and (pa.Position - origin).Magnitude or math.huge
@@ -247,9 +220,9 @@ return function(C, R, UI)
     end
 
     --------------------------------------------------------------------
-    -- Wave executor (tags attributes on Model.HitRegisters when present)
+    -- Wave executor (trees: per-tree IDs; chars: no tagging)
     --------------------------------------------------------------------
-    local function chopWave(targetModels, swingDelay, hitPartGetter, tagAttributesOnTrees)
+    local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         local toolName
         for _, n in ipairs(C.Config.ChopPrefer) do
             if findInInventory(n) then toolName = n break end
@@ -258,32 +231,36 @@ return function(C, R, UI)
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
 
+        -- Fire all targets in parallel; each tree computes its own next ID
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
                 local hitPart = hitPartGetter(mdl)
-                if hitPart then
-                    local impactCF = computeImpactCFrame(mdl, hitPart)
+                if not hitPart then return end
 
-                    local hitId = nextHitId()
-                    if tagAttributesOnTrees then
-                        pcall(function()
-                            local bucket = attrContainerForTree(mdl)
-                            if bucket then bucket:SetAttribute(hitId, true) end
-                        end)
-                    end
-
-                    HitTarget(mdl, tool, hitId, impactCF)
+                local impactCF = computeImpactCFrame(mdl, hitPart)
+                local hitId
+                if isTree then
+                    hitId = nextPerTreeHitId(mdl)
+                    -- write attribute before invoking
+                    pcall(function()
+                        local bucket = attrBucket(mdl)
+                        if bucket then bucket:SetAttribute(hitId, true) end
+                    end)
+                else
+                    -- characters don't need attributes; still send a unique-ish id
+                    hitId = tostring(tick()) .. "_" .. C.Config.UID_SUFFIX
                 end
+
+                HitTarget(mdl, tool, hitId, impactCF)
             end)
         end
 
-        task.wait(swingDelay)
+        task.wait(swingDelay) -- between waves
     end
 
     --------------------------------------------------------------------
     -- Auras
     --------------------------------------------------------------------
-    -- Character Aura
     local function startCharacterAura()
         if running.Character then return end
         running.Character = true
@@ -307,13 +284,10 @@ return function(C, R, UI)
     end
     local function stopCharacterAura() running.Character = false end
 
-    -- Small Tree Aura (includes Snowy Small Tree)
     local function startSmallTreeAura()
         if running.SmallTree then return end
         running.SmallTree = true
         task.spawn(function()
-            primeCounterFromWorld() -- make numbering continue if attributes already exist
-
             while running.SmallTree do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
@@ -323,14 +297,13 @@ return function(C, R, UI)
                 local radius = tonumber(C.State.AuraRadius) or 150
 
                 local roots = {
-                    WS,                                     -- covers Map, Foliage, Landmarks, FakeForest, etc.
+                    WS,                                     -- Map, Foliage, Landmarks, FakeForest, etc.
                     RS:FindFirstChild("Assets"),            -- ReplicatedStorage.Assets (CutsceneSets.*.Decor.*)
                     RS:FindFirstChild("CutsceneSets"),      -- fallback if Assets nests differently
                 }
 
                 local trees = collectTreesInRadius(roots, origin, radius, 64)
                 if #trees > 0 then
-                    -- Trees: tag attributes on HitRegisters (or model fallback)
                     chopWave(trees, C.Config.CHOP_SWING_DELAY, bestTreeHitPart, true)
                 else
                     task.wait(0.3)
@@ -341,7 +314,7 @@ return function(C, R, UI)
     local function stopSmallTreeAura() running.SmallTree = false end
 
     --------------------------------------------------------------------
-    -- UI (Character first, then Small Tree; shared slider)
+    -- UI
     --------------------------------------------------------------------
     CombatTab:Toggle({
         Title = "Character Aura",
