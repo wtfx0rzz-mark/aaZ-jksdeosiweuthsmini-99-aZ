@@ -35,6 +35,7 @@ local Tabs = {
     Main   = Window:Tab({ Title = "Main",   Icon = "home",  Desc = "Main controls" }),
     Combat = Window:Tab({ Title = "Combat", Icon = "sword", Desc = "Combat options" }),
     Bring   = Window:Tab({ Title = "Bring",   Icon = "backpack",   Desc = "Bring Items" }),
+    Player   = Window:Tab({ Title = "Player",   Icon = "activity",   Desc = "Player options" }),
     Auto   = Window:Tab({ Title = "Auto",   Icon = "cpu",   Desc = "Automation" }),
     Visuals   = Window:Tab({ Title = "Visuals",   Icon = "eye",   Desc = "Visuals" }),
 }
