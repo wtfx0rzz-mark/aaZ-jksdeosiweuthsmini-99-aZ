@@ -1,8 +1,10 @@
+--=====================================================
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
     local RS      = C.Services.RS
-    local Run     = C.Services.Run
     local lp      = Players.LocalPlayer
 
     local Tabs = UI and UI.Tabs or {}
@@ -24,6 +26,9 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
+    -------------------------------------------------------
+    -- Utility
+    -------------------------------------------------------
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -50,18 +55,7 @@ return function(C, R, UI)
         return nil
     end
 
-    local function largestBasePart(model)
-        local best, mass = nil, -1
-        for _,d in ipairs(model:GetDescendants()) do
-            if d:IsA("BasePart") then
-                local m = d:GetMass()
-                if m > mass then best, mass = d, m end
-            end
-        end
-        return best
-    end
-
-    local function allParts(target)
+    local function getAllParts(target)
         local t = {}
         if target:IsA("BasePart") then
             t[1] = target
@@ -75,6 +69,9 @@ return function(C, R, UI)
         return t
     end
 
+    -------------------------------------------------------
+    -- Drop positioning
+    -------------------------------------------------------
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -92,69 +89,22 @@ return function(C, R, UI)
         return f and f:FindFirstChild(n) or nil
     end
 
-    local function startDrag(model)
-        local re = getRemote("RequestStartDraggingItem")
-        if re then pcall(function() re:FireServer(model) end) end
-    end
-    local function stopDrag(model)
-        local re = getRemote("StopDraggingItem")
-        if re then pcall(function() re:FireServer(model) end) end
-    end
-
-    local function tempNoClip(model, duration)
-        local parts = allParts(model)
-        local orig = {}
-        for _,p in ipairs(parts) do
-            orig[p] = {cc=p.CanCollide, an=p.Anchored}
-            p.CanCollide = false
-            p.Anchored   = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-            pcall(function() p:SetNetworkOwner(lp) end)
-        end
-        task.delay(duration or 0.3, function()
-            for p,st in pairs(orig) do
-                if p and p.Parent then
-                    p.CanCollide = st.cc
-                    p.Anchored   = st.an
-                end
-            end
-        end)
+    local function quickDrag(model)
+        local startRE = getRemote("RequestStartDraggingItem")
+        local stopRE  = getRemote("StopDraggingItem")
+        if not (startRE and stopRE) then return end
+        pcall(function() startRE:FireServer(model) end)
+        task.wait(0.04)
+        pcall(function() stopRE:FireServer(model) end)
     end
 
-    local function lockPlayer(dt)
-        local root = hrp()
-        if not root then return function() end end
-        local orig = {an=root.Anchored, lv=root.AssemblyLinearVelocity, av=root.AssemblyAngularVelocity}
-        root.Anchored = true
-        root.AssemblyLinearVelocity  = Vector3.new()
-        root.AssemblyAngularVelocity = Vector3.new()
-        local released = false
-        local function release()
-            if released then return end
-            released = true
-            if root and root.Parent then
-                root.Anchored = orig.an
-                root.AssemblyLinearVelocity  = orig.lv
-                root.AssemblyAngularVelocity = orig.av
-            end
-        end
-        task.delay(dt or 0.35, release)
-        return release
-    end
-
-    local function quickSettle(model, dropCF)
-        if model and model.Parent and model:IsA("Model") then
-            model:PivotTo(dropCF)
-        end
-        task.wait(0.02)
-    end
-
-    local function dropAndNudgeAsync(model, forward)
+    local function dropAndNudgeAsync(entry, dropCF, forward)
         task.defer(function()
-            if not (model and model.Parent) then return end
-            local v = forward * 4 + Vector3.new(0, -2, 0)
-            for _,p in ipairs(allParts(model)) do
+            if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
+            quickDrag(entry.model)
+            task.wait(0.08)
+            local v = forward * 6 + Vector3.new(0, -30, 0)
+            for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
             end
         end)
@@ -163,38 +113,28 @@ return function(C, R, UI)
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
-        if not entry.model.Parent then return false end
-
-        if not entry.part or not entry.part.Parent then
-            entry.part = mainPart(entry.model) or largestBasePart(entry.model)
-            if not entry.part then return false end
-        end
-
+        if not entry.model.Parent or entry.part.Anchored then return false end
+        if isExcludedModel(entry.model) then return false end
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
-
-        local release = lockPlayer(0.35)
-        tempNoClip(entry.model, 0.25)
-        startDrag(entry.model)
-
+        pcall(function() entry.part:SetNetworkOwner(lp) end)
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
         else
             entry.part.CFrame = dropCF
         end
-
-        quickSettle(entry.model, dropCF)
-        stopDrag(entry.model)
-        release()
-        dropAndNudgeAsync(entry.model, forward)
+        dropAndNudgeAsync(entry, dropCF, forward)
         return true
     end
 
-    local function sortFarthest(list)
+    -------------------------------------------------------
+    -- Collectors
+    -------------------------------------------------------
+    local function sortedNear(list)
         local root = hrp()
         if not root then return list end
         table.sort(list, function(a,b)
-            return (a.part.Position - root.Position).Magnitude > (b.part.Position - root.Position).Magnitude
+            return (a.part.Position - root.Position).Magnitude < (b.part.Position - root.Position).Magnitude
         end)
         return list
     end
@@ -205,16 +145,16 @@ return function(C, R, UI)
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) then
-                    local mp = mainPart(model) or largestBasePart(model)
+                    local mp = mainPart(model)
                     if mp then
-                        n = n + 1
+                        n += 1
                         found[#found+1] = {model=model, part=mp}
                         if limit and n >= limit then break end
                     end
                 end
             end
         end
-        return sortFarthest(found)
+        return sortedNear(found)
     end
 
     local function collectMossyCoins(limit)
@@ -223,16 +163,16 @@ return function(C, R, UI)
             if m:IsA("Model") and not isExcludedModel(m) then
                 local nm = m.Name
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
-                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart") or largestBasePart(m)
+                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
                     if mp then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
                 end
             end
         end
-        return sortFarthest(out)
+        return sortedNear(out)
     end
 
     local function collectCultists(limit)
@@ -240,16 +180,16 @@ return function(C, R, UI)
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
                 if hasHumanoid(m) then
-                    local mp = mainPart(m) or largestBasePart(m)
+                    local mp = mainPart(m)
                     if mp then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
                 end
             end
         end
-        return sortFarthest(out)
+        return sortedNear(out)
     end
 
     local function collectSaplings(limit)
@@ -258,15 +198,15 @@ return function(C, R, UI)
         if not items then return out end
         for _,m in ipairs(items:GetChildren()) do
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
-                local mp = mainPart(m) or largestBasePart(m)
+                local mp = mainPart(m)
                 if mp then
-                    n = n + 1
+                    n += 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and n >= limit then break end
                 end
             end
         end
-        return sortFarthest(out)
+        return sortedNear(out)
     end
 
     local function collectPelts(which, limit)
@@ -280,24 +220,28 @@ return function(C, R, UI)
                     (which == "Alpha Wolf Pelt" and nm:lower():find("alpha") and nm:lower():find("wolf")) or
                     (which == "Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar")) or
                     (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
+
                 if ok then
-                    local mp = mainPart(m) or largestBasePart(m)
+                    local mp = mainPart(m)
                     if mp then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
                 end
             end
         end
-        return sortFarthest(out)
+        return sortedNear(out)
     end
 
+    -------------------------------------------------------
+    -- Dispatcher
+    -------------------------------------------------------
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
+        local list = {}
 
-        local list
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
         elseif name == "Cultist" then
@@ -309,18 +253,21 @@ return function(C, R, UI)
         else
             list = collectByNameLoose(name, want)
         end
-        if #list == 0 then return end
 
+        if #list == 0 then return end
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= want then break end
             if teleportOne(entry) then
-                brought = brought + 1
-                task.wait(0.06)
+                brought += 1
+                task.wait(0.12)
             end
         end
     end
 
+    -------------------------------------------------------
+    -- UI
+    -------------------------------------------------------
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
