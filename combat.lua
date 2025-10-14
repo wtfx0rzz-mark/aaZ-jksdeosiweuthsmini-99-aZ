@@ -9,7 +9,6 @@
 --   • Per-tree hit attributes under Model.HitRegisters:
 --       1_0000000000, 2_0000000000, 3_0000000000, ...
 --   • Round-robin batches so ALL trees in range get processed over time
---   • TEST MODE: Use Camera Origin + adjustable offset to spoof aura origin
 --=====================================================
 --[[====================================================================
  🧠 GPT INTEGRATION NOTE
@@ -32,12 +31,10 @@ return function(C, R, UI)
 
     local RS = C.Services.RS
     local WS = C.Services.WS
-    local Run = C.Services.Run
     local lp = C.LocalPlayer
     local CombatTab = UI.Tabs.Combat
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
-    C.State.Test = C.State.Test or { UseCameraOrigin = false, CamOffset = 0 }
     C.Config = C.Config or {}
     -- Tunables
     C.Config.CHOP_SWING_DELAY     = C.Config.CHOP_SWING_DELAY     or 0.55
@@ -47,30 +44,12 @@ return function(C, R, UI)
     C.Config.MAX_TARGETS_PER_WAVE = C.Config.MAX_TARGETS_PER_WAVE or 80 -- how many we hit per wave
 
     local running = { SmallTree = false, Character = false }
+
+    --------------------------------------------------------------------
+    -- Helpers
+    --------------------------------------------------------------------
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
 
-    --------------------------------------------------------------------
-    -- Origin (supports spoofing with camera)
-    --------------------------------------------------------------------
-    local function getAuraOrigin()
-        if C.State.Test.UseCameraOrigin then
-            local cam = WS.CurrentCamera
-            if cam then
-                local pos = cam.CFrame.Position + cam.CFrame.LookVector * (tonumber(C.State.Test.CamOffset) or 0)
-                return pos
-            end
-        end
-        local ch = lp.Character
-        if ch then
-            local hrp = ch:FindFirstChild("HumanoidRootPart")
-            if hrp then return hrp.Position end
-        end
-        return Vector3.new() -- fallback
-    end
-
-    --------------------------------------------------------------------
-    -- Inventory / tool helpers
-    --------------------------------------------------------------------
     local function findInInventory(name)
         local inv = lp and lp:FindFirstChild("Inventory")
         return inv and inv:FindFirstChild(name) or nil
@@ -100,9 +79,6 @@ return function(C, R, UI)
         return tool
     end
 
-    --------------------------------------------------------------------
-    -- Target part finders
-    --------------------------------------------------------------------
     local function bestTreeHitPart(tree)
         if not tree or not tree:IsA("Model") then return nil end
         local hr = tree:FindFirstChild("HitRegisters")
@@ -125,9 +101,6 @@ return function(C, R, UI)
         return model:FindFirstChildWhichIsA("BasePart")
     end
 
-    --------------------------------------------------------------------
-    -- Impact & damage
-    --------------------------------------------------------------------
     local function computeImpactCFrame(model, hitPart)
         if not (model and hitPart and hitPart:IsA("BasePart")) then
             return hitPart and CFrame.new(hitPart.Position) or CFrame.new()
@@ -162,11 +135,13 @@ return function(C, R, UI)
     end
 
     local function parseHitAttrKey(k)
+        -- matches "123_0000000000"
         local n = string.match(k or "", "^(%d+)_" .. C.Config.UID_SUFFIX .. "$")
         return n and tonumber(n) or nil
     end
 
     local function nextPerTreeHitId(treeModel)
+        -- Read attributes under HitRegisters; choose next N then return "N_SUFFIX"
         local bucket = attrBucket(treeModel)
         local maxN = 0
         local attrs = bucket and bucket:GetAttributes() or nil
@@ -181,7 +156,7 @@ return function(C, R, UI)
     end
 
     --------------------------------------------------------------------
-    -- Collectors + sorting
+    -- Collectors (trees recursive, characters flat) + deterministic order
     --------------------------------------------------------------------
     local function collectTreesInRadius(roots, origin, radius)
         local out, n = {}, 0
@@ -207,6 +182,7 @@ return function(C, R, UI)
         for _, root in ipairs(roots) do
             walk(root)
         end
+        -- Sort nearest-first; tie-break by name for determinism
         table.sort(out, function(a, b)
             local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
             local da = pa and (pa.Position - origin).Magnitude or math.huge
@@ -242,7 +218,7 @@ return function(C, R, UI)
     end
 
     --------------------------------------------------------------------
-    -- Wave executor
+    -- Wave executor (trees: per-tree IDs; chars: no tagging)
     --------------------------------------------------------------------
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         local toolName
@@ -253,26 +229,31 @@ return function(C, R, UI)
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
 
+        -- Fire all targets in parallel; each tree computes its own next ID
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
                 local hitPart = hitPartGetter(mdl)
                 if not hitPart then return end
+
                 local impactCF = computeImpactCFrame(mdl, hitPart)
                 local hitId
                 if isTree then
                     hitId = nextPerTreeHitId(mdl)
+                    -- write attribute before invoking
                     pcall(function()
                         local bucket = attrBucket(mdl)
                         if bucket then bucket:SetAttribute(hitId, true) end
                     end)
                 else
+                    -- characters don't need attributes; still send a unique-ish id
                     hitId = tostring(tick()) .. "_" .. C.Config.UID_SUFFIX
                 end
+
                 HitTarget(mdl, tool, hitId, impactCF)
             end)
         end
 
-        task.wait(swingDelay) -- delay between waves (not between trees)
+        task.wait(swingDelay) -- between waves
     end
 
     --------------------------------------------------------------------
@@ -283,11 +264,16 @@ return function(C, R, UI)
         running.Character = true
         task.spawn(function()
             while running.Character do
-                local origin = getAuraOrigin()
+                local ch = lp.Character or lp.CharacterAdded:Wait()
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if not hrp then task.wait(0.2) break end
+
+                local origin = hrp.Position
                 local radius = tonumber(C.State.AuraRadius) or 150
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
 
                 if #targets > 0 then
+                    -- We simply hit everyone we found (no round-robin needed usually)
                     local batch = targets
                     if C.Config.MAX_TARGETS_PER_WAVE and #batch > C.Config.MAX_TARGETS_PER_WAVE then
                         batch = {}
@@ -304,13 +290,19 @@ return function(C, R, UI)
     end
     local function stopCharacterAura() running.Character = false end
 
+    -- Cursor used for round-robin of trees across waves
     C.State._treeCursor = C.State._treeCursor or 1
+
     local function startSmallTreeAura()
         if running.SmallTree then return end
         running.SmallTree = true
         task.spawn(function()
             while running.SmallTree do
-                local origin = getAuraOrigin()
+                local ch = lp.Character or lp.CharacterAdded:Wait()
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if not hrp then task.wait(0.2) break end
+
+                local origin = hrp.Position
                 local radius = tonumber(C.State.AuraRadius) or 150
 
                 local roots = {
@@ -322,6 +314,7 @@ return function(C, R, UI)
                 local allTrees = collectTreesInRadius(roots, origin, radius)
                 local total = #allTrees
                 if total > 0 then
+                    -- round-robin slice
                     local batchSize = math.min(C.Config.MAX_TARGETS_PER_WAVE, total)
                     if C.State._treeCursor > total then C.State._treeCursor = 1 end
                     local batch = table.create(batchSize)
@@ -365,22 +358,6 @@ return function(C, R, UI)
         Value = { Min = 0, Max = 1000, Default = C.State.AuraRadius or 150 },
         Callback = function(v)
             C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 1000)
-        end
-    })
-
-    -- ===== Test controls (local-only) =====
-    CombatTab:Toggle({
-        Title = "Use Camera Origin (Test)",
-        Value = C.State.Test.UseCameraOrigin or false,
-        Callback = function(on)
-            C.State.Test.UseCameraOrigin = on and true or false
-        end
-    })
-    CombatTab:Slider({
-        Title = "Camera Offset (Test)",
-        Value = { Min = -1000, Max = 1000, Default = C.State.Test.CamOffset or 0 },
-        Callback = function(v)
-            C.State.Test.CamOffset = math.clamp(tonumber(v) or 0, -1000, 1000)
         end
     })
 end
