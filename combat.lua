@@ -35,7 +35,7 @@ return function(C, R, UI)
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {
-        CHOP_SWING_DELAY = 0.50,
+        CHOP_SWING_DELAY = 0.55,
         TREE_NAME        = "Small Tree",
         UID_SUFFIX       = "0000000000",
         ChopPrefer       = { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" },
