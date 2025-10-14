@@ -137,7 +137,7 @@ return function(C, R, UI)
     -- Plant Saplings behavior
     --========================
     -- Raycast params + placement tuning
-    local AHEAD_DIST  = 1     -- how far in front of the player to plant
+    local AHEAD_DIST  = 3     -- how far in front of the player to plant
     local RAY_HEIGHT  = 500   -- how high above target point to start the ray
     local RAY_DEPTH   = 2000  -- how far down to raycast
 
