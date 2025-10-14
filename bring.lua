@@ -15,10 +15,15 @@ return function(C, R, UI)
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack"}
 
-    local selJunk, selFuel, selFood, selMedical, selWA, selMisc =
-        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1]
+    -- Added "Mossy Coin" and "Cultist"
+    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist"}
+
+    -- New Pelts section
+    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
+
+    local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
+        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -71,6 +76,11 @@ return function(C, R, UI)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
 
+    --========================
+    -- Collect helpers
+    --========================
+
+    -- Top-level search (used for Bolt)
     local function collectByNameStrictTop(name, limit)
         local items = WS:FindFirstChild("Items")
         if not items then return {} end
@@ -91,14 +101,15 @@ return function(C, R, UI)
         return out
     end
 
-    local function collectByNameLoose(name, limit)
+    -- Descendant search with a flexible name matcher for the *top-level* model under Items
+    local function collectByMatcherLoose(limit, matcher)
         local items = WS:FindFirstChild("Items")
         if not items then return {} end
         local root = hrp()
         if not root then return {} end
         local found = {}
         for _,d in ipairs(items:GetDescendants()) do
-            if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
+            if (d:IsA("Model") or d:IsA("BasePart")) and d.Parent then
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") then
                     local top = model
@@ -106,7 +117,7 @@ return function(C, R, UI)
                         top = top.Parent
                     end
                     if top.Parent == items and top:IsA("Model") then
-                        if top.Name == name then
+                        if matcher(top.Name) then
                             local mp = mainPart(top)
                             if mp then
                                 found[#found+1] = {model=top, part=mp, dist=(mp.Position - root.Position).Magnitude}
@@ -122,6 +133,28 @@ return function(C, R, UI)
         return out
     end
 
+    -- Basic exact/substring/prefix matchers
+    local function exactMatcher(target)
+        return function(name) return name == target end
+    end
+    local function containsMatcher(fragment)
+        local f = string.lower(fragment)
+        return function(name) return string.find(string.lower(name), f, 1, true) ~= nil end
+    end
+    local function prefixMatcher(prefix)
+        local p = "^" .. prefix:gsub("(%W)","%%%1") .. "%d*$" -- allow trailing digits
+        return function(name) return string.match(name, p) ~= nil end
+    end
+    local function anyOfMatcher(matchers)
+        return function(name)
+            for _,m in ipairs(matchers) do if m(name) then return true end end
+            return false
+        end
+    end
+
+    --========================
+    -- Teleport & drop
+    --========================
     local function getRemote(n)
         local f = RS:FindFirstChild("RemoteEvents")
         return f and f:FindFirstChild(n) or nil
@@ -165,22 +198,55 @@ return function(C, R, UI)
         return true
     end
 
-    local function bringSelected(name, count)
-        local want = tonumber(count) or 0
-        if want <= 0 then return end
-        local strictTop = (name == "Bolt")
-        local list = strictTop and collectByNameStrictTop(name, want) or collectByNameLoose(name, want)
+    local function bringFromList(list, want)
         if #list == 0 then return end
-        local brought = 0
+        local brought, goal = 0, math.max(0, tonumber(want) or 0)
         for _,entry in ipairs(list) do
-            if brought >= want then break end
+            if brought >= goal then break end
             if teleportOne(entry) then
-                brought = brought + 1
+                brought += 1
                 task.wait(0.12)
             end
         end
     end
 
+    local function bringSelected(name, count)
+        local want = tonumber(count) or 0
+        if want <= 0 then return end
+
+        -- Special “smart” matchers
+        local matcher = nil
+
+        if name == "Mossy Coin" then
+            -- Matches Mossy Coin, Mossy Coin2, Mossy Coin10, etc.
+            matcher = prefixMatcher("Mossy Coin")
+        elseif name == "Cultist" then
+            -- Anything with "cultist" in the name (e.g., Crossbow Cultist)
+            matcher = containsMatcher("cultist")
+        elseif name == "Alpha Wolf Pelt" then
+            -- Prefer Alpha, but allow any Wolf Pelt as fallback
+            matcher = anyOfMatcher({ exactMatcher("Alpha Wolf Pelt"), containsMatcher("Wolf Pelt") })
+        elseif name == "Bear Pelt" then
+            -- Prefer Bear Pelt, but allow Polar Bear Pelt as fallback
+            matcher = anyOfMatcher({ exactMatcher("Bear Pelt"), exactMatcher("Polar Bear Pelt"), containsMatcher("Bear Pelt") })
+        else
+            matcher = exactMatcher(name)
+        end
+
+        -- Keep Bolt as strict top-level only, everything else uses the matcher-based loose search
+        local list
+        if name == "Bolt" then
+            list = collectByNameStrictTop(name, want)
+        else
+            list = collectByMatcherLoose(want, matcher)
+        end
+
+        bringFromList(list, want)
+    end
+
+    --========================
+    -- UI
+    --========================
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
@@ -216,4 +282,9 @@ return function(C, R, UI)
     tab:Section({ Title = "Ammo and Misc." })
     singleSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(v) selMisc = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
+
+    -- New Pelts section
+    tab:Section({ Title = "Pelts" })
+    singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
 end
