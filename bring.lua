@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, NPC-safe)
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -12,15 +12,15 @@ return function(C, R, UI)
     assert(tab, "Bring tab not found in UI")
 
     local AMOUNT_TO_BRING = 50
-    local DROP_FORWARD = 5
-    local DROP_UP      = 5
+    local DROP_FORWARD = 6
+    local DROP_UP      = 6
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist"}
+    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
@@ -192,6 +192,23 @@ return function(C, R, UI)
         return sortedNear(out)
     end
 
+    local function collectSaplings(limit)
+        local out, n = {}, 0
+        local items = WS:FindFirstChild("Items")
+        if not items then return out end
+        for _,m in ipairs(items:GetChildren()) do
+            if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
+                local mp = mainPart(m)
+                if mp then
+                    n += 1
+                    out[#out+1] = {model=m, part=mp}
+                    if limit and n >= limit then break end
+                end
+            end
+        end
+        return sortedNear(out)
+    end
+
     local function collectPelts(which, limit)
         local out, n = {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
@@ -229,6 +246,8 @@ return function(C, R, UI)
             list = collectMossyCoins(want)
         elseif name == "Cultist" then
             list = collectCultists(want)
+        elseif name == "Sapling" then
+            list = collectSaplings(want)
         elseif table.find(pelts, name) then
             list = collectPelts(name, want)
         else
