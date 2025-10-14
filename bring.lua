@@ -54,39 +54,19 @@ return function(C, R, UI)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
 
-    local function nudge(modelOrPart, forward)
-        local parts = {}
-        if modelOrPart:IsA("Model") then
-            for _,d in ipairs(modelOrPart:GetDescendants()) do
-                if d:IsA("BasePart") then parts[#parts+1] = d end
-            end
-        elseif modelOrPart:IsA("BasePart") then
-            parts[1] = modelOrPart
-        end
-        for _,p in ipairs(parts) do
-            p.AssemblyLinearVelocity = Vector3.new(forward.X, -30, forward.Z)
-        end
-    end
-
-    local function pivotTo(modelOrPart, cf)
-        if modelOrPart:IsA("Model") then
-            modelOrPart:PivotTo(cf)
-        elseif modelOrPart:IsA("BasePart") then
-            modelOrPart.CFrame = cf
-        end
-    end
-
     local function collectByName(name, limit)
         local items = WS:FindFirstChild("Items")
         if not items then return {} end
         local root = hrp()
         if not root then return {} end
         local found = {}
-        for _,obj in ipairs(items:GetChildren()) do
-            if obj.Name == name then
-                local mp = mainPart(obj)
-                if mp then
-                    found[#found+1] = {model=obj, part=mp, dist=(mp.Position - root.Position).Magnitude}
+        for _,d in ipairs(items:GetDescendants()) do
+            if d:IsA("Model") or d:IsA("BasePart") then
+                if d.Name == name then
+                    local mp = mainPart(d)
+                    if mp then
+                        table.insert(found, {model=(d:IsA("Model") and d or d.Parent), part=mp, dist=(mp.Position - root.Position).Magnitude})
+                    end
                 end
             end
         end
@@ -96,21 +76,108 @@ return function(C, R, UI)
         return out
     end
 
+    local function stepwisePivot(modelOrPart, targetCF, steps, waitS)
+        steps = steps or 12
+        waitS = waitS or 0.03
+        if modelOrPart:IsA("Model") then
+            for i=1,steps do
+                local cf = modelOrPart:GetPivot()
+                local pos = cf.Position:Lerp(targetCF.Position, i/steps)
+                local look = (targetCF.LookVector)
+                modelOrPart:PivotTo(CFrame.lookAt(pos, pos + look))
+                task.wait(waitS)
+            end
+        else
+            for i=1,steps do
+                local cf = modelOrPart.CFrame
+                local pos = cf.Position:Lerp(targetCF.Position, i/steps)
+                local look = (targetCF.LookVector)
+                modelOrPart.CFrame = CFrame.lookAt(pos, pos + look)
+                task.wait(waitS)
+            end
+        end
+    end
+
+    local function tetherBring(part, root, duration)
+        duration = duration or 1.2
+        if not (part and part:IsA("BasePart") and root and root:IsA("BasePart")) then return false end
+        if part.Anchored then return false end
+        pcall(function() part:SetNetworkOwner(lp) end)
+
+        local att0 = Instance.new("Attachment")
+        att0.Name = "__BringA0"
+        att0.Parent = part
+
+        local att1 = Instance.new("Attachment")
+        att1.Name = "__BringA1"
+        att1.Parent = root
+        att1.Position = Vector3.new(0, 3, -3)
+
+        local ap = Instance.new("AlignPosition")
+        ap.Name = "__BringAP"
+        ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+        ap.Attachment0 = att0
+        ap.Responsiveness = 200
+        ap.MaxForce = 1e9
+        ap.MaxVelocity = 1e9
+        ap.ApplyAtCenterOfMass = true
+        ap.RigidityEnabled = false
+        ap.Parent = part
+
+        local ao = Instance.new("AlignOrientation")
+        ao.Name = "__BringAO"
+        ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        ao.Attachment0 = att0
+        ao.Responsiveness = 200
+        ao.MaxAngularVelocity = 1e9
+        ao.MaxTorque = 1e9
+        ao.PrimaryAxisOnly = false
+        ao.RigidityEnabled = false
+        ao.Parent = part
+
+        local t0 = os.clock()
+        local ok = false
+        while os.clock() - t0 < duration do
+            if not part.Parent or not root.Parent then break end
+            att1.CFrame = CFrame.new(Vector3.new(0, 3, -3))
+            if (part.Position - (root.CFrame * Vector3.new(0,3,-3))).Magnitude < 6 then
+                ok = true
+                break
+            end
+            task.wait()
+        end
+
+        ap:Destroy()
+        ao:Destroy()
+        att0:Destroy()
+        att1:Destroy()
+        return ok
+    end
+
+    local function bringOne(entry, dropCF)
+        if not (entry and entry.model and entry.part and entry.model.Parent) then return false end
+        if entry.part.Anchored then return false end
+        local root = hrp()
+        if not root then return false end
+        local ok = tetherBring(entry.part, root, 1.4)
+        if ok then return true end
+        stepwisePivot(entry.model, dropCF, 14, 0.03)
+        return true
+    end
+
     local function bringSelected(name, count)
         local c = tonumber(count) or 0
         if c <= 0 then return end
         local list = collectByName(name, 9999)
         if #list == 0 then return end
-        local dropCF, forward = groundDropCF()
+        local dropCF = select(1, groundDropCF())
         if not dropCF then return end
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= c then break end
-            if entry.model and entry.model.Parent then
-                pivotTo(entry.model, dropCF)
-                nudge(entry.model, forward)
+            if bringOne(entry, dropCF) then
                 brought = brought + 1
-                task.wait(0.2)
+                task.wait(0.08)
             end
         end
     end
