@@ -3,8 +3,6 @@ return function(C, R, UI)
     local tab = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local amountToBring = 20
-
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
@@ -14,16 +12,6 @@ return function(C, R, UI)
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1]
-
-    tab:Section({ Title = "Amount To Bring" })
-    tab:Textbox({
-        Title = "Amount",
-        Default = "20",
-        Callback = function(v)
-            local n = tonumber(v)
-            if n and n >= 0 then amountToBring = math.floor(n) end
-        end
-    })
 
     local function singleSelectDropdown(args)
         return tab:Dropdown({
