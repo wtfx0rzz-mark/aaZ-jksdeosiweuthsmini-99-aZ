@@ -1,11 +1,11 @@
 --=====================================================
--- 1337 Nights | Auto Tab • Edge Buttons (Phase 10 / Teleport / Plant Saplings)
---  - Plant position uses a sky→down raycast directly IN FRONT of the player
+-- 1337 Nights | Auto Tab • Edge Buttons (Phase 10 / Teleport / Plant Saplings / Instant Open)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local RS      = C.Services.RS or game:GetService("ReplicatedStorage")
     local WS      = C.Services.WS or game:GetService("Workspace")
+    local PPS     = game:GetService("ProximityPromptService")
     local lp      = Players.LocalPlayer
 
     local Tabs    = UI and UI.Tabs or {}
@@ -87,11 +87,11 @@ return function(C, R, UI)
         local root = hrp()
         if not root then return end
         local dest = root.Position + root.CFrame.LookVector * PHASE_DIST
-        root.AssemblyLinearVelocity  = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
+        root.AssemblyLinearVelocity  = Vector3.new(0,0,0)
+        root.AssemblyAngularVelocity = Vector3.new(0,0,0)
         root.CFrame = CFrame.new(dest, dest + root.CFrame.LookVector)
-        root.AssemblyLinearVelocity  = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
+        root.AssemblyLinearVelocity  = Vector3.new(0,0,0)
+        root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end)
 
     --========================
@@ -126,11 +126,11 @@ return function(C, R, UI)
         if suppressClick then suppressClick = false return end
         local root = hrp()
         if not (root and markedCF) then return end
-        root.AssemblyLinearVelocity  = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
+        root.AssemblyLinearVelocity  = Vector3.new(0,0,0)
+        root.AssemblyAngularVelocity = Vector3.new(0,0,0)
         root.CFrame = markedCF
-        root.AssemblyLinearVelocity  = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
+        root.AssemblyLinearVelocity  = Vector3.new(0,0,0)
+        root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end)
 
     --========================
@@ -163,7 +163,6 @@ return function(C, R, UI)
     end
 
     local function groundAhead(root)
-        -- point AHEAD of the player, then raycast from sky straight down to get ground
         local base    = root.Position + root.CFrame.LookVector * AHEAD_DIST
         local start   = base + Vector3.new(0, RAY_HEIGHT, 0)
         local result  = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
@@ -176,15 +175,12 @@ return function(C, R, UI)
 
         local startDrag = getRemote("RequestStartDraggingItem")
         local stopDrag  = getRemote("StopDraggingItem")
-        local plantRF   = getRemote("RequestPlantItem")  -- RemoteFunction in most games; use :InvokeServer if so
+        local plantRF   = getRemote("RequestPlantItem")
 
         local root = hrp()
         if not root then return end
-
-        -- Plant point: sky→down raycast IN FRONT of player
         local plantPos = groundAhead(root)
 
-        -- Begin drag (real sapling; if server expects dummy, we also try that)
         if startDrag then
             pcall(function() startDrag:FireServer(sapling) end)
             pcall(function() startDrag:FireServer(Instance.new("Model")) end)
@@ -192,18 +188,17 @@ return function(C, R, UI)
 
         task.wait(0.05)
 
-        -- Plant (prefer InvokeServer; fallback to FireServer & dummy arg pattern)
         if plantRF then
-            local didPlant = pcall(function()
+            local did = pcall(function()
                 return plantRF:InvokeServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
             end)
-            if not didPlant then
+            if not did then
                 local dummy = Instance.new("Model")
-                didPlant = pcall(function()
+                did = pcall(function()
                     return plantRF:InvokeServer(dummy, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z))
                 end)
             end
-            if not didPlant then
+            if not did then
                 pcall(function() plantRF:FireServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
                 pcall(function() plantRF:FireServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
             end
@@ -211,7 +206,6 @@ return function(C, R, UI)
 
         task.wait(0.05)
 
-        -- Stop drag
         if stopDrag then
             pcall(function() stopDrag:FireServer(sapling) end)
             pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
@@ -221,6 +215,68 @@ return function(C, R, UI)
     plantBtn.MouseButton1Click:Connect(function()
         plantNearestSaplingInFront()
     end)
+
+    --========================
+    -- Instant Open (ProximityPrompt) behavior
+    --========================
+    local instantOpen = false
+    local promptShownConn, promptAddedConn
+
+    local KEYWORDS_NAME   = {"chest","crate","locker","cabinet","cupboard","safe","case","stash","cache","box"}
+    local KEYWORDS_ACTION = {"open","unlock","search","loot"}
+
+    local function containsAny(s, list)
+        s = string.lower(s or "")
+        for _,k in ipairs(list) do
+            if string.find(s, k, 1, true) then return true end
+        end
+        return false
+    end
+
+    local function shouldTargetPrompt(prompt)
+        -- Prefer matching on either ActionText or the parent/container names
+        if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+        if containsAny(prompt.ActionText or "", KEYWORDS_ACTION) then return true end
+        local p = prompt.Parent
+        while p and p ~= WS do
+            if containsAny(p.Name or "", KEYWORDS_NAME) then return true end
+            p = p.Parent
+        end
+        return false
+    end
+
+    local function patchPrompt(prompt)
+        if not (prompt and prompt:IsA("ProximityPrompt")) then return end
+        if not shouldTargetPrompt(prompt) then return end
+        -- Make it instantaneous and lenient to LOS
+        prompt.HoldDuration = 0
+        prompt.RequiresLineOfSight = false
+        -- (Optional) You can also reduce cooldown if present in your game with custom attributes
+    end
+
+    local function scanExistingPrompts()
+        for _,d in ipairs(WS:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                patchPrompt(d)
+            end
+        end
+    end
+
+    local function enableInstantOpen()
+        if instantOpen then return end
+        instantOpen = true
+        -- Patch when a prompt is shown to the local player (cheap & reliable)
+        promptShownConn = PPS.PromptShown:Connect(function(prompt)
+            patchPrompt(prompt)
+        end)
+        -- Also patch all current prompts right now
+        scanExistingPrompts()
+    end
+
+    local function disableInstantOpen()
+        instantOpen = false
+        if promptShownConn then promptShownConn:Disconnect() promptShownConn = nil end
+    end
 
     --========================
     -- Wind UI switches
@@ -248,6 +304,14 @@ return function(C, R, UI)
         Value = false,
         Callback = function(state)
             plantBtn.Visible = state
+        end
+    })
+
+    tab:Toggle({
+        Title = "Instant Open (chests)",
+        Value = false,
+        Callback = function(state)
+            if state then enableInstantOpen() else disableInstantOpen() end
         end
     })
 
