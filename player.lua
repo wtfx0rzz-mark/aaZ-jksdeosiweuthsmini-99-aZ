@@ -1,10 +1,10 @@
 --=====================================================
--- 1337 Nights | Player Tab (Force Position = hard snap)
+-- 1337 Nights | Player Tab (Force Position = hard snap, fixed)
 --=====================================================
 return function(C, R, UI)
-    local Players      = C.Services.Players
-    local RunService   = C.Services.RunService or game:GetService("RunService")
-    local UIS          = C.Services.UIS        or game:GetService("UserInputService")
+    local Players    = C.Services.Players
+    local RunService = C.Services.RunService or game:GetService("RunService")
+    local UIS        = C.Services.UIS        or game:GetService("UserInputService")
 
     local lp  = Players.LocalPlayer
     local tab = UI.Tabs and UI.Tabs.Player
@@ -20,15 +20,17 @@ return function(C, R, UI)
     local keyDownConn, keyUpConn, jumpConn, noclipConn
     local renderConn, mobileAddedConn, mobileRenderConn
 
-    -- NEW: global desired pose tracked by fly loops + enforced by guardian
+    -- Target pose enforced by guardian when Force Position is ON
     local desiredCF = nil
 
-    -- ========= Utilities =========
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
-    local function hum() local ch = lp.Character; return ch and ch:FindFirstChildOfClass("Humanoid") end
+    local function hum()
+        local ch = lp.Character
+        return ch and ch:FindFirstChildOfClass("Humanoid")
+    end
     local function disc(c) if c then pcall(function() c:Disconnect() end) end end
     local function clear(x) if x then pcall(function() x:Destroy() end) end end
 
@@ -41,11 +43,9 @@ return function(C, R, UI)
             if not FLYING then return end
             local r = hrp()
             if not r or not desiredCF then return end
-            -- take network ownership to minimize server corrections
             pcall(function() r:SetNetworkOwner(lp) end)
-            -- zero velocities then hard-set pose
-            r.AssemblyLinearVelocity  = Vector3.zero
-            r.AssemblyAngularVelocity = Vector3.zero
+            r.AssemblyLinearVelocity  = Vector3.new(0,0,0)
+            r.AssemblyAngularVelocity = Vector3.new(0,0,0)
             r.CFrame = desiredCF
         end)
     end
@@ -61,11 +61,11 @@ return function(C, R, UI)
         FLYING = true
 
         bodyGyro     = Instance.new("BodyGyro");     bodyGyro.P = 9e4; bodyGyro.MaxTorque = Vector3.new(9e9,9e9,9e9); bodyGyro.CFrame = r.CFrame; bodyGyro.Parent = r
-        bodyVelocity = Instance.new("BodyVelocity"); bodyVelocity.MaxForce = Vector3.new(9e9,9e9,9e9); bodyVelocity.Velocity = Vector3.new();    bodyVelocity.Parent = r
+        bodyVelocity = Instance.new("BodyVelocity"); bodyVelocity.MaxForce = Vector3.new(9e9,9e9,9e9); bodyVelocity.Velocity = Vector3.new(0,0,0); bodyVelocity.Parent = r
 
         local CONTROL = {F=0,B=0,L=0,R=0,Q=0,E=0}
         local lastFaceDir = r.CFrame.LookVector
-        desiredCF = r.CFrame   -- initialize target
+        desiredCF = r.CFrame
         pcall(function() r:SetNetworkOwner(lp) end)
 
         keyDownConn = UIS.InputBegan:Connect(function(i,g)
@@ -102,18 +102,19 @@ return function(C, R, UI)
             if CONTROL.Q ~= 0 or CONTROL.E ~= 0 then mv += cam.CFrame.UpVector    * (CONTROL.Q + CONTROL.E) end
 
             if forcePosEnabled then
-                -- compute new desiredCF; guardian will enforce *after* everything else
-                local step = (mv.Magnitude > 0) and mv.Unit * (flySpeed * 50) * dt or Vector3.zero
+                local step = (mv.Magnitude > 0) and mv.Unit * (flySpeed * 50) * dt or Vector3.new(0,0,0)
                 local pos  = desiredCF and desiredCF.Position or r.Position
                 local newPos = pos + step
-                if mv.Magnitude > 0 then lastFaceDir = Vector3.new(mv.X,0,mv.Z).Magnitude>1e-3 and Vector3.new(mv.X,0,mv.Z).Unit or lastFaceDir end
+                if mv.Magnitude > 0 then
+                    local planar = Vector3.new(mv.X,0,mv.Z)
+                    if planar.Magnitude > 1e-3 then lastFaceDir = planar.Unit end
+                end
                 local faceAt = newPos + Vector3.new(lastFaceDir.X,0,lastFaceDir.Z)
                 desiredCF = CFrame.new(newPos, Vector3.new(faceAt.X, newPos.Y, faceAt.Z))
-                bodyVelocity.Velocity = Vector3.zero
-            } else
-                -- velocity mode (no snap-back)
-                bodyVelocity.Velocity = (mv.Magnitude > 0) and mv.Unit * (flySpeed * 50) or Vector3.zero
-                desiredCF = nil -- disable guardian enforcement
+                bodyVelocity.Velocity = Vector3.new(0,0,0)
+            else
+                bodyVelocity.Velocity = (mv.Magnitude > 0) and mv.Unit * (flySpeed * 50) or Vector3.new(0,0,0)
+                desiredCF = nil
             end
         end)
 
@@ -132,7 +133,7 @@ return function(C, R, UI)
         unbindGuardian()
     end
 
-    -- ========= Mobile Fly (mirrors desktop, sets desiredCF) =========
+    -- ========= Mobile Fly =========
     local function startMobileFly()
         if FLYING then return end
         local r, h = hrp(), hum()
@@ -170,14 +171,17 @@ return function(C, R, UI)
             end
 
             if forcePosEnabled then
-                local dir = move.Magnitude > 0 and move.Unit or Vector3.zero
+                local dir  = (move.Magnitude > 0) and move.Unit or Vector3.new(0,0,0)
                 local step = (cam.CFrame.RightVector*dir.X + -cam.CFrame.LookVector*dir.Z) * (flySpeed * 50) * dt
                 local pos  = desiredCF and desiredCF.Position or r.Position
                 local newPos = pos + step
-                if dir.Magnitude > 0 then lastFaceDir = Vector3.new(dir.X,0,dir.Z) end
+                if dir.Magnitude > 0 then
+                    local planar = Vector3.new(dir.X,0,dir.Z)
+                    if planar.Magnitude > 1e-3 then lastFaceDir = planar.Unit end
+                end
                 local faceAt = newPos + Vector3.new(lastFaceDir.X,0,lastFaceDir.Z)
                 desiredCF = CFrame.new(newPos, Vector3.new(faceAt.X, newPos.Y, faceAt.Z))
-                bodyVelocity.Velocity = Vector3.zero
+                bodyVelocity.Velocity = Vector3.new(0,0,0)
             else
                 local vel = Vector3.new()
                 vel += cam.CFrame.RightVector * (move.X * (flySpeed * 50))
@@ -209,7 +213,7 @@ return function(C, R, UI)
         if mobileFly then stopMobileFly() else stopDesktopFly() end
     end
 
-    -- ========= Speed / Noclip / Inf Jump (same as before) =========
+    -- ========= Speed / Noclip / Inf Jump =========
     local function setWalkSpeed(v) local h = hum(); if h then h.WalkSpeed = v end end
     local function startNoclip()
         disc(noclipConn)
@@ -245,20 +249,28 @@ return function(C, R, UI)
 
     tab:Divider()
     tab:Section({ Title = "Walk Speed", Icon = "walk" })
-    tab:Slider({ Title = "Speed", Value = { Min = 16, Max = 150, Default = 16 }, Callback = function(v) walkSpeedValue = tonumber(v) or walkSpeedValue end })
-    tab:Toggle({ Title = "Enable Speed", Value = false, Callback = function(s) if s then setWalkSpeed(walkSpeedValue) else setWalkSpeed(16) end end })
+    tab:Slider({
+        Title = "Speed",
+        Value = { Min = 16, Max = 150, Default = 16 },
+        Callback = function(v) walkSpeedValue = tonumber(v) or walkSpeedValue end
+    })
+    tab:Toggle({
+        Title = "Enable Speed",
+        Value = false,
+        Callback = function(s) if s then setWalkSpeed(walkSpeedValue) else setWalkSpeed(16) end end
+    })
 
     tab:Divider()
     tab:Section({ Title = "Utilities", Icon = "tool" })
     tab:Toggle({ Title = "Noclip",        Value = false, Callback = function(s) if s then startNoclip() else stopNoclip() end end })
     tab:Toggle({ Title = "Infinite Jump", Value = false, Callback = function(s) if s then startInfJump() else stopInfJump() end end })
 
-    -- NEW: Force Position switch (hard snap-back)
+    -- Force Position switch (hard snap-back)
     tab:Divider()
     tab:Section({ Title = "Flight Safety", Icon = "target" })
     tab:Toggle({
         Title = "Force Position",
-        Desc  = "When ON, a high-priority loop re-applies the target CFrame every frame.",
+        Desc  = "When ON, a high-priority loop re-applies target CFrame every frame.",
         Value = true,
         Callback = function(state)
             forcePosEnabled = state
