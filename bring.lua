@@ -1,3 +1,6 @@
+--=====================================================
+-- 1337 Nights | Bring Tab (workspace-wide, stream-aware collectors)
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -10,24 +13,29 @@ return function(C, R, UI)
 
     local AMOUNT_TO_BRING = 50
 
+    -- Catalogs
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-
-    -- Includes new options
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist"}
-
-    -- New Pelts section
+    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack", "Mossy Coin", "Cultist"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
+    --========================
+    -- Utilities
+    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function hasHumanoid(model)
+        if not (model and model:IsA("Model")) then return false end
+        return model:FindFirstChildOfClass("Humanoid") ~= nil
     end
 
     local function berryPart(m)
@@ -76,98 +84,6 @@ return function(C, R, UI)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
 
-    --========================
-    -- Collect helpers
-    --========================
-
-    local function collectByNameStrictTop(name, limit)
-        local items = WS:FindFirstChild("Items")
-        if not items then return {} end
-        local root = hrp()
-        if not root then return {} end
-        local found = {}
-        for _,m in ipairs(items:GetChildren()) do
-            if m:IsA("Model") and m.Name == name then
-                local mp = mainPart(m)
-                if mp then
-                    found[#found+1] = {model=m, part=mp, dist=(mp.Position - root.Position).Magnitude}
-                end
-            end
-        end
-        table.sort(found, function(a,b) return a.dist < b.dist end)
-        local out, n = {}, math.min(limit or #found, #found)
-        for i=1,n do out[i] = found[i] end
-        return out
-    end
-
-    -- Detect whether a model looks like a humanoid/NPC
-    local function hasHumanoidBits(model)
-        if not (model and model:IsA("Model")) then return false end
-        if model:FindFirstChildOfClass("Humanoid") then return true end
-        if model:FindFirstChild("HumanoidRootPart") then return true end
-        local limbNames = { "Head","Torso","UpperTorso","LowerTorso","Left Arm","Right Arm","Left Leg","Right Leg",
-                            "LeftHand","RightHand","LeftFoot","RightFoot","LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm",
-                            "LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg" }
-        for _,n in ipairs(limbNames) do
-            if model:FindFirstChild(n) then return true end
-        end
-        return false
-    end
-
-    -- Descendant search with name matcher and optional filter on the *top-level* model under Items
-    local function collectByMatcherLoose(limit, matcher, filterFn)
-        local items = WS:FindFirstChild("Items")
-        if not items then return {} end
-        local root = hrp()
-        if not root then return {} end
-        local found = {}
-        for _,d in ipairs(items:GetDescendants()) do
-            if (d:IsA("Model") or d:IsA("BasePart")) and d.Parent then
-                local model = d:IsA("Model") and d or d.Parent
-                if model and model:IsA("Model") then
-                    local top = model
-                    while top.Parent and top.Parent ~= items do
-                        top = top.Parent
-                    end
-                    if top.Parent == items and top:IsA("Model") then
-                        if matcher(top.Name) and (not filterFn or filterFn(top)) then
-                            local mp = mainPart(top)
-                            if mp then
-                                found[#found+1] = {model=top, part=mp, dist=(mp.Position - root.Position).Magnitude}
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        table.sort(found, function(a,b) return a.dist < b.dist end)
-        local out, n = {}, math.min(limit or #found, #found)
-        for i=1,n do out[i] = found[i] end
-        return out
-    end
-
-    -- Match helpers
-    local function exactMatcher(target)
-        return function(name) return name == target end
-    end
-    local function containsMatcher(fragment)
-        local f = string.lower(fragment)
-        return function(name) return string.find(string.lower(name), f, 1, true) ~= nil end
-    end
-    local function prefixMatcher(prefix)
-        local p = "^" .. prefix:gsub("(%W)","%%%1") .. "%d*$" -- allow trailing digits
-        return function(name) return string.match(name, p) ~= nil end
-    end
-    local function anyOfMatcher(matchers)
-        return function(name)
-            for _,m in ipairs(matchers) do if m(name) then return true end end
-            return false
-        end
-    end
-
-    --========================
-    -- Teleport & drop
-    --========================
     local function getRemote(n)
         local f = RS:FindFirstChild("RemoteEvents")
         return f and f:FindFirstChild(n) or nil
@@ -211,45 +127,154 @@ return function(C, R, UI)
         return true
     end
 
-    local function bringFromList(list, want)
+    --========================
+    -- Workspace-wide collectors (streamed-in only)
+    --========================
+    local function sortedNear(list)
+        local root = hrp()
+        if not root then return list end
+        table.sort(list, function(a,b)
+            return (a.part.Position - root.Position).Magnitude < (b.part.Position - root.Position).Magnitude
+        end)
+        return list
+    end
+
+    -- generic finder by exact top-level model name (anywhere in Workspace)
+    local function collectByNameLoose(name, limit)
+        local root = hrp()
+        if not root then return {} end
+        local found, n = {}, 0
+        for _,d in ipairs(WS:GetDescendants()) do
+            if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
+                local model = d:IsA("Model") and d or d.Parent
+                if model and model:IsA("Model") then
+                    local mp = mainPart(model)
+                    if mp then
+                        n += 1
+                        found[#found+1] = {model = model, part = mp}
+                        if limit and n >= limit then break end
+                    end
+                end
+            end
+        end
+        return sortedNear(found)
+    end
+
+    -- Mossy Coin: matches “Mossy Coin” and “Mossy Coin<number>”, and prefers the inner “Main”/mesh base
+    local function isMossyCoinModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local nm = tostring(m.Name)
+        if nm == "Mossy Coin" then return true end
+        local base, num = nm:match("^(Mossy Coin)(%d+)$")
+        return base ~= nil and tonumber(num) ~= nil
+    end
+    local function collectMossyCoins(limit)
+        local root = hrp()
+        if not root then return {} end
+        local out, n = {}, 0
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") and isMossyCoinModel(m) then
+                -- Prefer a child named "Main" if present; otherwise any BasePart
+                local mp = m:FindFirstChild("Main")
+                if not (mp and mp:IsA("BasePart")) then
+                    mp = m:FindFirstChildWhichIsA("BasePart")
+                end
+                if mp then
+                    n += 1
+                    out[#out+1] = {model = m, part = mp}
+                    if limit and n >= limit then break end
+                end
+            end
+        end
+        return sortedNear(out)
+    end
+
+    -- Cultist: require a Humanoid so we don’t grab “cultist” items
+    local function collectCultists(limit)
+        local root = hrp()
+        if not root then return {} end
+        local out, n = {}, 0
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) then
+                if hasHumanoid(m) then
+                    local mp = mainPart(m)
+                    if mp then
+                        n += 1
+                        out[#out+1] = {model = m, part = mp}
+                        if limit and n >= limit then break end
+                    end
+                end
+            end
+        end
+        return sortedNear(out)
+    end
+
+    -- Pelts: fuzzy helpers for Alpha/Bear using available examples
+    local function isAlphaWolfPeltName(nm)
+        nm = nm:lower()
+        return nm == "alpha wolf pelt" or nm == "wolf pelt alpha" or nm:find("alpha") and nm:find("wolf") and nm:find("pelt")
+    end
+    local function isBearPeltName(nm)
+        nm = nm:lower()
+        return (nm == "bear pelt") or (nm:find("bear") and nm:find("pelt") and not nm:find("polar"))
+    end
+
+    local function collectPelts(which, limit)
+        local root = hrp()
+        if not root then return {} end
+        local out, n = {}, 0
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") then
+                local ok = false
+                local nm = m.Name
+                if which == "Bunny Foot"        then ok = (nm == "Bunny Foot")
+                elseif which == "Wolf Pelt"     then ok = (nm == "Wolf Pelt")
+                elseif which == "Alpha Wolf Pelt" then ok = isAlphaWolfPeltName(nm) or (nm == "Wolf Pelt" and m:FindFirstChild("Main") and (m.Main.Color and m.Main.Color.G < 0.4)) -- heuristic
+                elseif which == "Bear Pelt"     then ok = isBearPeltName(nm) or (nm == "Polar Bear Pelt") -- allow fallback if devs reuse asset
+                elseif which == "Polar Bear Pelt" then ok = (nm == "Polar Bear Pelt")
+                end
+                if ok then
+                    local mp = mainPart(m)
+                    if mp then
+                        n += 1
+                        out[#out+1] = {model = m, part = mp}
+                        if limit and n >= limit then break end
+                    end
+                end
+            end
+        end
+        return sortedNear(out)
+    end
+
+    --========================
+    -- Dispatcher
+    --========================
+    local function bringSelected(name, count)
+        local want = tonumber(count) or 0
+        if want <= 0 then return end
+
+        local list = {}
+        if name == "Mossy Coin" then
+            list = collectMossyCoins(want)
+        elseif name == "Cultist" then
+            list = collectCultists(want)
+        elseif name == "Bunny Foot" or name == "Wolf Pelt" or name == "Alpha Wolf Pelt"
+            or name == "Bear Pelt" or name == "Polar Bear Pelt" then
+            list = collectPelts(name, want)
+        else
+            -- generic
+            list = collectByNameLoose(name, want)
+        end
+
         if #list == 0 then return end
-        local brought, goal = 0, math.max(0, tonumber(want) or 0)
+        local brought = 0
         for _,entry in ipairs(list) do
-            if brought >= goal then break end
+            if brought >= want then break end
             if teleportOne(entry) then
                 brought += 1
                 task.wait(0.12)
             end
         end
-    end
-
-    local function bringSelected(name, count)
-        local want = tonumber(count) or 0
-        if want <= 0 then return end
-
-        local matcher, filterFn = nil, nil
-
-        if name == "Mossy Coin" then
-            matcher = prefixMatcher("Mossy Coin") -- Mossy Coin, Mossy Coin2, ...
-        elseif name == "Cultist" then
-            matcher  = containsMatcher("cultist")  -- Crossbow Cultist, etc.
-            filterFn = hasHumanoidBits             -- ensure it's an NPC-like model
-        elseif name == "Alpha Wolf Pelt" then
-            matcher = anyOfMatcher({ exactMatcher("Alpha Wolf Pelt"), containsMatcher("Wolf Pelt") })
-        elseif name == "Bear Pelt" then
-            matcher = anyOfMatcher({ exactMatcher("Bear Pelt"), exactMatcher("Polar Bear Pelt"), containsMatcher("Bear Pelt") })
-        else
-            matcher = exactMatcher(name)
-        end
-
-        local list
-        if name == "Bolt" then
-            list = collectByNameStrictTop(name, want)
-        else
-            list = collectByMatcherLoose(want, matcher, filterFn)
-        end
-
-        bringFromList(list, want)
     end
 
     --========================
@@ -294,4 +319,8 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts" })
     singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
+
+    -- NOTE: StreamingEnabled means only streamed-in instances are visible to the client.
+    -- If you want an experimental auto-scan that briefly moves the player to stream chunks,
+    -- we can add that here on demand.
 end
