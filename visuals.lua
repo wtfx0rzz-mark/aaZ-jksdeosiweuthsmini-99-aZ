@@ -1,5 +1,3 @@
--- visuals.lua — Visuals tab (Player Tracker / Invisible / Highlight Trees In Aura)
-
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
@@ -7,13 +5,11 @@ return function(C, R, UI)
 
     local Players = C.Services.Players
     local WS      = C.Services.WS
-    local Run     = C.Services.Run
     local lp      = C.LocalPlayer
     local VisualsTab = UI.Tabs.Visuals
 
     C.State = C.State or { AuraRadius = 150, Toggles = {} }
 
-    -- ---------- helpers ----------
     local function auraRadius()
         return math.clamp(tonumber(C.State.AuraRadius) or 150, 0, 1_000_000)
     end
@@ -29,6 +25,70 @@ return function(C, R, UI)
         if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then return model.PrimaryPart end
         return model:FindFirstChildWhichIsA("BasePart")
     end
+
+    local function ensureHighlight(parent, name)
+        local hl = parent:FindFirstChild(name)
+        if hl and hl:IsA("Highlight") then return hl end
+        hl = Instance.new("Highlight")
+        hl.Name = name
+        hl.Adornee = parent
+        hl.FillTransparency = 1
+        hl.OutlineTransparency = 0
+        hl.OutlineColor = Color3.fromRGB(255, 255, 0) -- yellow
+        hl.DepthMode = Enum.HighlightDepthMode.Occluded
+        hl.Parent = parent
+        return hl
+    end
+
+    local function clearHighlight(parent, name)
+        local hl = parent and parent:FindFirstChild(name)
+        if hl and hl:IsA("Highlight") then hl:Destroy() end
+    end
+
+    -- Player Tracker
+    local runningPlayers = false
+    local PLAYER_HL_NAME = "__PlayerTrackerHL__"
+
+    local function startPlayerTracker()
+        if runningPlayers then return end
+        runningPlayers = true
+        task.spawn(function()
+            while runningPlayers do
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= lp then
+                        local ch = plr.Character
+                        if ch then
+                            ensureHighlight(ch, PLAYER_HL_NAME).Enabled = true
+                        end
+                    end
+                end
+                task.wait(0.5)
+            end
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= lp and plr.Character then
+                    clearHighlight(plr.Character, PLAYER_HL_NAME)
+                end
+            end
+        end)
+    end
+    local function stopPlayerTracker() runningPlayers = false end
+
+    -- Invisible (local only)
+    local function setLocalInvisible(state)
+        local ch = lp and lp.Character
+        if not ch then return end
+        for _, d in ipairs(ch:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.LocalTransparencyModifier = state and 1 or 0
+            elseif d:IsA("Decal") then
+                d.Transparency = state and 1 or 0
+            end
+        end
+    end
+
+    -- Highlight Trees In Aura
+    local runningTrees = false
+    local TREE_HL_NAME = "__TreeAuraHL__"
 
     local function collectTreesInRadius(origin, radius, maxCount)
         local out, n = {}, 0
@@ -57,76 +117,6 @@ return function(C, R, UI)
         return out
     end
 
-    local function ensureHighlight(parent, name)
-        local hl = parent:FindFirstChild(name)
-        if hl and hl:IsA("Highlight") then return hl end
-        hl = Instance.new("Highlight")
-        hl.Name = name
-        hl.Adornee = parent
-        hl.FillTransparency = 1
-        hl.OutlineTransparency = 0
-        hl.OutlineColor = Color3.fromRGB(0, 0, 0) -- darker/bolder outline
-        hl.DepthMode = Enum.HighlightDepthMode.Occluded
-        hl.Parent = parent
-        return hl
-    end
-
-    local function clearHighlight(parent, name)
-        local hl = parent and parent:FindFirstChild(name)
-        if hl and hl:IsA("Highlight") then hl:Destroy() end
-    end
-
-    -- ---------- Player Tracker ----------
-    local runningPlayers = false
-    local PLAYER_HL_NAME = "__PlayerTrackerHL__"
-
-    local function startPlayerTracker()
-        if runningPlayers then return end
-        runningPlayers = true
-        task.spawn(function()
-            while runningPlayers do
-                for _, plr in ipairs(Players:GetPlayers()) do
-                    if plr ~= lp then
-                        local ch = plr.Character
-                        if ch then
-                            ensureHighlight(ch, PLAYER_HL_NAME).Enabled = true
-                        end
-                    end
-                end
-                task.wait(0.5)
-            end
-            -- turn off when stopped
-            for _, plr in ipairs(Players:GetPlayers()) do
-                if plr ~= lp and plr.Character then
-                    clearHighlight(plr.Character, PLAYER_HL_NAME)
-                end
-            end
-        end)
-    end
-
-    local function stopPlayerTracker()
-        runningPlayers = false
-    end
-
-    -- ---------- Invisible (local only) ----------
-    local invisibleOn = false
-    local function setLocalInvisible(state)
-        invisibleOn = state
-        local ch = lp and lp.Character
-        if not ch then return end
-        for _, d in ipairs(ch:GetDescendants()) do
-            if d:IsA("BasePart") then
-                d.LocalTransparencyModifier = state and 1 or 0
-            elseif d:IsA("Decal") then
-                d.Transparency = state and 1 or 0
-            end
-        end
-    end
-
-    -- ---------- Highlight Trees In Aura (radius-gated) ----------
-    local runningTrees = false
-    local TREE_HL_NAME = "__TreeAuraHL__"
-
     local function startTreeHighlight()
         if runningTrees then return end
         runningTrees = true
@@ -145,15 +135,12 @@ return function(C, R, UI)
                     ensureHighlight(m, TREE_HL_NAME).Enabled = true
                 end
 
-                -- disable highlights on trees no longer in range
-                for _, root in ipairs({WS}) do
-                    for _, model in ipairs(root:GetDescendants()) do
-                        if model:IsA("Model") and TREE_NAMES[model.Name] then
-                            local hl = model:FindFirstChild(TREE_HL_NAME)
-                            if hl and not seen[model] then
-                                hl.Enabled = false
-                                hl:Destroy()
-                            end
+                for _, model in ipairs(WS:GetDescendants()) do
+                    if model:IsA("Model") and TREE_NAMES[model.Name] then
+                        local hl = model:FindFirstChild(TREE_HL_NAME)
+                        if hl and not seen[model] then
+                            hl.Enabled = false
+                            hl:Destroy()
                         end
                     end
                 end
@@ -161,23 +148,82 @@ return function(C, R, UI)
                 task.wait(0.35)
             end
 
-            -- cleanup when toggle goes off
-            for _, root in ipairs({WS}) do
-                for _, model in ipairs(root:GetDescendants()) do
-                    if model:IsA("Model") and TREE_NAMES[model.Name] then
-                        clearHighlight(model, TREE_HL_NAME)
-                    end
+            for _, model in ipairs(WS:GetDescendants()) do
+                if model:IsA("Model") and TREE_NAMES[model.Name] then
+                    clearHighlight(model, TREE_HL_NAME)
                 end
             end
         end)
     end
+    local function stopTreeHighlight() runningTrees = false end
 
-    local function stopTreeHighlight()
-        runningTrees = false
+    -- Highlight Characters In Aura
+    local runningChars = false
+    local CHAR_HL_NAME = "__CharAuraHL__"
+
+    local function collectCharactersInRadius(origin, radius, maxCount)
+        local out, n = {}, 0
+        local chars = WS:FindFirstChild("Characters")
+        if not chars then return out end
+        for _, mdl in ipairs(chars:GetChildren()) do
+            if n >= maxCount then break end
+            repeat
+                if not mdl:IsA("Model") then break end
+                local nameLower = string.lower(mdl.Name or "")
+                if string.find(nameLower, "horse", 1, true) then break end
+                local p = bestPart(mdl)
+                if not p then break end
+                if (p.Position - origin).Magnitude > radius then break end
+                n += 1
+                out[n] = mdl
+            until true
+        end
+        return out
     end
 
-    -- ---------- UI ----------
-    VisualsTab:Section({ Title = "Player Tracker" })
+    local function startCharHighlight()
+        if runningChars then return end
+        runningChars = true
+        task.spawn(function()
+            while runningChars do
+                local ch = lp.Character or lp.CharacterAdded:Wait()
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if not hrp then task.wait(0.2) break end
+
+                local r = auraRadius()
+                local targets = collectCharactersInRadius(hrp.Position, r, 256)
+                local seen = {}
+
+                for _, m in ipairs(targets) do
+                    seen[m] = true
+                    ensureHighlight(m, CHAR_HL_NAME).Enabled = true
+                end
+
+                local chars = WS:FindFirstChild("Characters")
+                if chars then
+                    for _, mdl in ipairs(chars:GetChildren()) do
+                        local hl = mdl:FindFirstChild(CHAR_HL_NAME)
+                        if hl and not seen[mdl] then
+                            hl.Enabled = false
+                            hl:Destroy()
+                        end
+                    end
+                end
+
+                task.wait(0.35)
+            end
+
+            local chars = WS:FindFirstChild("Characters")
+            if chars then
+                for _, mdl in ipairs(chars:GetChildren()) do
+                    clearHighlight(mdl, CHAR_HL_NAME)
+                end
+            end
+        end)
+    end
+    local function stopCharHighlight() runningChars = false end
+
+    -- UI (no duplicate section titles)
     VisualsTab:Toggle({
         Title = "Player Tracker",
         Value = C.State.Toggles.PlayerTracker or false,
@@ -187,7 +233,6 @@ return function(C, R, UI)
         end
     })
 
-    VisualsTab:Section({ Title = "Invisible" })
     VisualsTab:Toggle({
         Title = "Invisible",
         Value = C.State.Toggles.Invisible or false,
@@ -197,13 +242,21 @@ return function(C, R, UI)
         end
     })
 
-    VisualsTab:Section({ Title = "Highlight Trees In Aura" })
     VisualsTab:Toggle({
         Title = "Highlight Trees In Aura",
         Value = C.State.Toggles.HighlightTrees or false,
         Callback = function(on)
             C.State.Toggles.HighlightTrees = on
             if on then startTreeHighlight() else stopTreeHighlight() end
+        end
+    })
+
+    VisualsTab:Toggle({
+        Title = "Highlight Characters In Aura",
+        Value = C.State.Toggles.HighlightChars or false,
+        Callback = function(on)
+            C.State.Toggles.HighlightChars = on
+            if on then startCharHighlight() else stopCharHighlight() end
         end
     })
 end
