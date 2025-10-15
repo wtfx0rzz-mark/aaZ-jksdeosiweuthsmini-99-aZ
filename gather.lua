@@ -3,12 +3,21 @@ return function(C, R, UI)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
-    local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
+    local Run     = game:GetService("RunService")
 
-    -- UI tab
+    -- Resolve tab (create if missing)
     local Tabs = (UI and UI.Tabs) or {}
     local tab  = Tabs.Gather
-    if not tab then return end
+    if not tab then
+        local Window = UI and UI.Window
+        if Window and Window.Tab then
+            tab = Window:Tab({ Title = "Gather", Icon = "package", Desc = "Collect and place resources" })
+            Tabs.Gather = tab
+        else
+            warn("[Gather] UI.Tabs.Gather not found and cannot create tab")
+            return
+        end
+    end
 
     ----------------------------------------------------------------
     -- Tunables
@@ -25,22 +34,6 @@ return function(C, R, UI)
     local LOG_ALIGN_ALONG_FWD = true
 
     ----------------------------------------------------------------
-    -- Helpers
-    ----------------------------------------------------------------
-    local function clamp(v, lo, hi)
-        v = tonumber(v) or lo
-        if v < lo then return lo end
-        if v > hi then return hi end
-        return v
-    end
-
-    local function safeSetNetworkOwner(p, owner)
-        if p and p.Parent and typeof(p.SetNetworkOwner) == "function" then
-            pcall(function() p:SetNetworkOwner(owner) end)
-        end
-    end
-
-    ----------------------------------------------------------------
     -- Remotes
     ----------------------------------------------------------------
     local RemoteFolder = RS:FindFirstChild("RemoteEvents")
@@ -51,8 +44,8 @@ return function(C, R, UI)
     -- State
     ----------------------------------------------------------------
     local lp  = Players.LocalPlayer
-    local carried   = {}     -- [Model]=true
-    local carryList = {}     -- array snapshot
+    local carried   = {}   -- [Model]=true
+    local carryList = {}
     local carryCount = 0
 
     local gatherEnabled = false
@@ -68,32 +61,29 @@ return function(C, R, UI)
     local gatherToggleHandle = nil
 
     ----------------------------------------------------------------
-    -- Common fns
+    -- Helpers
     ----------------------------------------------------------------
-    local function toList(t)
-        local out = {}
-        for k in pairs(t) do out[#out+1] = k end
-        return out
+    local function clamp(v, lo, hi)
+        v = tonumber(v) or lo
+        if v < lo then return lo end
+        if v > hi then return hi end
+        return v
     end
-
     local function hrp()
         local ch = lp and (lp.Character or lp.CharacterAdded:Wait())
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
-
     local function groundBaselineY()
         local root = hrp(); if not root then return nil end
         local origin = root.Position + Vector3.new(0, 500, 0)
         local rc = WS:Raycast(origin, Vector3.new(0, -2000, 0))
         return rc and rc.Position.Y or (root.Position.Y - 10)
     end
-
     local function belowMapCFrame()
         local root = hrp(); if not (root and baselineY) then return nil end
         local pos = Vector3.new(root.Position.X, baselineY - carryDepth, root.Position.Z)
         return CFrame.new(pos, pos + root.CFrame.LookVector)
     end
-
     local function mainPart(m)
         if not m then return nil end
         if m:IsA("Model") then
@@ -103,14 +93,12 @@ return function(C, R, UI)
         end
         return nil
     end
-
     local function ensurePrimary(m)
         if m and m:IsA("Model") and not m.PrimaryPart then
             local p = m:FindFirstChildWhichIsA("BasePart")
             if p then m.PrimaryPart = p end
         end
     end
-
     local function matchesResource(name)
         local n = string.lower(name or "")
         if resourceType == "Logs"    then return n:find("log",   1, true) ~= nil end
@@ -118,12 +106,15 @@ return function(C, R, UI)
         if resourceType == "Berries" then return n:find("berry", 1, true) ~= nil end
         return false
     end
-
     local function blacklist(m)
         local n = string.lower(m.Name or "")
         return n:find("trader", 1, true) or n:find("shopkeeper", 1, true) or n:find("campfire", 1, true)
     end
-
+    local function toList(t)
+        local out = {}
+        for k in pairs(t) do out[#out+1] = k end
+        return out
+    end
     local function addCarry(m)
         if carried[m] or carryCount >= MAX_CARRY then return false end
         carried[m] = true
@@ -131,7 +122,6 @@ return function(C, R, UI)
         carryList = toList(carried)
         return true
     end
-
     local function removeCarry(m)
         if not carried[m] then return end
         carried[m] = nil
@@ -139,15 +129,6 @@ return function(C, R, UI)
         if carryCount < 0 then carryCount = 0 end
         carryList = toList(carried)
     end
-
-    local function startDrag(m)
-        if StartDrag and m then pcall(function() StartDrag:FireServer(m) end) end
-    end
-
-    local function stopDrag(m)
-        if StopDrag and m then pcall(function() StopDrag:FireServer(m) end) end
-    end
-
     local function setNoCollide(m, on)
         local mp = mainPart(m); if not mp then return end
         if m:IsA("Model") then
@@ -155,14 +136,35 @@ return function(C, R, UI)
                 if d:IsA("BasePart") then
                     d.CanCollide = not on
                     d.Anchored = false
-                    safeSetNetworkOwner(d, lp)
+                    if typeof(d.SetNetworkOwner) == "function" then
+                        pcall(function() d:SetNetworkOwner(lp) end)
+                    end
                 end
             end
         else
             mp.CanCollide = not on
             mp.Anchored = false
-            safeSetNetworkOwner(mp, lp)
+            if typeof(mp.SetNetworkOwner) == "function" then
+                pcall(function() mp:SetNetworkOwner(lp) end)
+            end
         end
+    end
+    local function startDrag(m)
+        if StartDrag and m then pcall(function() StartDrag:FireServer(m) end) end
+    end
+    local function stopDrag(m)
+        if StopDrag and m then pcall(function() StopDrag:FireServer(m) end) end
+    end
+
+    -- Robust UI toggle setter
+    local function uiSetToggle(state)
+        local h = gatherToggleHandle
+        if not h then return end
+        pcall(function() if h.SetValue then h:SetValue(state) end end)
+        pcall(function() if h.SetState then h:SetState(state) end end)
+        pcall(function() if h.Set      then h:Set(state)      end end)
+        pcall(function() if h.Update   then h:Update(state)   end end)
+        pcall(function() if h.Value ~= nil then h.Value = state end end)
     end
 
     ----------------------------------------------------------------
@@ -190,12 +192,10 @@ return function(C, R, UI)
             end
         end)
     end
-
     local function stopTether()
         tetherOn = false
         if rsConn then rsConn:Disconnect(); rsConn = nil end
     end
-
     local function startScanner()
         if scanThreadRunning then return end
         scanThreadRunning = true
@@ -208,8 +208,7 @@ return function(C, R, UI)
                 if items and root then
                     local origin = root.Position
                     for _,m in ipairs(items:GetChildren()) do
-                        if not scanningOn then break end
-                        if carryCount >= MAX_CARRY then break end
+                        if not scanningOn or carryCount >= MAX_CARRY then break end
                         if m:IsA("Model") and not carried[m] and not blacklist(m) and matchesResource(m.Name) then
                             local mp = mainPart(m)
                             if mp and (mp.Position - origin).Magnitude <= carryRadius then
@@ -225,11 +224,9 @@ return function(C, R, UI)
             scanThreadRunning = false
         end)
     end
-
     local function stopScanner()
         scanningOn = false
     end
-
     local function setEnabled(on)
         gatherEnabled = on
         if on then
@@ -242,20 +239,8 @@ return function(C, R, UI)
         end
     end
 
-    -- robust UI toggle setter
-    local function uiSetToggle(state)
-        local ok = false
-        if not gatherToggleHandle then return false end
-        ok = ok or pcall(function() if gatherToggleHandle.SetValue then gatherToggleHandle:SetValue(state) end end)
-        ok = ok or pcall(function() if gatherToggleHandle.SetState then gatherToggleHandle:SetState(state) end end)
-        ok = ok or pcall(function() if gatherToggleHandle.Set      then gatherToggleHandle:Set(state)      end end)
-        ok = ok or pcall(function() if gatherToggleHandle.Update   then gatherToggleHandle:Update(state)   end end)
-        ok = ok or pcall(function() if gatherToggleHandle.Value ~= nil then gatherToggleHandle.Value = state end end)
-        return ok
-    end
-
     ----------------------------------------------------------------
-    -- Placement helpers
+    -- Placement (sequential, anchored)
     ----------------------------------------------------------------
     local function avgSize(objs)
         local sum = Vector3.new()
@@ -274,7 +259,6 @@ return function(C, R, UI)
         if n == 0 then return Vector3.new(3,2.5,3) end
         return sum / n
     end
-
     local function anchorModel(m, anchored)
         if m:IsA("Model") then
             for _,d in ipairs(m:GetDescendants()) do
@@ -298,7 +282,6 @@ return function(C, R, UI)
         end
     end
 
-    -- sequential per-item placement; logs into a neat grid, others into a small anchored cluster
     local function placeLogStackSequential(list)
         local root = hrp(); if not root then return end
         local forward = root.CFrame.LookVector
@@ -322,7 +305,6 @@ return function(C, R, UI)
                 local lateral = (col - halfCols) * stepX
                 local height  = row * stepY
                 local pos = basePos + right * lateral + Vector3.new(0, height, 0)
-
                 local lookDir = LOG_ALIGN_ALONG_FWD and forward or right
                 local cf = CFrame.new(pos, pos + lookDir)
 
@@ -348,11 +330,11 @@ return function(C, R, UI)
         local basePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
 
         local s = avgSize(list)
-        local stepX = s.X * 0.8
-        local stepY = s.Y * 0.8
-        local cols  = math.max(5, math.floor(10 * (3/ (s.X + 0.001))))
-
+        local stepX = math.max(1, s.X * 0.8)
+        local stepY = math.max(0.8, s.Y * 0.8)
+        local cols  = 6
         local halfCols = (cols - 1) / 2
+
         local i = 0
         for _, m in ipairs(list) do
             if m and m.Parent then
@@ -362,9 +344,7 @@ return function(C, R, UI)
 
                 local col = i % cols
                 local row = math.floor(i / cols)
-                local lateral = (col - halfCols) * stepX
-                local height  = row * stepY
-                local pos = basePos + right * lateral + Vector3.new(0, height, 0)
+                local pos = basePos + right * ((col - halfCols) * stepX) + Vector3.new(0, row * stepY, 0)
                 local cf  = CFrame.new(pos, pos + forward)
 
                 local mp = mainPart(m)
@@ -383,18 +363,18 @@ return function(C, R, UI)
     end
 
     local function setItemsVisible()
-        -- force OFF both visually and logically BEFORE any placement
+        -- Force OFF visually and logically first
         uiSetToggle(false)
         setEnabled(false)
 
-        -- snapshot
-        local list = {}
-        for i = 1, #carryList do list[i] = carryList[i] end
-        if #list == 0 then return end
+        -- Snapshot current carried list
+        local snap = {}
+        for i = 1, #carryList do snap[i] = carryList[i] end
+        if #snap == 0 then return end
 
-        -- split logs vs others
+        -- Partition logs vs others
         local logs, others = {}, {}
-        for _, m in ipairs(list) do
+        for _, m in ipairs(snap) do
             local n = (m and m.Name) and m.Name:lower() or ""
             if n:find("log", 1, true) then
                 logs[#logs+1] = m
@@ -405,11 +385,11 @@ return function(C, R, UI)
 
         if #logs > 0 then placeLogStackSequential(logs) end
         if #others > 0 then placeOthersSequential(others) end
-        -- leave toggle OFF; user re-enables explicitly
+        -- Leave toggle OFF; user can re-enable.
     end
 
     ----------------------------------------------------------------
-    -- Respawn baseline refresh
+    -- Respawn
     ----------------------------------------------------------------
     Players.LocalPlayer.CharacterAdded:Connect(function()
         task.defer(function()
