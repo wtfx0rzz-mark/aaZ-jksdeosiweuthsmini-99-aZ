@@ -1,5 +1,7 @@
 --=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling) • Farthest-first + unique models + Cultist Items
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
+--  • Farthest-first + unique models + Cultist Items
+--  • FIX: Stream far targets before moving them (StreamingEnabled)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -20,7 +22,7 @@ return function(C, R, UI)
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    -- Added "Cultist Items" to the Misc list
+    -- Added extras to Misc (incl. Cultist/Cultist Items/Sapling/Mossy Coin)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling","Cultist Items"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
@@ -70,6 +72,18 @@ return function(C, R, UI)
         return t
     end
 
+    -- NEW: Ensure far-away content is streamed to the client before moving it
+    local function requestStreamAt(pos, timeout)
+        timeout = timeout or 1.0
+        -- Try Workspace API
+        pcall(function() WS:RequestStreamAroundAsync(pos) end)
+        -- Some experiences expose it on Player as well; harmless if absent
+        pcall(function() lp:RequestStreamAroundAsync(pos) end)
+        -- Small grace period to allow replication to arrive
+        local t0 = os.clock()
+        repeat task.wait(0.05) until (os.clock() - t0) >= timeout
+    end
+
     -------------------------------------------------------
     -- Drop positioning
     -------------------------------------------------------
@@ -116,14 +130,21 @@ return function(C, R, UI)
         if not (root and entry and entry.model and entry.part) then return false end
         if not entry.model.Parent or entry.part.Anchored then return false end
         if isExcludedModel(entry.model) then return false end
+
+        -- NEW: ensure far-away targets are streamed to client first
+        requestStreamAt(entry.part.Position, 1.0)
+
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
+
         pcall(function() entry.part:SetNetworkOwner(lp) end)
+
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
         else
             entry.part.CFrame = dropCF
         end
+
         dropAndNudgeAsync(entry, dropCF, forward)
         return true
     end
@@ -218,7 +239,7 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- NEW: Cultist Items (items only, not NPCs) from Workspace.Items descendants
+    -- Items only (incl. totems) that have "cultist" in name; exclude NPCs w/Humanoid
     local function collectCultistItems(limit)
         local out, seen, unique = {}, {}, 0
         local items = WS:FindFirstChild("Items")
