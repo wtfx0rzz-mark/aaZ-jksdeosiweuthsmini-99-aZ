@@ -6,7 +6,7 @@ return function(C, R, UI)
 
     local tab = (UI and UI.Tabs and UI.Tabs.Bring) or error("Bring tab not found")
 
-    local AMOUNT_TO_BRING =50
+    local AMOUNT_TO_BRING = 50
     local DROP_FORWARD = 3
     local DROP_UP      = 4
 
@@ -20,6 +20,8 @@ return function(C, R, UI)
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
+
+    local running = false
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -165,12 +167,6 @@ return function(C, R, UI)
         if modelNameLower:find(targetLower, 1, true) then return true end
         local base = pattEscape(targetLower)
         if modelNameLower:match("^"..base.." ?%d+$") then return true end
-        if targetLower == "log" then
-            if modelNameLower:match("fallen%s*log") then return true end
-            if modelNameLower:match("cut%s*log") then return true end
-            if modelNameLower:match("wood%s*log") then return true end
-            if modelNameLower:match("^log[s]?$") then return true end
-        end
         return false
     end
 
@@ -219,6 +215,38 @@ return function(C, R, UI)
             end
         end
         return sortedFarthest(list)
+    end
+
+    local function isPickupLog(m)
+        if not (m and m:IsA("Model")) then return false end
+        if m.Name ~= "Log" then return false end
+        local items = WS:FindFirstChild("Items")
+        if not items or m.Parent ~= items then return false end
+        local ok = false
+        for _,d in ipairs(m:GetDescendants()) do
+            if d.Name == "log_Cylinder" and d:IsA("BasePart") then
+                ok = true
+                break
+            end
+        end
+        return ok
+    end
+
+    local function collectLogsStrict(limit)
+        local out, n = {}, 0
+        local items = WS:FindFirstChild("Items")
+        if not items then return out end
+        for _,m in ipairs(items:GetChildren()) do
+            if n == limit then break end
+            if isPickupLog(m) and not isExcludedModel(m) and not hasHumanoid(m) then
+                local mp = mainPart(m)
+                if mp then
+                    n = n + 1
+                    out[#out+1] = {model=m, part=mp}
+                end
+            end
+        end
+        return sortedFarthest(out)
     end
 
     local function collectMossyCoins(limit)
@@ -314,31 +342,39 @@ return function(C, R, UI)
     end
 
     local function bringSelected(name, count)
-        local want = tonumber(count) or 0
-        if want <= 0 then return end
-        local list = {}
+        if running then return end
+        running = true
+        local function finish() running = false end
+        local ok, _ = pcall(function()
+            local want = tonumber(count) or 0
+            if want <= 0 then return end
+            local list = {}
 
-        if name == "Mossy Coin" then
-            list = collectMossyCoins(want)
-        elseif name == "Cultist" then
-            list = collectCultists(want)
-        elseif name == "Sapling" then
-            list = collectSaplings(want)
-        elseif table.find(pelts, name) then
-            list = collectPelts(name, want)
-        else
-            list = collectByNameFuzzy(name, want)
-        end
-
-        if #list == 0 then return end
-        local brought = 0
-        for _,entry in ipairs(list) do
-            if brought >= want then break end
-            if teleportOne(entry) then
-                brought = brought + 1
-                task.wait(0.14)
+            if name == "Log" then
+                list = collectLogsStrict(want)
+            elseif name == "Mossy Coin" then
+                list = collectMossyCoins(want)
+            elseif name == "Cultist" then
+                list = collectCultists(want)
+            elseif name == "Sapling" then
+                list = collectSaplings(want)
+            elseif table.find(pelts, name) then
+                list = collectPelts(name, want)
+            else
+                list = collectByNameFuzzy(name, want)
             end
-        end
+
+            if #list == 0 then return end
+            local brought = 0
+            for _,entry in ipairs(list) do
+                if brought >= want then break end
+                if teleportOne(entry) then
+                    brought = brought + 1
+                    task.wait(0.14)
+                end
+            end
+        end)
+        finish()
     end
 
     local function singleSelectDropdown(args)
