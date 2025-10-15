@@ -13,7 +13,7 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- Tunables
     ----------------------------------------------------------------
-    local MAX_CARRY      = 50
+    local MAX_CARRY      = 100
     local DEFAULT_RADIUS = 80
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
