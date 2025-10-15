@@ -15,7 +15,7 @@ return function(C, R, UI)
 
     local AMOUNT_TO_BRING = 50
     local DROP_FORWARD = 5
-    local DROP_UP      = 5
+    local DROP_UP      = 15
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
