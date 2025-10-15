@@ -1,10 +1,3 @@
---=====================================================
--- 1337 Nights | Gather Module (Multi-select, Bring-parity)
---  • Uses same item taxonomy as Bring
---  • Captures any selected items within AuraRadius
---  • Hover carry: 5 studs above HRP, tight stack (no collide, anchored)
---  • Place Down: +5f/+5u, radial spread, re-enable physics, auto toggle OFF
---=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local RS      = C.Services.RS
@@ -13,11 +6,8 @@ return function(C, R, UI)
 
     local lp  = Players.LocalPlayer
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
-    assert(tab, "Gather tab not found (use UI.Tabs.Gather or UI.Tabs.Auto)")
+    assert(tab, "Gather tab not found")
 
-    -----------------------------------------------------
-    -- Bring taxonomy (mirrored)
-    -----------------------------------------------------
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
@@ -26,40 +16,28 @@ return function(C, R, UI)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
-    -----------------------------------------------------
-    -- Selection state (multi)
-    -----------------------------------------------------
-    local sel = {
-        simple = {},           -- exact-name items across categories (excludes the 3 specials)
-        pelts  = {},           -- exact pelts
-        wantMossyCoin = false,
-        wantCultist   = false,
-        wantSapling   = false,
-    }
+    local sel = { simple = {}, pelts = {}, wantMossyCoin=false, wantCultist=false, wantSapling=false }
+    local simpleCache = {}
+
     local function clearTable(t) for k in pairs(t) do t[k]=nil end end
+    local function rebuildSimpleCache()
+        clearTable(simpleCache)
+        for k,v in pairs(sel.simple) do if v then simpleCache[k]=true end end
+        for k,v in pairs(sel.pelts)  do if v then simpleCache[k]=true end end
+    end
 
-    -----------------------------------------------------
-    -- Tunables and runtime
-    -----------------------------------------------------
-    local hoverHeight = 5
-    local forwardDrop = 5
-    local upDrop      = 5
-
-    local gatherOn    = false
+    local hoverHeight, forwardDrop, upDrop = 5, 5, 5
+    local gatherOn = false
     local scanConn, hoverConn
-    local gathered    = {}   -- set: [Model]=true
-    local list        = {}   -- array of Models (stable order)
+    local gathered, list = {}, {}
     local GatherToggleCtrl
 
-    -----------------------------------------------------
-    -- Helpers
-    -----------------------------------------------------
     local function hrp()
-        local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
+        local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
     local function humanoid()
-        local ch = Players.LocalPlayer.Character
+        local ch = lp.Character
         return ch and ch:FindFirstChildOfClass("Humanoid")
     end
     local function auraRadius()
@@ -128,83 +106,63 @@ return function(C, R, UI)
         table.clear(list)
     end
 
-    -----------------------------------------------------
-    -- Matching logic (Bring-parity)
-    -----------------------------------------------------
-    local simpleCache = {}  -- k=name -> true
-    local function rebuildSimpleCache()
-        clearTable(simpleCache)
-        for k,v in pairs(sel.simple) do if v then simpleCache[k]=true end end
-        for k,v in pairs(sel.pelts)  do if v then simpleCache[k]=true end end
-    end
-
-    local function isSelectedModel(m)
-        if not (m and m:IsA("Model") and m.Parent) then return false end
-        if isExcludedModel(m) then return false end
-        local name = m.Name
-
-        -- Special: Mossy Coin (exact or numbered suffix)
-        if sel.wantMossyCoin and (name == "Mossy Coin" or name:match("^Mossy Coin%d+$")) then
-            return true
-        end
-
-        -- Special: Cultist (name contains "cultist" and has Humanoid)
+    local function matchesSpecial(model)
+        local name = model.Name
+        if sel.wantMossyCoin and (name == "Mossy Coin" or name:match("^Mossy Coin%d+$")) then return true end
         if sel.wantCultist then
             local nl = (name or ""):lower()
-            if nl:find("cultist",1,true) and hasHumanoid(m) then
-                return true
-            end
+            if nl:find("cultist",1,true) and hasHumanoid(model) then return true end
         end
-
-        -- Special: Sapling (exact name)
-        if sel.wantSapling and name == "Sapling" then
-            return true
-        end
-
-        -- Simple exact-name match (across all non-specials + pelts)
-        if simpleCache[name] then
-            return true
-        end
-
+        if sel.wantSapling and name == "Sapling" then return true end
         return false
     end
 
-    -----------------------------------------------------
-    -- Hover follow and capture
-    -----------------------------------------------------
+    local function matchesSimple(instance, model)
+        if simpleCache[model.Name] then return true end
+        if instance:IsA("BasePart") and simpleCache[instance.Name] then return true end
+        return false
+    end
+
+    local function isSelected(instance)
+        local model = instance:IsA("Model") and instance or instance.Parent
+        if not (model and model:IsA("Model")) then return false end
+        if isExcludedModel(model) then return false end
+        if matchesSpecial(model) then return true end
+        return matchesSimple(instance, model)
+    end
+
     local lastScan = 0
     local function captureIfNear()
         local now = os.clock()
-        if now - lastScan < 0.2 then return end  -- throttle deep scan
+        if now - lastScan < 0.2 then return end
         lastScan = now
 
-        local root = hrp()
-        if not root then return end
+        local root = hrp(); if not root then return end
         local origin = root.Position
         local rad = auraRadius()
 
-        -- Prefer Items folder when present, else scan Workspace
         local pools = {}
         local items = WS:FindFirstChild("Items")
         if items then pools[#pools+1] = items else pools[#pools+1] = WS end
 
         for _,pool in ipairs(pools) do
-            for _,m in ipairs(pool:GetDescendants()) do
+            for _,d in ipairs(pool:GetDescendants()) do
                 repeat
-                    if not m:IsA("Model") then break end
-                    if gathered[m] then break end
-                    if not isSelectedModel(m) then break end
-                    local mp = mainPart(m); if not mp then break end
+                    if not (d:IsA("Model") or d:IsA("BasePart")) then break end
+                    if d:IsA("Model") and isExcludedModel(d) then break end
+                    local model = d:IsA("Model") and d or d.Parent
+                    if not model or gathered[model] then break end
+                    if not isSelected(d) then break end
+                    local mp = mainPart(model); if not mp then break end
                     if (mp.Position - origin).Magnitude > rad then break end
 
-                    -- Capture: drag, local authority, noclip+anchor, add to set
-                    startDrag(m)
+                    startDrag(model)
                     task.wait(0.02)
                     pcall(function() mp:SetNetworkOwner(lp) end)
-                    setNoCollideModel(m, true)
-                    setAnchoredModel(m, true)
-                    addGather(m)
-                    stopDrag(m)
+                    setNoCollideModel(model, true)
+                    setAnchoredModel(model, true)
+                    addGather(model)
+                    stopDrag(model)
                 until true
             end
         end
@@ -223,10 +181,9 @@ return function(C, R, UI)
         local forward = root.CFrame.LookVector
         local above   = root.Position + Vector3.new(0, hoverHeight, 0)
         local baseCF  = CFrame.lookAt(above, above + forward)
-
         for i,m in ipairs(list) do
             if m and m.Parent then
-                pivotModel(m, baseCF) -- tight stack: all same CFrame
+                pivotModel(m, baseCF)
             else
                 removeGather(m)
             end
@@ -245,32 +202,23 @@ return function(C, R, UI)
         if hoverConn then pcall(function() hoverConn:Disconnect() end) end; hoverConn = nil
     end
 
-    -----------------------------------------------------
-    -- Place Down
-    -----------------------------------------------------
     local function computeSpreadCF(i, baseCF)
-        -- ring spread: 8 per ring, radius grows by 2 studs each ring
-        local r    = 2 + math.floor((i-1)/8)
-        local idx  = (i-1) % 8
-        local ang  = (idx/8) * math.pi*2
-        local off  = Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
+        local r   = 2 + math.floor((i-1)/8)
+        local idx = (i-1) % 8
+        local ang = (idx/8) * math.pi*2
+        local off = Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
         return baseCF + off
     end
 
     local function placeDown()
         local root = hrp(); if not root then return end
-
-        -- Turn OFF gather before we drop to avoid immediate re-capture
-        if GatherToggleCtrl and GatherToggleCtrl.Set then
-            GatherToggleCtrl:Set(false)
-        end
+        if GatherToggleCtrl and GatherToggleCtrl.Set then GatherToggleCtrl:Set(false) end
         stopGather()
 
         local forward = root.CFrame.LookVector
         local dropPos = root.Position + forward * forwardDrop + Vector3.new(0, upDrop, 0)
         local baseCF  = CFrame.lookAt(dropPos, dropPos + forward)
 
-        -- Spread apart at target
         for i,m in ipairs(list) do
             if m and m.Parent then
                 pivotModel(m, computeSpreadCF(i, baseCF))
@@ -279,7 +227,6 @@ return function(C, R, UI)
 
         task.wait(0.05)
 
-        -- Re-enable physics and collisions, then clear tracking
         for _,m in ipairs(list) do
             if m and m.Parent then
                 setAnchoredModel(m, false)
@@ -289,123 +236,48 @@ return function(C, R, UI)
         clearAll()
     end
 
-    -----------------------------------------------------
-    -- UI
-    -----------------------------------------------------
-    tab:Section({ Title = "Gather • Select Items (multi)", Icon = "layers" })
-
     local function onMultiSelect(values, specialsMap, intoSet)
-        -- values: array of strings returned by Multi dropdown
-        -- specialsMap: table of special flags to watch
-        -- intoSet: which destination set to write (sel.simple or sel.pelts)
-        -- Reset current selections in the target set
         clearTable(intoSet)
-        -- Reset specials referenced by this dropdown
         for flag,_ in pairs(specialsMap or {}) do sel[flag] = false end
-
         local mark = {}
-        for _,v in ipairs(values or {}) do mark[v] = true end
-
-        -- Handle specials that live in ammoMisc
+        for _,v in ipairs(values or {}) do mark[v]=true end
         if specialsMap then
             if mark["Mossy Coin"] then sel.wantMossyCoin = true end
             if mark["Cultist"]   then sel.wantCultist   = true end
             if mark["Sapling"]   then sel.wantSapling   = true end
         end
-
-        -- Write non-specials into the target exact-match set
         for name,_ in pairs(mark) do
-            repeat
-                if specialsMap and (name == "Mossy Coin" or name == "Cultist" or name == "Sapling") then
-                    break
-                end
+            if not (name == "Mossy Coin" or name == "Cultist" or name == "Sapling") then
                 intoSet[name] = true
-            until true
+            end
         end
-
         rebuildSimpleCache()
     end
 
-    -- Junk
-    tab:Dropdown({
-        Title = "Junk",
-        Values = junkItems,
-        Multi = true,
-        AllowNone = true,
-        Callback = function(vals) onMultiSelect(vals, nil, sel.simple) end
-    })
-    -- Fuel
-    tab:Dropdown({
-        Title = "Fuel",
-        Values = fuelItems,
-        Multi = true,
-        AllowNone = true,
-        Callback = function(vals) onMultiSelect(vals, nil, sel.simple) end
-    })
-    -- Food
-    tab:Dropdown({
-        Title = "Food",
-        Values = foodItems,
-        Multi = true,
-        AllowNone = true,
-        Callback = function(vals) onMultiSelect(vals, nil, sel.simple) end
-    })
-    -- Medical
-    tab:Dropdown({
-        Title = "Medical",
-        Values = medicalItems,
-        Multi = true,
-        AllowNone = true,
-        Callback = function(vals) onMultiSelect(vals, nil, sel.simple) end
-    })
-    -- Weapons & Armor
-    tab:Dropdown({
-        Title = "Weapons & Armor",
-        Values = weaponsArmor,
-        Multi = true,
-        AllowNone = true,
-        Callback = function(vals) onMultiSelect(vals, nil, sel.simple) end
-    })
-    -- Ammo & Misc (contains specials)
-    tab:Dropdown({
-        Title = "Ammo & Misc",
-        Values = ammoMisc,
-        Multi = true,
-        AllowNone = true,
-        Callback = function(vals)
-            onMultiSelect(vals, {wantMossyCoin=true, wantCultist=true, wantSapling=true}, sel.simple)
-        end
-    })
-    -- Pelts (exact-name class)
-    tab:Dropdown({
-        Title = "Pelts",
-        Values = pelts,
-        Multi = true,
-        AllowNone = true,
-        Callback = function(vals) onMultiSelect(vals, nil, sel.pelts) end
-    })
+    tab:Section({ Title = "Gather • Select Items (multi)", Icon = "layers" })
+    tab:Dropdown({ Title="Junk", Values=junkItems, Multi=true, AllowNone=true,
+        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+    tab:Dropdown({ Title="Fuel", Values=fuelItems, Multi=true, AllowNone=true,
+        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+    tab:Dropdown({ Title="Food", Values=foodItems, Multi=true, AllowNone=true,
+        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+    tab:Dropdown({ Title="Medical", Values=medicalItems, Multi=true, AllowNone=true,
+        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+    tab:Dropdown({ Title="Weapons & Armor", Values=weaponsArmor, Multi=true, AllowNone=true,
+        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+    tab:Dropdown({ Title="Ammo & Misc", Values=ammoMisc, Multi=true, AllowNone=true,
+        Callback=function(vals) onMultiSelect(vals, {wantMossyCoin=true,wantCultist=true,wantSapling=true}, sel.simple) end })
+    tab:Dropdown({ Title="Pelts", Values=pelts, Multi=true, AllowNone=true,
+        Callback=function(vals) onMultiSelect(vals, nil, sel.pelts) end })
 
     tab:Divider()
+    GatherToggleCtrl = tab:Toggle({ Title="Enable Gather", Value=false,
+        Callback=function(state) if state then startGather() else stopGather() end end })
+    tab:Button({ Title="Place Down", Callback=placeDown })
 
-    GatherToggleCtrl = tab:Toggle({
-        Title = "Enable Gather",
-        Value = false,
-        Callback = function(state)
-            if state then startGather() else stopGather() end
-        end
-    })
-
-    tab:Button({
-        Title = "Place Down",
-        Callback = placeDown
-    })
-
-    Players.LocalPlayer.CharacterAdded:Connect(function()
+    lp.CharacterAdded:Connect(function()
         if gatherOn then
-            task.defer(function()
-                stopGather()
-                startGather()
-            end)
+            task.defer(function() stopGather(); startGather() end)
         end
     end)
 end
