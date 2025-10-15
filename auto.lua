@@ -1,6 +1,5 @@
 --=====================================================
 -- 1337 Nights | Auto Tab • Edge Buttons + Lost Child Toggle + Instant Interact
---  + PlaceEdge button (visible while Gather is ON)
 --=====================================================
 return function(C, R, UI)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
@@ -15,9 +14,6 @@ return function(C, R, UI)
         return
     end
 
-    --========================
-    -- Shared helpers
-    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -77,12 +73,7 @@ return function(C, R, UI)
         return (total > 0) and ((off / total) >= 0.9) or false
     end
 
-    --========================
-    -- Edge button GUI
-    --========================
     local PHASE_DIST = 10
-    local ROW_HEIGHT = 36
-    local TOP_PAD    = 6
 
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
@@ -94,13 +85,13 @@ return function(C, R, UI)
         edgeGui.Parent = playerGui
     end
 
-    local function makeEdgeBtn(name, label)
+    local function makeEdgeBtn(name, row, label)
         local b = edgeGui:FindFirstChild(name)
         if not b then
             b = Instance.new("TextButton")
             b.Name = name
             b.AnchorPoint = Vector2.new(1, 0)
-            b.Position    = UDim2.new(1, -6, 0, TOP_PAD) -- y will be laid out
+            b.Position    = UDim2.new(1, -6, 0, 6 + (row-1)*36)
             b.Size        = UDim2.new(0, 120, 0, 30)
             b.Text        = label
             b.TextSize    = 12
@@ -120,32 +111,11 @@ return function(C, R, UI)
         return b
     end
 
-    -- New: Place button (appears while Gather is ON)
-    local placeBtn = makeEdgeBtn("PlaceEdge",  "Place")
-    local phaseBtn = makeEdgeBtn("Phase10Edge","Phase 10")
-    local tpBtn    = makeEdgeBtn("TpEdge",     "Teleport")
-    local plantBtn = makeEdgeBtn("PlantEdge",  "Plant")
-    local lostBtn  = makeEdgeBtn("LostEdge",   "Lost Child")
+    local phaseBtn = makeEdgeBtn("Phase10Edge", 1, "Phase 10")
+    local tpBtn    = makeEdgeBtn("TpEdge",      2, "Teleport")
+    local plantBtn = makeEdgeBtn("PlantEdge",   3, "Plant")
+    local lostBtn  = makeEdgeBtn("LostEdge",    4, "Lost Child")
 
-    -- Lay out buttons top→bottom with uniform spacing based on visibility
-    local function layoutEdgeButtons()
-        local yIndex = 0
-        local function placeRow(btn)
-            if not btn.Visible then return end
-            btn.Position = UDim2.new(1, -6, 0, TOP_PAD + yIndex * ROW_HEIGHT)
-            yIndex += 1
-        end
-        -- Order: Place (if visible) above Phase, then Phase, Teleport, Plant, Lost
-        placeRow(placeBtn)
-        placeRow(phaseBtn)
-        placeRow(tpBtn)
-        placeRow(plantBtn)
-        placeRow(lostBtn)
-    end
-
-    --========================
-    -- Edge button behaviors
-    --========================
     phaseBtn.MouseButton1Click:Connect(function()
         local root = hrp()
         if not root then return end
@@ -161,6 +131,7 @@ return function(C, R, UI)
         downAt = os.clock()
         suppressClick = false
     end)
+
     tpBtn.MouseButton1Up:Connect(function()
         local held = os.clock() - (downAt or 0)
         if held >= HOLD_THRESHOLD then
@@ -176,24 +147,24 @@ return function(C, R, UI)
             end
         end
     end)
+
     tpBtn.MouseButton1Click:Connect(function()
         if suppressClick then suppressClick = false return end
         if not markedCF then return end
         teleportTo(markedCF)
     end)
 
-    --========================
-    -- Plant helpers
-    --========================
     local AHEAD_DIST  = 3
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
+
     local function groundAhead(root)
         local base   = root.Position + root.CFrame.LookVector * AHEAD_DIST
         local start  = base + Vector3.new(0, RAY_HEIGHT, 0)
         local result = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
         return result and result.Position or base
     end
+
     local function findClosestSapling()
         local items = WS:FindFirstChild("Items")
         local root  = hrp()
@@ -210,6 +181,7 @@ return function(C, R, UI)
         end
         return closest
     end
+
     local function plantNearestSaplingInFront()
         local sapling = findClosestSapling()
         if not sapling then return end
@@ -251,13 +223,11 @@ return function(C, R, UI)
             pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
         end
     end
+
     plantBtn.MouseButton1Click:Connect(function()
         plantNearestSaplingInFront()
     end)
 
-    --========================
-    -- Lost Child
-    --========================
     local MAX_TO_SAVE   = 4
     local SCAN_INTERVAL = 0.5
     local savedCount    = 0
@@ -284,6 +254,7 @@ return function(C, R, UI)
         end
         return best
     end
+
     local function teleportToNearestLost()
         if savedCount >= MAX_TO_SAVE then return end
         local target = findNearestEligibleLost()
@@ -306,49 +277,13 @@ return function(C, R, UI)
             setCollideAll(true, snap)
         end
     end
+
     lostBtn.MouseButton1Click:Connect(function()
         teleportToNearestLost()
     end)
 
-    --========================
-    -- NEW: PlaceEdge wiring
-    --========================
-    local function isGatherOn()
-        -- Prefer explicit API from Gather module if present
-        if C and C.Gather and typeof(C.Gather.IsOn) == "function" then
-            local ok, val = pcall(C.Gather.IsOn)
-            if ok and val ~= nil then return val end
-        end
-        -- Fallback to shared state, if maintained by your gather.lua
-        if C and C.State and C.State.Toggles and type(C.State.Toggles.GatherOn) == "boolean" then
-            return C.State.Toggles.GatherOn
-        end
-        return false
-    end
-
-    local function placeDownViaGather()
-        -- Prefer direct function from Gather
-        if C and C.Gather and typeof(C.Gather.PlaceDown) == "function" then
-            local ok = pcall(C.Gather.PlaceDown)
-            if ok then return end
-        end
-        -- Optional: as a last resort, try a Bindable in RS (if you wire one there)
-        local be = RS:FindFirstChild("GatherPlaceDownBindable")
-        if be and be:IsA("BindableEvent") then
-            pcall(function() be:Fire() end)
-        end
-    end
-
-    placeBtn.MouseButton1Click:Connect(function()
-        placeDownViaGather()
-    end)
-
-    --========================
-    -- Background updater (visibility + layout)
-    --========================
     task.spawn(function()
         while true do
-            -- Lost button visibility is managed here already
             for _,d in ipairs(WS:GetDescendants()) do
                 if isLostChildModel(d) then
                     local cur = d:GetAttribute("Lost") == true
@@ -370,24 +305,16 @@ return function(C, R, UI)
             if savedCount < MAX_TO_SAVE and autoLostEnabled then
                 anyEligible = (findNearestEligibleLost() ~= nil)
             end
-            lostBtn.Visible = anyEligible and autoLostEnabled
+            lostBtn.Visible = anyEligible
 
-            -- NEW: show/hide Place button based on Gather mode
-            local showPlace = isGatherOn()
-            if placeBtn.Visible ~= showPlace then
-                placeBtn.Visible = showPlace
+            if savedCount >= MAX_TO_SAVE then
+                lostBtn.Visible = false
             end
-
-            -- Maintain layout order and spacing
-            layoutEdgeButtons()
 
             task.wait(SCAN_INTERVAL)
         end
     end)
 
-    --========================
-    -- Auto tab toggles
-    --========================
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
 
     tab:Toggle({
@@ -395,7 +322,6 @@ return function(C, R, UI)
         Value = false,
         Callback = function(state)
             phaseBtn.Visible = state
-            layoutEdgeButtons()
         end
     })
 
@@ -404,7 +330,6 @@ return function(C, R, UI)
         Value = false,
         Callback = function(state)
             tpBtn.Visible = state
-            layoutEdgeButtons()
         end
     })
 
@@ -413,7 +338,6 @@ return function(C, R, UI)
         Value = false,
         Callback = function(state)
             plantBtn.Visible = state
-            layoutEdgeButtons()
         end
     })
 
@@ -425,13 +349,11 @@ return function(C, R, UI)
             if not state then
                 lostBtn.Visible = false
             end
-            layoutEdgeButtons()
         end
     })
 
-    -- Instant Interact
     local promptDurations = setmetatable({}, { __mode = "k" })
-    local promptsConn
+    local promptsConn, addedConn
 
     local function setPromptInstant(p)
         if not p or not p:IsA("ProximityPrompt") then return end
@@ -440,6 +362,7 @@ return function(C, R, UI)
         end
         p.HoldDuration = 0
     end
+
     local function enableInstantInteract()
         if promptsConn then return end
         for _,d in ipairs(WS:GetDescendants()) do
@@ -453,6 +376,7 @@ return function(C, R, UI)
             end
         end)
     end
+
     local function disableInstantInteract()
         if promptsConn then
             promptsConn:Disconnect()
@@ -469,7 +393,11 @@ return function(C, R, UI)
         Title = "Instant Interact",
         Value = true,
         Callback = function(state)
-            if state then enableInstantInteract() else disableInstantInteract() end
+            if state then
+                enableInstantInteract()
+            else
+                disableInstantInteract()
+            end
         end
     })
 
@@ -477,7 +405,5 @@ return function(C, R, UI)
         if edgeGui.Parent ~= playerGui then
             edgeGui.Parent = playerGui
         end
-        -- layout refresh on respawn
-        layoutEdgeButtons()
     end)
 end
