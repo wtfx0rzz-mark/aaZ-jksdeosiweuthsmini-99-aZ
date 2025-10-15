@@ -18,12 +18,11 @@ return function(C, R, UI)
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
 
-    -- neat log stack config
+    -- log stack config
     local STACK_COLS          = 10
     local STACK_H_GAP         = 0.35
     local STACK_V_GAP         = 0.15
-    local LOCK_EACH_LOG       = true   -- anchor each log as soon as it’s placed
-    local LOG_ALIGN_ALONG_FWD = true   -- orient logs facing player look direction
+    local LOG_ALIGN_ALONG_FWD = true
 
     ----------------------------------------------------------------
     -- Helpers
@@ -35,13 +34,10 @@ return function(C, R, UI)
         return v
     end
 
-    local function setToggleCompat(handle, state)
-        if not handle then return end
-        pcall(function() if handle.SetValue then handle:SetValue(state) end end)
-        pcall(function() if handle.SetState then handle:SetState(state) end end)
-        pcall(function() if handle.Set      then handle:Set(state)      end end)
-        pcall(function() if handle.Update   then handle:Update(state)   end end)
-        pcall(function() if handle.Value ~= nil then handle.Value = state end end)
+    local function safeSetNetworkOwner(p, owner)
+        if p and p.Parent and typeof(p.SetNetworkOwner) == "function" then
+            pcall(function() p:SetNetworkOwner(owner) end)
+        end
     end
 
     ----------------------------------------------------------------
@@ -55,8 +51,8 @@ return function(C, R, UI)
     -- State
     ----------------------------------------------------------------
     local lp  = Players.LocalPlayer
-    local carried   = {}   -- [Model]=true
-    local carryList = {}
+    local carried   = {}     -- [Model]=true
+    local carryList = {}     -- array snapshot
     local carryCount = 0
 
     local gatherEnabled = false
@@ -159,17 +155,13 @@ return function(C, R, UI)
                 if d:IsA("BasePart") then
                     d.CanCollide = not on
                     d.Anchored = false
-                    if typeof(d.SetNetworkOwner) == "function" then
-                        pcall(function() d:SetNetworkOwner(lp) end)
-                    end
+                    safeSetNetworkOwner(d, lp)
                 end
             end
         else
             mp.CanCollide = not on
             mp.Anchored = false
-            if typeof(mp.SetNetworkOwner) == "function" then
-                pcall(function() mp:SetNetworkOwner(lp) end)
-            end
+            safeSetNetworkOwner(mp, lp)
         end
     end
 
@@ -250,6 +242,18 @@ return function(C, R, UI)
         end
     end
 
+    -- robust UI toggle setter
+    local function uiSetToggle(state)
+        local ok = false
+        if not gatherToggleHandle then return false end
+        ok = ok or pcall(function() if gatherToggleHandle.SetValue then gatherToggleHandle:SetValue(state) end end)
+        ok = ok or pcall(function() if gatherToggleHandle.SetState then gatherToggleHandle:SetState(state) end end)
+        ok = ok or pcall(function() if gatherToggleHandle.Set      then gatherToggleHandle:Set(state)      end end)
+        ok = ok or pcall(function() if gatherToggleHandle.Update   then gatherToggleHandle:Update(state)   end end)
+        ok = ok or pcall(function() if gatherToggleHandle.Value ~= nil then gatherToggleHandle.Value = state end end)
+        return ok
+    end
+
     ----------------------------------------------------------------
     -- Placement helpers
     ----------------------------------------------------------------
@@ -260,10 +264,10 @@ return function(C, R, UI)
             if m and m.Parent then
                 if m:IsA("Model") then
                     local _, s = m:GetBoundingBox()
-                    sum += s; n += 1
+                    sum = sum + s; n = n + 1
                 else
                     local p = mainPart(m)
-                    if p then sum += p.Size; n += 1 end
+                    if p then sum = sum + p.Size; n = n + 1 end
                 end
             end
         end
@@ -294,13 +298,11 @@ return function(C, R, UI)
         end
     end
 
-    -- sequential, one-by-one placement for logs; each locked immediately
+    -- sequential per-item placement; logs into a neat grid, others into a small anchored cluster
     local function placeLogStackSequential(list)
         local root = hrp(); if not root then return end
         local forward = root.CFrame.LookVector
         local right   = root.CFrame.RightVector
-
-        -- base position: 5 up + 5 forward
         local basePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
 
         local s = avgSize(list)
@@ -310,69 +312,79 @@ return function(C, R, UI)
 
         local i = 0
         for _, m in ipairs(list) do
-            if not (m and m.Parent) then goto cont end
+            if m and m.Parent then
+                ensurePrimary(m)
+                stopDrag(m)
+                setNoCollide(m, false)
 
-            ensurePrimary(m)
-            stopDrag(m)
-            setNoCollide(m, false)
+                local col = i % STACK_COLS
+                local row = math.floor(i / STACK_COLS)
+                local lateral = (col - halfCols) * stepX
+                local height  = row * stepY
+                local pos = basePos + right * lateral + Vector3.new(0, height, 0)
 
-            local col = i % STACK_COLS
-            local row = math.floor(i / STACK_COLS)
-            local lateral = (col - halfCols) * stepX
-            local height  = row * stepY
-            local pos = basePos + right * lateral + Vector3.new(0, height, 0)
+                local lookDir = LOG_ALIGN_ALONG_FWD and forward or right
+                local cf = CFrame.new(pos, pos + lookDir)
 
-            local lookDir = LOG_ALIGN_ALONG_FWD and forward or right
-            local cf = CFrame.new(pos, pos + lookDir)
+                local mp = mainPart(m)
+                if m:IsA("Model") and m.PrimaryPart then
+                    pcall(function() m:PivotTo(cf) end)
+                elseif mp then
+                    pcall(function() mp.CFrame = cf end)
+                end
 
-            local mp = mainPart(m)
-            if m:IsA("Model") and m.PrimaryPart then
-                pcall(function() m:PivotTo(cf) end)
-            elseif mp then
-                pcall(function() mp.CFrame = cf end)
+                anchorModel(m, true)
+                removeCarry(m)
+                task.wait(0.01)
+                i = i + 1
             end
-
-            -- lock immediately to avoid physics collapsing the stack
-            anchorModel(m, LOCK_EACH_LOG)
-
-            removeCarry(m)
-            i += 1
-            task.wait(0.01) -- small yield to ensure visual placement order
-            ::cont::
         end
     end
 
-    local function placeLoosePile(list)
+    local function placeOthersSequential(list)
         local root = hrp(); if not root then return end
         local forward = root.CFrame.LookVector
-        local pilePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
-        local function jitter() return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8) end
+        local right   = root.CFrame.RightVector
+        local basePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
 
+        local s = avgSize(list)
+        local stepX = s.X * 0.8
+        local stepY = s.Y * 0.8
+        local cols  = math.max(5, math.floor(10 * (3/ (s.X + 0.001))))
+
+        local halfCols = (cols - 1) / 2
+        local i = 0
         for _, m in ipairs(list) do
             if m and m.Parent then
                 ensurePrimary(m)
                 stopDrag(m)
                 setNoCollide(m, false)
 
-                local mp = mainPart(m)
-                local targetCF = CFrame.new(pilePos + jitter(), pilePos + forward)
+                local col = i % cols
+                local row = math.floor(i / cols)
+                local lateral = (col - halfCols) * stepX
+                local height  = row * stepY
+                local pos = basePos + right * lateral + Vector3.new(0, height, 0)
+                local cf  = CFrame.new(pos, pos + forward)
 
+                local mp = mainPart(m)
                 if m:IsA("Model") and m.PrimaryPart then
-                    pcall(function() m:PivotTo(targetCF) end)
+                    pcall(function() m:PivotTo(cf) end)
                 elseif mp then
-                    pcall(function() mp.CFrame = targetCF end)
+                    pcall(function() mp.CFrame = cf end)
                 end
-                -- lightly lock others too so they do not slide away
+
                 anchorModel(m, true)
+                removeCarry(m)
+                task.wait(0.01)
+                i = i + 1
             end
-            removeCarry(m)
-            task.wait(0.005)
         end
     end
 
     local function setItemsVisible()
-        -- hard-off before placing
-        setToggleCompat(gatherToggleHandle, false)
+        -- force OFF both visually and logically BEFORE any placement
+        uiSetToggle(false)
         setEnabled(false)
 
         -- snapshot
@@ -392,7 +404,8 @@ return function(C, R, UI)
         end
 
         if #logs > 0 then placeLogStackSequential(logs) end
-        if #others > 0 then placeLoosePile(others) end
+        if #others > 0 then placeOthersSequential(others) end
+        -- leave toggle OFF; user re-enables explicitly
     end
 
     ----------------------------------------------------------------
@@ -413,16 +426,7 @@ return function(C, R, UI)
         Title = "Gather Items",
         Value = false,
         Callback = function(state)
-            if state then
-                gatherEnabled = true
-                baselineY = groundBaselineY()
-                startTether()
-                startScanner()
-            else
-                gatherEnabled = false
-                stopScanner()
-                stopTether()
-            end
+            setEnabled(state)
         end
     })
 
