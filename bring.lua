@@ -1,210 +1,323 @@
 --=====================================================
--- 1337 Nights | Bring Module (mass bring, gather-style finder)
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
+--  • Farthest-first
+--  • Fix: start drag BEFORE moving logs (fresh-cut constraints)
 --=====================================================
 return function(C, R, UI)
-    -- Services
-    local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
-    local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
-    local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
+    local Players = C.Services.Players
+    local WS      = C.Services.WS
+    local RS      = C.Services.RS
+    local lp      = Players.LocalPlayer
 
-    -- Tab
     local Tabs = UI and UI.Tabs or {}
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- Tunables
-    local MAX_BRING       = 250      -- upper bound; bring as many as exist up to this
-    local DEFAULT_RADIUS  = 120      -- search radius around player
-    local GRID_COLS       = 10
-    local GRID_H_GAP      = 0.35
-    local GRID_V_GAP      = 0.15
-    local DROP_UP         = 5
-    local DROP_FORWARD    = 5
+    local AMOUNT_TO_BRING = 50
+    local DROP_FORWARD = 5
+    local DROP_UP      = 15
 
-    -- Remotes (reuse gather’s)
-    local RemoteFolder = RS:FindFirstChild("RemoteEvents")
-    local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem")
-    local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem")
+    local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
+    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
+    local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
+    local medicalItems = {"Bandage","MedKit"}
+    local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
+    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
+    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
-    -- State
-    local lp = Players.LocalPlayer
-    local resourceType = "Logs"
-    local searchRadius = DEFAULT_RADIUS
+    local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
+        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    -- Helpers
+    --========================
+    -- Utility
+    --========================
     local function hrp()
-        local ch = lp and (lp.Character or lp.CharacterAdded:Wait())
+        local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
-    local function clamp(v, lo, hi)
-        v = tonumber(v) or lo
-        if v < lo then return lo end
-        if v > hi then return hi end
-        return v
+
+    local function isExcludedModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local n = m.Name:lower()
+        return n == "pelt trader" or n:find("trader") or n:find("shopkeeper")
     end
-    local function mainPart(m)
-        if not m then return nil end
-        if m:IsA("Model") then
-            return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
-        elseif m:IsA("BasePart") then
-            return m
+
+    local function hasHumanoid(model)
+        if not (model and model:IsA("Model")) then return false end
+        return model:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+
+    local function mainPart(obj)
+        if not obj or not obj.Parent then return nil end
+        if obj:IsA("BasePart") then return obj end
+        if obj:IsA("Model") then
+            if obj.PrimaryPart then return obj.PrimaryPart end
+            return obj:FindFirstChildWhichIsA("BasePart")
         end
         return nil
     end
-    local function ensurePrimary(m)
-        if m and m:IsA("Model") and not m.PrimaryPart then
-            local p = m:FindFirstChildWhichIsA("BasePart")
-            if p then m.PrimaryPart = p end
-        end
-    end
-    local function blacklist(m)
-        local n = string.lower(m.Name or "")
-        return n:find("trader",1,true) or n:find("shopkeeper",1,true) or n:find("campfire",1,true)
-    end
-    local function isLogName(name)
-        local n = string.lower(name or "")
-        -- Gather-style substring match, avoid common false-positives
-        if n:find("dialog",1,true) or n:find("catalog",1,true) then return false end
-        if resourceType == "Logs"    then return n:find("log",1,true) ~= nil end
-        if resourceType == "Stone"   then return n:find("stone",1,true) or n:find("rock",1,true) end
-        if resourceType == "Berries" then return n:find("berry",1,true) ~= nil end
-        return false
-    end
-    local function groundYAt(pos)
-        local rc = WS:Raycast(pos + Vector3.new(0, 100, 0), Vector3.new(0, -300, 0))
-        return rc and rc.Position.Y or pos.Y
-    end
 
-    local function startDrag(m) if StartDrag and m then pcall(function() StartDrag:FireServer(m) end) end end
-    local function stopDrag(m)  if StopDrag  and m then pcall(function() StopDrag:FireServer(m) end)  end end
-
-    local function setNoCollide(m, on)
-        local parts = m:IsA("Model") and m:GetDescendants() or {m}
-        for _,d in ipairs(parts) do
-            if d:IsA("BasePart") then
-                d.CanCollide = not on
-                d.Anchored = false
-                if typeof(d.SetNetworkOwner) == "function" then
-                    pcall(function() d:SetNetworkOwner(lp) end)
+    local function getAllParts(target)
+        local t = {}
+        if target:IsA("BasePart") then
+            t[1] = target
+        elseif target:IsA("Model") then
+            for _,d in ipairs(target:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    t[#t+1] = d
                 end
             end
         end
-    end
-    local function anchorModel(m, anchored)
-        local parts = m:IsA("Model") and m:GetDescendants() or {m}
-        for _,d in ipairs(parts) do
-            if d:IsA("BasePart") then
-                d.Anchored = anchored
-                d.CanCollide = true
-                d.AssemblyLinearVelocity  = Vector3.new()
-                d.AssemblyAngularVelocity = Vector3.new()
-            end
-        end
+        return t
     end
 
-    -- Finder: mirror gather’s scope and matching
-    local function findTargets()
-        local items = WS:FindFirstChild("Items")
+    --========================
+    -- Drop positioning
+    --========================
+    local function computeDropCF()
         local root = hrp()
-        if not items or not root then return {} end
-        local origin = root.Position
-        local out = {}
+        if not root then return nil, nil end
+        local forward = root.CFrame.LookVector
+        local ahead   = root.Position + forward * DROP_FORWARD
+        local start   = ahead + Vector3.new(0, 500, 0)
+        local rc      = WS:Raycast(start, Vector3.new(0, -2000, 0))
+        local basePos = rc and rc.Position or ahead
+        local dropPos = basePos + Vector3.new(0, DROP_UP, 0)
+        return CFrame.lookAt(dropPos, dropPos + forward), forward
+    end
+
+    local function getRemote(n)
+        local f = RS:FindFirstChild("RemoteEvents")
+        return f and f:FindFirstChild(n) or nil
+    end
+
+    --========================
+    -- Nudge after teleport
+    --========================
+    local function nudgeAsync(entry, forward)
+        task.defer(function()
+            if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
+            local v = forward * 6 + Vector3.new(0, -30, 0)
+            for _,p in ipairs(getAllParts(entry.model)) do
+                p.AssemblyLinearVelocity = v
+            end
+        end)
+    end
+
+    --========================
+    -- Teleport one (drag-first fix)
+    --========================
+    local function teleportOne(entry)
+        local root = hrp()
+        if not (root and entry and entry.model and entry.part) then return false end
+        if not entry.model.Parent or entry.part.Anchored then return false end
+        if isExcludedModel(entry.model) then return false end
+
+        local dropCF, forward = computeDropCF()
+        if not dropCF then return false end
+
+        -- Start dragging BEFORE we move so server-side constraints allow relocation
+        local startRE = getRemote("RequestStartDraggingItem")
+        local stopRE  = getRemote("StopDraggingItem")
+        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
+        task.wait(0.03)
+
+        pcall(function() entry.part:SetNetworkOwner(lp) end)
+
+        if entry.model:IsA("Model") then
+            entry.model:PivotTo(dropCF)
+        else
+            entry.part.CFrame = dropCF
+        end
+
+        nudgeAsync(entry, forward)
+
+        -- Stop drag shortly after to release server authority
+        task.delay(0.08, function()
+            if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
+        end)
+
+        return true
+    end
+
+    --========================
+    -- Collectors (farthest-first)
+    --========================
+    local function sortedFarthest(list)
+        local root = hrp()
+        if not root then return list end
+        table.sort(list, function(a,b)
+            return (a.part.Position - root.Position).Magnitude > (b.part.Position - root.Position).Magnitude
+        end)
+        return list
+    end
+
+    local function collectByNameLoose(name, limit)
+        local found, n = {}, 0
+        for _,d in ipairs(WS:GetDescendants()) do
+            if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
+                local model = d:IsA("Model") and d or d.Parent
+                if model and model:IsA("Model") and not isExcludedModel(model) then
+                    local mp = mainPart(model)
+                    if mp then
+                        n += 1
+                        found[#found+1] = {model=model, part=mp}
+                        if limit and n >= limit then break end
+                    end
+                end
+            end
+        end
+        return sortedFarthest(found)
+    end
+
+    local function collectMossyCoins(limit)
+        local out, n = {}, 0
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") and not isExcludedModel(m) then
+                local nm = m.Name
+                if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
+                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
+                    if mp then
+                        n += 1
+                        out[#out+1] = {model=m, part=mp}
+                        if limit and n >= limit then break end
+                    end
+                end
+            end
+        end
+        return sortedFarthest(out)
+    end
+
+    local function collectCultists(limit)
+        local out, n = {}, 0
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
+                if hasHumanoid(m) then
+                    local mp = mainPart(m)
+                    if mp then
+                        n += 1
+                        out[#out+1] = {model=m, part=mp}
+                        if limit and n >= limit then break end
+                    end
+                end
+            end
+        end
+        return sortedFarthest(out)
+    end
+
+    local function collectSaplings(limit)
+        local out, n = {}, 0
+        local items = WS:FindFirstChild("Items")
+        if not items then return out end
         for _,m in ipairs(items:GetChildren()) do
-            if #out >= MAX_BRING then break end
-            if m:IsA("Model") and not blacklist(m) and isLogName(m.Name) then
+            if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
-                if mp and (mp.Position - origin).Magnitude <= searchRadius then
-                    out[#out+1] = m
+                if mp then
+                    n += 1
+                    out[#out+1] = {model=m, part=mp}
+                    if limit and n >= limit then break end
                 end
             end
         end
-        return out
+        return sortedFarthest(out)
     end
 
-    -- Bring: mass move to a neat grid near player
-    local function bringNow()
-        local root = hrp(); if not root then return end
-        local forward, right = root.CFrame.LookVector, root.CFrame.RightVector
-        local basePos = root.Position + Vector3.new(0, DROP_UP, 0) + forward * DROP_FORWARD
+    local function collectPelts(which, limit)
+        local out, n = {}, 0
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") and not isExcludedModel(m) then
+                local nm = m.Name
+                local ok =
+                    (which == "Bunny Foot" and nm == "Bunny Foot") or
+                    (which == "Wolf Pelt" and nm == "Wolf Pelt") or
+                    (which == "Alpha Wolf Pelt" and nm:lower():find("alpha") and nm:lower():find("wolf")) or
+                    (which == "Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar")) or
+                    (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
 
-        local targets = findTargets()
-        if #targets == 0 then return end
-
-        -- Estimate size from bounding boxes
-        local function avgSize(list)
-            local s, n = Vector3.new(), 0
-            for _,m in ipairs(list) do
-                if m and m.Parent then
-                    local _, box = m:GetBoundingBox()
-                    s += box; n += 1
+                if ok then
+                    local mp = mainPart(m)
+                    if mp then
+                        n += 1
+                        out[#out+1] = {model=m, part=mp}
+                        if limit and n >= limit then break end
+                    end
                 end
             end
-            return n>0 and (s/n) or Vector3.new(3,2.5,3)
         end
-        local s = avgSize(targets)
-        local stepX = s.X + GRID_H_GAP
-        local stepY = s.Y + GRID_V_GAP
-        local halfCols = (GRID_COLS - 1) / 2
+        return sortedFarthest(out)
+    end
 
-        for i, m in ipairs(targets) do
-            if i > MAX_BRING then break end
-            ensurePrimary(m)
-            startDrag(m)
-            setNoCollide(m, true)
+    --========================
+    -- Dispatcher
+    --========================
+    local function bringSelected(name, count)
+        local want = tonumber(count) or 0
+        if want <= 0 then return end
+        local list = {}
 
-            -- Grid position
-            local col = (i-1) % GRID_COLS
-            local row = math.floor((i-1) / GRID_COLS)
-            local lateral = (col - halfCols) * stepX
-            local height  = row * stepY
-            local pos     = basePos + right * lateral + Vector3.new(0, height, 0)
+        if name == "Mossy Coin" then
+            list = collectMossyCoins(want)
+        elseif name == "Cultist" then
+            list = collectCultists(want)
+        elseif name == "Sapling" then
+            list = collectSaplings(want)
+        elseif table.find(pelts, name) then
+            list = collectPelts(name, want)
+        else
+            list = collectByNameLoose(name, want)
+        end
 
-            -- Ground it
-            local gy = groundYAt(pos)
-            pos = Vector3.new(pos.X, gy + s.Y/2, pos.Z)
-
-            -- Face forward for generic items; logs still look fine here
-            local cf = CFrame.new(pos, pos + forward)
-
-            local mp = mainPart(m)
-            if m:IsA("Model") and m.PrimaryPart then
-                pcall(function() m:PivotTo(cf) end)
-            elseif mp then
-                pcall(function() mp.CFrame = cf end)
+        if #list == 0 then return end
+        local brought = 0
+        for _,entry in ipairs(list) do
+            if brought >= want then break end
+            if teleportOne(entry) then
+                brought += 1
+                task.wait(0.12)
             end
-
-            -- Lock in place and release
-            anchorModel(m, true)
-            setNoCollide(m, false)
-            stopDrag(m)
-
-            task.wait(0.005)
         end
     end
 
+    --========================
     -- UI
-    tab:Section({ Title = "Bring" })
+    --========================
+    local function singleSelectDropdown(args)
+        return tab:Dropdown({
+            Title = args.title,
+            Values = args.values,
+            Multi = false,
+            AllowNone = false,
+            Callback = function(choice)
+                if choice and choice ~= "" then args.setter(choice) end
+            end
+        })
+    end
 
-    tab:Dropdown({
-        Title = "Resource Type",
-        Values = { "Logs", "Stone", "Berries" },
-        Multi = false,
-        AllowNone = false,
-        Callback = function(choice)
-            if choice and choice ~= "" then resourceType = choice end
-        end
-    })
+    tab:Section({ Title = "Junk" })
+    singleSelectDropdown({ title = "Select Junk Item", values = junkItems, setter = function(v) selJunk = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selJunk, AMOUNT_TO_BRING) end })
 
-    tab:Slider({
-        Title = "Search Radius",
-        Value = { Min = 20, Max = 300, Default = DEFAULT_RADIUS },
-        Callback = function(v) searchRadius = clamp(v, 10, 500) end
-    })
+    tab:Section({ Title = "Fuel" })
+    singleSelectDropdown({ title = "Select Fuel Item", values = fuelItems, setter = function(v) selFuel = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selFuel, AMOUNT_TO_BRING) end })
 
-    tab:Button({
-        Title = "Bring Nearby",
-        Callback = bringNow
-    })
+    tab:Section({ Title = "Food" })
+    singleSelectDropdown({ title = "Select Food Item", values = foodItems, setter = function(v) selFood = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selFood, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Max Bring: "..tostring(MAX_BRING) })
+    tab:Section({ Title = "Medical" })
+    singleSelectDropdown({ title = "Select Medical Item", values = medicalItems, setter = function(v) selMedical = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selMedical, AMOUNT_TO_BRING) end })
+
+    tab:Section({ Title = "Weapons and Armor" })
+    singleSelectDropdown({ title = "Select Weapon/Armor", values = weaponsArmor, setter = function(v) selWA = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selWA, AMOUNT_TO_BRING) end })
+
+    tab:Section({ Title = "Ammo and Misc." })
+    singleSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(v) selMisc = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
+
+    tab:Section({ Title = "Pelts" })
+    singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
+    tab:Button({ Title = "Bring", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
 end
