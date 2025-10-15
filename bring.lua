@@ -22,7 +22,7 @@ return function(C, R, UI)
 
     -- Batch streaming knobs
     local STREAM_BATCH       = true          -- enable prefetch-all
-    local STREAM_TIMEOUT     = 1.2           -- seconds to wait once after all requests
+    local STREAM_TIMEOUT     = 4.0           -- seconds to wait once after all requests
     local STREAM_BIN_SIZE    = 96            -- studs; dedupe requests by ~cell
     local STREAM_STRIDE      = 16            -- requests per frame to avoid hitching
 
