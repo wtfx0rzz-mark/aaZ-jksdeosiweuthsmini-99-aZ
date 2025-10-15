@@ -1,29 +1,3 @@
---=====================================================
--- 1337 Nights | Combat Module
---=====================================================
--- Adds to Combat tab:
---   • Character Aura (NPCs under Workspace.Characters, excludes *horse*)
---   • Small Tree Aura (targets "Small Tree" and "Snowy Small Tree")
---   • Shared Aura Distance slider
---   • Common damage pipeline (priority equip → impact CFrame → InvokeServer)
---   • Per-tree hit attributes under Model.HitRegisters:
---       1_0000000000, 2_0000000000, 3_0000000000, ...
---   • Round-robin batches so ALL trees in range get processed over time
---=====================================================
---[[====================================================================
- 🧠 GPT INTEGRATION NOTE
- ----------------------------------------------------------------------
- Runs inside the unified 1337 Nights runtime:
-
-     _G.C  → Global Config, State, Services, Shared tables
-     _G.R  → Shared runtime helpers
-     _G.UI → WindUI instance (window + tabs)
-
- • Do not return C/R/UI; main.lua owns setup and loading.
- • Each aura runs in its own thread; both honor: C.State.AuraRadius
- • NPCs whose name contains "horse" (case-insensitive) are excluded.
-====================================================================]]
-
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
@@ -37,11 +11,17 @@ return function(C, R, UI)
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
     -- Tunables
-    C.Config.CHOP_SWING_DELAY     = C.Config.CHOP_SWING_DELAY     or 0.55
-    C.Config.TREE_NAME            = C.Config.TREE_NAME            or "Small Tree"
-    C.Config.UID_SUFFIX           = C.Config.UID_SUFFIX           or "0000000000"
-    C.Config.ChopPrefer           = C.Config.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
-    C.Config.MAX_TARGETS_PER_WAVE = C.Config.MAX_TARGETS_PER_WAVE or 80 -- how many we hit per wave
+    C.Config.CHOP_SWING_DELAY       = C.Config.CHOP_SWING_DELAY       or 0.55
+    C.Config.TREE_NAME              = C.Config.TREE_NAME              or "Small Tree"
+    C.Config.UID_SUFFIX             = C.Config.UID_SUFFIX             or "0000000000"
+    C.Config.ChopPrefer             = C.Config.ChopPrefer             or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
+    C.Config.MAX_TARGETS_PER_WAVE   = C.Config.MAX_TARGETS_PER_WAVE   or 80 -- how many we hit per wave
+
+    -- NEW: Streaming knobs (batch prefetch before each wave)
+    C.Config.STREAM_ENABLE          = (C.Config.STREAM_ENABLE ~= false)   -- default ON
+    C.Config.STREAM_TIMEOUT         = C.Config.STREAM_TIMEOUT         or 0.9  -- single grace wait after issuing requests
+    C.Config.STREAM_BIN_SIZE        = C.Config.STREAM_BIN_SIZE        or 96   -- studs; dedupe by cell
+    C.Config.STREAM_STRIDE          = C.Config.STREAM_STRIDE          or 24   -- requests per frame to avoid hitching
 
     local running = { SmallTree = false, Character = false }
 
@@ -156,6 +136,65 @@ return function(C, R, UI)
     end
 
     --------------------------------------------------------------------
+    -- Batch Streaming Helpers (NEW)
+    --------------------------------------------------------------------
+    local function binKeyFromPos(pos)
+        local s = C.Config.STREAM_BIN_SIZE
+        local bx = math.floor(pos.X / s)
+        local by = math.floor(pos.Y / s)
+        local bz = math.floor(pos.Z / s)
+        return string.format("%d,%d,%d", bx, by, bz)
+    end
+
+    local function prefetchPositions(positions)
+        if not C.Config.STREAM_ENABLE or not positions or #positions == 0 then return end
+        -- Deduplicate by bins so we don't spam requests
+        local seen, dedup = {}, {}
+        for _,p in ipairs(positions) do
+            local key = binKeyFromPos(p)
+            if not seen[key] then
+                seen[key] = true
+                dedup[#dedup+1] = p
+            end
+        end
+        -- Issue requests in small bursts per frame
+        local stride = C.Config.STREAM_STRIDE
+        local i, n = 1, #dedup
+        while i <= n do
+            local j = math.min(i + stride - 1, n)
+            for k=i, j do
+                local pos = dedup[k]
+                pcall(function() WS:RequestStreamAroundAsync(pos) end)
+                pcall(function() lp:RequestStreamAroundAsync(pos) end)
+            end
+            task.wait() -- yield a frame between bursts
+            i = j + 1
+        end
+        -- Single grace wait for replication to settle
+        task.wait(C.Config.STREAM_TIMEOUT)
+    end
+
+    local function prefetchForModels(models, hitPartGetter)
+        if not C.Config.STREAM_ENABLE or not models or #models == 0 then return end
+        local positions = table.create(#models)
+        local idx = 0
+        for _,m in ipairs(models) do
+            local hit = hitPartGetter(m)
+            if hit then
+                idx += 1
+                positions[idx] = hit.Position
+            end
+        end
+        if idx > 0 then
+            -- trim if needed
+            if idx < #positions then
+                for i=idx+1,#positions do positions[i] = nil end
+            end
+            prefetchPositions(positions)
+        end
+    end
+
+    --------------------------------------------------------------------
     -- Collectors (trees recursive, characters flat) + deterministic order
     --------------------------------------------------------------------
     local function collectTreesInRadius(roots, origin, radius)
@@ -229,6 +268,9 @@ return function(C, R, UI)
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
 
+        -- NEW: prefetch streaming for this batch (low hitch, high hit rate)
+        prefetchForModels(targetModels, hitPartGetter)
+
         -- Fire all targets in parallel; each tree computes its own next ID
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
@@ -273,7 +315,6 @@ return function(C, R, UI)
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
 
                 if #targets > 0 then
-                    -- We simply hit everyone we found (no round-robin needed usually)
                     local batch = targets
                     if C.Config.MAX_TARGETS_PER_WAVE and #batch > C.Config.MAX_TARGETS_PER_WAVE then
                         batch = {}
