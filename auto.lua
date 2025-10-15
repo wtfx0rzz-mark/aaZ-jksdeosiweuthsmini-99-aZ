@@ -1,8 +1,7 @@
 --=====================================================
--- 1337 Nights | Auto Tab • Edge Buttons + Store Lost Child
---  - Phase 10 / Teleport / Plant Saplings (raycast ahead)
---  - One-shot: Store Lost Child to Sack (temp noclip + TP)
---  - Extra guards to avoid init-time errors
+-- 1337 Nights | Auto Tab • Edge Buttons + Lost Child TP
+--  - Phase 10 / Teleport / Plant Saplings
+--  - Teleport-to-Lost-Child: auto noclip for jump; scan stops after 4 saved
 --=====================================================
 return function(C, R, UI)
     -- Services (defensive fallbacks)
@@ -25,10 +24,6 @@ return function(C, R, UI)
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
-    local function humanoid()
-        local ch = lp.Character
-        return ch and ch:FindFirstChildOfClass("Humanoid")
-    end
     local function mainPart(model)
         if not (model and model:IsA("Model")) then return nil end
         if model.PrimaryPart then return model.PrimaryPart end
@@ -49,6 +44,40 @@ return function(C, R, UI)
         root.CFrame = cf
         zeroAssembly(root)
     end
+    local function snapshotCollide()
+        local ch = lp.Character
+        if not ch then return {} end
+        local t = {}
+        for _,d in ipairs(ch:GetDescendants()) do
+            if d:IsA("BasePart") then t[d] = d.CanCollide end
+        end
+        return t
+    end
+    local function setCollideAll(on, snapshot)
+        local ch = lp.Character
+        if not ch then return end
+        if on and snapshot then
+            for part,can in pairs(snapshot) do
+                if part and part.Parent then part.CanCollide = can end
+            end
+        else
+            for _,d in ipairs(ch:GetDescendants()) do
+                if d:IsA("BasePart") then d.CanCollide = false end
+            end
+        end
+    end
+    local function isNoclipNow()
+        local ch = lp.Character
+        if not ch then return false end
+        local total, off = 0, 0
+        for _,d in ipairs(ch:GetDescendants()) do
+            if d:IsA("BasePart") then
+                total += 1
+                if d.CanCollide == false then off += 1 end
+            end
+        end
+        return (total > 0) and ((off / total) >= 0.9) or false
+    end
 
     --========================
     -- Edge buttons (no Rayfield)
@@ -67,7 +96,6 @@ return function(C, R, UI)
     end
 
     local function makeEdgeBtn(name, row, label)
-        -- fixed row → fixed Y regardless of other buttons’ visibility
         local b = edgeGui:FindFirstChild(name)
         if not b then
             b = Instance.new("TextButton")
@@ -149,6 +177,13 @@ return function(C, R, UI)
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
 
+    local function groundAhead(root)
+        local base   = root.Position + root.CFrame.LookVector * AHEAD_DIST
+        local start  = base + Vector3.new(0, RAY_HEIGHT, 0)
+        local result = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
+        return result and result.Position or base
+    end
+
     local function findClosestSapling()
         local items = WS:FindFirstChild("Items")
         local root  = hrp()
@@ -164,13 +199,6 @@ return function(C, R, UI)
             end
         end
         return closest
-    end
-
-    local function groundAhead(root)
-        local base   = root.Position + root.CFrame.LookVector * AHEAD_DIST
-        local start  = base + Vector3.new(0, RAY_HEIGHT, 0)
-        local result = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
-        return result and result.Position or base
     end
 
     local function plantNearestSaplingInFront()
@@ -220,142 +248,87 @@ return function(C, R, UI)
     end)
 
     --========================
-    -- Store Lost Child to Sack (TP + temp noclip + equip sack + store + TP back)
+    -- Teleport to Lost Child (scan + click)
     --========================
-    local SACK_PRIORITY = { "Giant Sack", "Infernal Sack", "Good Sack", "Old Sack" }
+    local MAX_TO_SAVE   = 4
+    local SCAN_INTERVAL = 0.5
+    local savedCount    = 0
+    local knownLost     = {} -- [Model] = bool
 
-    local function getSackInInventory()
-        local inv = lp:FindFirstChild("Inventory")
-        if not inv then return nil end
-        for _,name in ipairs(SACK_PRIORITY) do
-            local it = inv:FindFirstChild(name)
-            if it then return it end
-        end
-        return nil
+    local function isLostChildModel(m)
+        return m and m:IsA("Model") and m.Name:match("^Lost Child")
     end
-
-    local function equipSack(sack)
-        local equip = getRemote("EquipItemHandle")
-        if not (equip and sack) then return end
-        pcall(function()
-            equip:FireServer("FireAllClients", sack)
-        end)
+    local function isEligibleLost(m)
+        return isLostChildModel(m) and (m:GetAttribute("Lost") == true)
     end
-
-    local function findClosestLostChildModel()
-        local root = hrp()
-        if not root then return nil end
-        local closest, best = nil, math.huge
+    local function findNearestEligibleLost()
+        local root = hrp(); if not root then return nil end
+        local best, bestD = nil, math.huge
         for _,d in ipairs(WS:GetDescendants()) do
-            if d:IsA("Model") and d.Name == "Lost Child" then
+            if isEligibleLost(d) then
                 local mp = mainPart(d)
                 if mp then
                     local dist = (mp.Position - root.Position).Magnitude
-                    if dist < best then best, closest = dist, d end
+                    if dist < bestD then bestD, best = dist, d end
                 end
             end
         end
-        return closest
+        return best
     end
 
-    local function snapshotCollide()
-        local ch = lp.Character
-        if not ch then return {} end
-        local t = {}
-        for _,d in ipairs(ch:GetDescendants()) do
-            if d:IsA("BasePart") then t[d] = d.CanCollide end
-        end
-        return t
-    end
-
-    local function setCollideAll(on, snapshot)
-        local ch = lp.Character
-        if not ch then return end
-        if on and snapshot then
-            for part,can in pairs(snapshot) do
-                if part and part.Parent then part.CanCollide = can end
+    -- background scanner: count when a Lost Child flips Lost=true -> false
+    task.spawn(function()
+        while savedCount < MAX_TO_SAVE do
+            for _,d in ipairs(WS:GetDescendants()) do
+                if isLostChildModel(d) then
+                    local cur = d:GetAttribute("Lost") == true
+                    local prev = knownLost[d]
+                    if prev == nil then
+                        knownLost[d] = cur
+                    elseif prev == true and cur == false then
+                        savedCount += 1
+                        knownLost[d] = cur
+                    else
+                        knownLost[d] = cur
+                    end
+                end
             end
-        else
-            for _,d in ipairs(ch:GetDescendants()) do
-                if d:IsA("BasePart") then d.CanCollide = false end
-            end
+            task.wait(SCAN_INTERVAL)
         end
-    end
+        local btn = tab and tab._lostTpButton
+        if btn then btn.Visible = false end
+    end)
 
-    local function isNoclipNow()
-        local ch = lp.Character
-        if not ch then return false end
-        local total, off = 0, 0
-        for _,d in ipairs(ch:GetDescendants()) do
-            if d:IsA("BasePart") then
-                total += 1
-                if d.CanCollide == false then off += 1 end
-            end
-        end
-        return (total > 0) and ((off / total) >= 0.9) or false
-    end
+    local function teleportToNearestLost()
+        if savedCount >= MAX_TO_SAVE then return end
+        local target = findNearestEligibleLost()
+        if not target then return end
 
-    local function waitForItemBagChild(timeout)
-        local bag = lp:FindFirstChild("ItemBag")
-        if not bag then return nil end
-        local t0 = os.clock()
-        repeat
-            local lc = bag:FindFirstChild("Lost Child")
-            if lc then return lc end
-            task.wait(0.05)
-        until (os.clock() - t0) >= (timeout or 2.0)
-        return nil
-    end
-
-    local function storeLostChildOnce()
-        local childModel = findClosestLostChildModel()
-        local root = hrp()
-        if not (childModel and root) then return end
-
-        local sack = getSackInInventory()
-        if not sack then return end
-
-        local origCF = root.CFrame
-
-        -- Enable noclip if currently off
+        local root = hrp(); if not root then return end
         local hadNoclip = isNoclipNow()
-        local collideSnapshot = nil
+        local snap
         if not hadNoclip then
-            collideSnapshot = snapshotCollide()
+            snap = snapshotCollide()
             setCollideAll(false)
         end
 
-        -- TP to child (slightly above)
-        local mp = mainPart(childModel)
-        if not mp then
-            if not hadNoclip then setCollideAll(true, collideSnapshot) end
-            return
-        end
-        teleportTo(CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position))
-
-        -- Equip sack then store
-        equipSack(sack)
-        task.wait(0.1)
-
-        local bagChild = waitForItemBagChild(2.0)
-        if bagChild then
-            local storeRF = getRemote("RequestBagStoreItem")
-            if storeRF then
-                pcall(function()
-                    storeRF:InvokeServer(sack, bagChild)
-                end)
-            end
+        local mp = mainPart(target)
+        if mp then
+            teleportTo(CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position))
         end
 
-        -- TP back & restore noclip if we changed it
-        teleportTo(origCF)
         if not hadNoclip then
-            setCollideAll(true, collideSnapshot)
+            setCollideAll(true, snap)
         end
     end
 
+    tab._lostTpButton = tab:Button({
+        Title = "Teleport to Lost Child",
+        Callback = function() teleportToNearestLost() end
+    })
+
     --========================
-    -- Wind UI switches
+    -- Wind UI toggles for edge buttons
     --========================
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
 
@@ -383,14 +356,7 @@ return function(C, R, UI)
         end
     })
 
-    tab:Button({
-        Title = "Store Lost Child (to Sack)",
-        Callback = function()
-            storeLostChildOnce()
-        end
-    })
-
-    -- Buttons persist across respawn; if PlayerGui is rebuilt externally, reattach:
+    -- Buttons persist across respawn; if PlayerGui is rebuilt externally, reattach
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if edgeGui.Parent ~= playerGui then
             edgeGui.Parent = playerGui
