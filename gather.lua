@@ -8,29 +8,29 @@ return function(C, R, UI)
     local tab = UI and UI.Tabs and UI.Tabs.Gather
     if not tab then return end
 
-    local MAX_CARRY        = 50
-    local DEFAULT_RADIUS   = 80
-    local DEFAULT_DEPTH    = 35
-    local SCAN_INTERVAL    = 0.25
+    local MAX_CARRY      = 50
+    local DEFAULT_RADIUS = 80
+    local DEFAULT_DEPTH  = 35
+    local SCAN_INTERVAL  = 0.25
 
-    local RemoteFolder     = RS:FindFirstChild("RemoteEvents")
-    local StartDrag        = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem")
-    local StopDrag         = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem")
+    local RemoteFolder = RS:FindFirstChild("RemoteEvents")
+    local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem")
+    local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem")
 
-    local carried = {}          -- [Model] = true
-    local carryList = {}        -- array cache for iteration
+    local carried   = {}
+    local carryList = {}
     local carryCount = 0
     local enabled = false
     local resourceType = "Logs"
     local carryRadius = DEFAULT_RADIUS
-    local carryDepth = DEFAULT_DEPTH
+    local carryDepth  = DEFAULT_DEPTH
     local baselineY = nil
     local rsConn = nil
     local scanThread = nil
 
     local function toList(tbl)
         local out, n = {}, 0
-        for k in pairs(tbl) do n += 1; out[n] = k end
+        for k in pairs(tbl) do n = n + 1; out[n] = k end
         return out
     end
 
@@ -61,6 +61,13 @@ return function(C, R, UI)
             return m
         end
         return nil
+    end
+
+    local function ensurePrimary(m)
+        if not (m and m:IsA("Model")) then return end
+        if m.PrimaryPart then return end
+        local p = m:FindFirstChildWhichIsA("BasePart")
+        if p then m.PrimaryPart = p end
     end
 
     local function matchesResource(name)
@@ -116,13 +123,13 @@ return function(C, R, UI)
         if m:IsA("Model") then
             for _,d in ipairs(m:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    d.CanCollide = not on and d.CanCollide or false
+                    d.CanCollide = on and false or d.CanCollide
                     d.Anchored = false
                     pcall(function() d:SetNetworkOwner(lp) end)
                 end
             end
         else
-            mp.CanCollide = not on and mp.CanCollide or false
+            mp.CanCollide = on and false or mp.CanCollide
             mp.Anchored = false
             pcall(function() mp:SetNetworkOwner(lp) end)
         end
@@ -193,9 +200,58 @@ return function(C, R, UI)
             stopDrag(m)
             setNoCollide(m, false)
         end
-        carried = {}
-        carryList = {}
-        carryCount = 0
+        carried, carryList, carryCount = {}, {}, 0
+    end
+
+    local function modelSize(m)
+        if m:IsA("Model") then
+            local cf, size = m:GetBoundingBox()
+            return size
+        else
+            local p = mainPart(m)
+            return p and p.Size or Vector3.new(2,2,2)
+        end
+    end
+
+    local function setItemsStack()
+        local root = hrp(); if not root then return end
+        local basePos = root.Position + Vector3.new(0, 10, 0)
+        local colCount = 5
+        local i = 0
+        for _, m in ipairs(carryList) do
+            if not (m and m.Parent) then goto cont end
+            ensurePrimary(m)
+            local size = modelSize(m)
+            local stepX = math.max(3, size.X + 0.5)
+            local stepY = math.max(2.5, size.Y + 0.25)
+            local col = i % colCount
+            local row = math.floor(i / colCount)
+            local offsetX = (col - (colCount-1)/2) * stepX
+            local pos = basePos + Vector3.new(offsetX, row * stepY, 0)
+            local cf = CFrame.new(pos, pos + root.CFrame.LookVector)
+
+            stopDrag(m)
+            if m:IsA("Model") and m.PrimaryPart then
+                pcall(function() m:PivotTo(cf) end)
+            else
+                local mp = mainPart(m)
+                if mp then pcall(function() mp.CFrame = cf end) end
+            end
+            if m:IsA("Model") then
+                for _,d in ipairs(m:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        d.Anchored = true
+                        d.CanCollide = true
+                    end
+                end
+            else
+                local mp = mainPart(m)
+                if mp then mp.Anchored = true; mp.CanCollide = true end
+            end
+            removeCarry(m)
+            ::cont::
+            i = i + 1
+        end
     end
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
@@ -239,15 +295,9 @@ return function(C, R, UI)
     })
 
     tab:Button({
-        Title = "Drop All",
+        Title = "Set Items",
         Callback = function()
-            for m in pairs(carried) do
-                stopDrag(m)
-                setNoCollide(m, false)
-            end
-            carried = {}
-            carryList = {}
-            carryCount = 0
+            setItemsStack()
         end
     })
 
