@@ -6,9 +6,9 @@ return function(C, R, UI)
 
     local tab = (UI and UI.Tabs and UI.Tabs.Bring) or error("Bring tab not found")
 
-    local AMOUNT_TO_BRING =200
+    local AMOUNT_TO_BRING =50
     local DROP_FORWARD = 4
-    local DROP_UP      = 10
+    local DROP_UP      = 8
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
