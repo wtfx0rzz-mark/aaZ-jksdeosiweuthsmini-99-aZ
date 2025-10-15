@@ -8,7 +8,7 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING = 50
+    local AMOUNT_TO_BRING = 100
     local DROP_FORWARD = 5
     local DROP_UP      = 5
 
