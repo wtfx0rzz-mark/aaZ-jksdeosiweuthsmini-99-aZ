@@ -35,7 +35,7 @@ return function(C, R, UI)
     local sel = { name=nil, special=nil }  -- special ∈ {"mossy","cultist","sapling"} or nil
 
     -- Tunables
-    local hoverHeight, forwardDrop, upDrop = 5, 10, 1
+    local hoverHeight, forwardDrop, upDrop = 0, 10, 5
     local scanInterval = 0.1
 
     -- Runtime
