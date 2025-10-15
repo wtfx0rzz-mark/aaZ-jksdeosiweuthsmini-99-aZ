@@ -1,13 +1,14 @@
 return function(C, R, UI)
+    -- Services (defensive)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
     local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
 
-    local lp  = Players.LocalPlayer
-    local Tabs = UI and UI.Tabs or {}
+    -- UI tab
+    local Tabs = (UI and UI.Tabs) or {}
     local tab  = Tabs.Gather
-    assert(tab, "Gather tab not found in UI")
+    if not tab then return end
 
     -- Tunables
     local MAX_CARRY      = 50
@@ -15,12 +16,21 @@ return function(C, R, UI)
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
 
-    -- Remotes
+    -- Safe clamp (avoid math.clamp edge cases)
+    local function clamp(v, lo, hi)
+        v = tonumber(v) or lo
+        if v < lo then return lo end
+        if v > hi then return hi end
+        return v
+    end
+
+    -- Remotes (optional)
     local RemoteFolder = RS:FindFirstChild("RemoteEvents")
-    local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem")
-    local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem")
+    local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem") or nil
+    local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem") or nil
 
     -- State
+    local lp  = Players.LocalPlayer
     local carried   = {}   -- [Model]=true
     local carryList = {}
     local carryCount = 0
@@ -30,17 +40,17 @@ return function(C, R, UI)
     local carryDepth  = DEFAULT_DEPTH
     local baselineY = nil
     local rsConn = nil
-    local scanThreadRunning = false
+    local scanRunning = false
 
     -- Helpers
     local function toList(t)
-        local out = {}
-        for k in pairs(t) do out[#out+1] = k end
+        local out, n = {}, 0
+        for k in pairs(t) do n = n + 1; out[n] = k end
         return out
     end
 
     local function hrp()
-        local ch = lp.Character or lp.CharacterAdded:Wait()
+        local ch = lp and (lp.Character or lp.CharacterAdded:Wait())
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
 
@@ -84,7 +94,6 @@ return function(C, R, UI)
 
     local function blacklist(m)
         local n = string.lower(m.Name or "")
-        -- avoid NPCs, traders, shopkeepers, campfire models
         return n:find("trader", 1, true) or n:find("shopkeeper", 1, true) or n:find("campfire", 1, true)
     end
 
@@ -99,7 +108,8 @@ return function(C, R, UI)
     local function removeCarry(m)
         if not carried[m] then return end
         carried[m] = nil
-        carryCount = math.max(0, carryCount - 1)
+        carryCount = carryCount - 1
+        if carryCount < 0 then carryCount = 0 end
         carryList = toList(carried)
     end
 
@@ -153,8 +163,8 @@ return function(C, R, UI)
     end
 
     local function scanAndPickup()
-        if scanThreadRunning then return end
-        scanThreadRunning = true
+        if scanRunning then return end
+        scanRunning = true
         task.spawn(function()
             while enabled do
                 clearRemoved()
@@ -176,7 +186,7 @@ return function(C, R, UI)
                 end
                 task.wait(SCAN_INTERVAL)
             end
-            scanThreadRunning = false
+            scanRunning = false
         end)
     end
 
@@ -184,7 +194,7 @@ return function(C, R, UI)
         if enabled then return end
         enabled = true
         baselineY = groundBaselineY()
-        if rsConn then rsConn:Disconnect() end
+        if rsConn then rsConn:Disconnect(); rsConn = nil end
         rsConn = Run.RenderStepped:Connect(repositionAll)
         scanAndPickup()
     end
@@ -219,8 +229,10 @@ return function(C, R, UI)
             if m and m.Parent then
                 ensurePrimary(m)
                 local size = modelSize(m)
-                local stepX = math.max(3, size.X + 0.5)
-                local stepY = math.max(2.5, size.Y + 0.25)
+                local stepX = (size and size.X or 2) + 0.5
+                if stepX < 3 then stepX = 3 end
+                local stepY = (size and size.Y or 2) + 0.25
+                if stepY < 2.5 then stepY = 2.5 end
                 local col = i % colCount
                 local row = math.floor(i / colCount)
                 local offsetX = (col - (colCount-1)/2) * stepX
@@ -238,13 +250,11 @@ return function(C, R, UI)
                 if m:IsA("Model") then
                     for _,d in ipairs(m:GetDescendants()) do
                         if d:IsA("BasePart") then
-                            d.Anchored = true
-                            d.CanCollide = true
+                            d.Anchored = true; d.CanCollide = true
                         end
                     end
                 elseif mp then
-                    mp.Anchored = true
-                    mp.CanCollide = true
+                    mp.Anchored = true; mp.CanCollide = true
                 end
             end
             removeCarry(m)
@@ -252,13 +262,14 @@ return function(C, R, UI)
         end
     end
 
+    -- Respawn baseline refresh
     Players.LocalPlayer.CharacterAdded:Connect(function()
         task.defer(function()
             if enabled then baselineY = groundBaselineY() end
         end)
     end)
 
-    -- UI (match Bring tab style)
+    -- UI (same style as Bring)
     tab:Section({ Title = "Gather" })
 
     tab:Toggle({
@@ -282,24 +293,18 @@ return function(C, R, UI)
     tab:Slider({
         Title = "Carry Radius",
         Value = { Min = 20, Max = 300, Default = DEFAULT_RADIUS },
-        Callback = function(v)
-            carryRadius = math.clamp(tonumber(v) or DEFAULT_RADIUS, 10, 500)
-        end
+        Callback = function(v) carryRadius = clamp(v, 10, 500) end
     })
 
     tab:Slider({
         Title = "Depth Below Ground",
         Value = { Min = 10, Max = 100, Default = DEFAULT_DEPTH },
-        Callback = function(v)
-            carryDepth = math.clamp(tonumber(v) or DEFAULT_DEPTH, 5, 200)
-        end
+        Callback = function(v) carryDepth = clamp(v, 5, 200) end
     })
 
     tab:Button({
         Title = "Set Items",
-        Callback = function()
-            setItemsStack()
-        end
+        Callback = setItemsStack
     })
 
     tab:Section({ Title = "Max Carry: "..tostring(MAX_CARRY) })
