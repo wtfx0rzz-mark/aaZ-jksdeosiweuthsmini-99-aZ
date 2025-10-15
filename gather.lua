@@ -1,3 +1,10 @@
+--=====================================================
+-- 1337 Nights | Gather Module
+--  • Captures targets within AuraRadius
+--  • Hover carry: 5 studs above HRP, tight stack
+--  • Place Down: moves 5 forward + 5 up, spreads, re-enables physics
+--  • Auto-turn-off gather before drop
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local RS      = C.Services.RS
@@ -17,8 +24,8 @@ return function(C, R, UI)
     local upDrop        = 5
 
     local scanConn, hoverConn
-    local gathered = {}
-    local gatheredList = {}
+    local gathered = {}      -- { [model]=true }
+    local gatheredList = {}  -- array of models for ordering
     local GatherToggleCtrl
 
     local function hrp()
@@ -87,6 +94,7 @@ return function(C, R, UI)
     local function clearAll()
         for m,_ in pairs(gathered) do removeGather(m) end
     end
+
     local function nearAndNamed(m, name, origin, rad)
         if not (m and m:IsA("Model") and m.Parent) then return false end
         if m.Name ~= name then return false end
@@ -95,6 +103,7 @@ return function(C, R, UI)
         local d = (mp.Position - origin).Magnitude
         return d <= rad
     end
+
     local function pivotModel(m, cf)
         if m:IsA("Model") then m:PivotTo(cf)
         else
@@ -102,9 +111,11 @@ return function(C, R, UI)
             if p then p.CFrame = cf end
         end
     end
+
     local function computeHoverCF(i, baseCF)
         return baseCF
     end
+
     local function computeSpreadCF(i, baseCF)
         local r = 2 + math.floor((i-1)/8)
         local idx = (i-1)%8
@@ -112,14 +123,17 @@ return function(C, R, UI)
         local offset = Vector3.new(math.cos(angle)*r, 0, math.sin(angle)*r)
         return baseCF + offset
     end
+
     local function captureIfNear()
         local root = hrp()
         if not root then return end
         local origin = root.Position
         local rad = auraRadius()
+
         local folders = {}
         local items = WS:FindFirstChild("Items")
         if items then table.insert(folders, items) else table.insert(folders, WS) end
+
         for _,rootNode in ipairs(folders) do
             for _,m in ipairs(rootNode:GetChildren()) do
                 if nearAndNamed(m, selectedName, origin, rad) and not gathered[m] then
@@ -137,6 +151,7 @@ return function(C, R, UI)
             end
         end
     end
+
     local function hoverFollow()
         local root = hrp()
         if not root then return end
@@ -152,6 +167,7 @@ return function(C, R, UI)
             end
         end
     end
+
     local function startGather()
         if scanConn then return end
         gatherOn = true
@@ -164,33 +180,47 @@ return function(C, R, UI)
         if hoverConn then pcall(function() hoverConn:Disconnect() end) end
         scanConn, hoverConn = nil, nil
     end
+
     local function placeDown()
         local root = hrp()
         if not root then return end
+
         if GatherToggleCtrl and GatherToggleCtrl.Set then
             GatherToggleCtrl:Set(false)
         end
         stopGather()
+
         local forward = root.CFrame.LookVector
         local dropPos = root.Position + forward * forwardDrop + Vector3.new(0, upDrop, 0)
         local baseCF = CFrame.lookAt(dropPos, dropPos + forward)
+
         for i,m in ipairs(gatheredList) do
             if m and m.Parent then
                 local cf = computeSpreadCF(i, baseCF)
                 pivotModel(m, cf)
             end
         end
+
         task.wait(0.05)
+
         for _,m in ipairs(gatheredList) do
             if m and m.Parent then
                 setAnchoredModel(m, false)
                 setNoCollideModel(m, false)
             end
         end
+
         clearAll()
     end
 
     tab:Section({ Title = "Gather", Icon = "layers" })
+    tab:Dropdown({
+        Title = "Item",
+        Values = SELECT_VALUES,
+        Multi = false,
+        AllowNone = false,
+        Callback = function(v) if v and v ~= "" then selectedName = v end end
+    })
 
     GatherToggleCtrl = tab:Toggle({
         Title = "Enable Gather",
@@ -203,14 +233,6 @@ return function(C, R, UI)
     tab:Button({
         Title = "Place Down",
         Callback = placeDown
-    })
-
-    tab:Dropdown({
-        Title = "Item",
-        Values = SELECT_VALUES,
-        Multi = false,
-        AllowNone = false,
-        Callback = function(v) if v and v ~= "" then selectedName = v end end
     })
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
