@@ -1,3 +1,11 @@
+--=====================================================
+-- 1337 Nights | Gather Module (global single-select)
+--  • One active selection across ALL dropdowns
+--  • Click selected item again -> deselect
+--  • Capture within AuraRadius, hover 5u above HRP
+--  • Place Down: raycast ground ahead, spread, restore physics
+--  • Toggle OFF fully stops and clears
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local RS      = C.Services.RS
@@ -8,6 +16,7 @@ return function(C, R, UI)
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
 
+    -- Bring taxonomy
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
@@ -16,14 +25,24 @@ return function(C, R, UI)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
+    -- Selection state (exactly one across all)
     local sel = { name=nil, special=nil }
-    local hoverHeight, forwardDrop, upDrop = 5, 10, 5
+
+    -- Tunables
+    local hoverHeight = 5
+    local forwardDrop = 10
+    local upDrop      = 5
     local scanInterval = 0.1
 
-    local gatherOn, scanConn, hoverConn = false, nil, nil
+    -- Runtime
+    local gatherOn = false
+    local scanConn, hoverConn = nil, nil
     local gathered, list = {}, {}
     local GatherToggleCtrl
 
+    --========================
+    -- Helpers
+    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -57,6 +76,7 @@ return function(C, R, UI)
         return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
     end
 
+    -- Remotes
     local function getRemote(n)
         local f = RS:FindFirstChild("RemoteEvents")
         return f and f:FindFirstChild(n) or nil
@@ -70,6 +90,7 @@ return function(C, R, UI)
         if re then pcall(function() re:FireServer(m) end) end
     end
 
+    -- Physics helpers
     local function setNoCollideModel(m, on)
         for _,d in ipairs(m:GetDescendants()) do
             if d:IsA("BasePart") then
@@ -87,6 +108,8 @@ return function(C, R, UI)
             if d:IsA("BasePart") then d.Anchored = on end
         end
     end
+
+    -- Track set
     local function addGather(m)
         if gathered[m] then return end
         gathered[m] = true
@@ -104,6 +127,9 @@ return function(C, R, UI)
         table.clear(list)
     end
 
+    --========================
+    -- Matching
+    --========================
     local function isSelectedModel(m)
         if not sel.name and not sel.special then return false end
         if sel.special == "mossy" then
@@ -118,6 +144,9 @@ return function(C, R, UI)
         end
     end
 
+    --========================
+    -- Capture + Hover
+    --========================
     local lastScan = 0
     local function captureIfNear()
         local now = os.clock()
@@ -128,39 +157,32 @@ return function(C, R, UI)
         local origin = root.Position
         local rad = auraRadius()
 
-        local pools = {}
-        local items = WS:FindFirstChild("Items")
-        if items then pools[#pools+1] = items else pools[#pools+1] = WS end
+        local pool = WS:FindFirstChild("Items") or WS
 
-        for _,pool in ipairs(pools) do
-            for _,d in ipairs(pool:GetDescendants()) do
-                repeat
-                    if not (d:IsA("Model") or d:IsA("BasePart")) then break end
-                    local m = modelOf(d); if not m then break end
-                    if gathered[m] then break end
-                    if isExcludedModel(m) then break end
-                    if not isSelectedModel(m) then break end
-                    local mp = mainPart(m); if not mp then break end
-                    if (mp.Position - origin).Magnitude > rad then break end
+        for _,d in ipairs(pool:GetDescendants()) do
+            repeat
+                if not (d:IsA("Model") or d:IsA("BasePart")) then break end
+                local m = modelOf(d); if not m then break end
+                if gathered[m] then break end
+                if isExcludedModel(m) then break end
+                if not isSelectedModel(m) then break end
+                local mp = mainPart(m); if not mp then break end
+                if (mp.Position - origin).Magnitude > rad then break end
 
-                    startDrag(m)
-                    task.wait(0.02)
-                    pcall(function() mp:SetNetworkOwner(lp) end)
-                    setNoCollideModel(m, true)
-                    setAnchoredModel(m, true)
-                    addGather(m)
-                    stopDrag(m)
-                until true
-            end
+                startDrag(m)
+                task.wait(0.02)
+                pcall(function() mp:SetNetworkOwner(lp) end)
+                setNoCollideModel(m, true)
+                setAnchoredModel(m, true)
+                addGather(m)
+                stopDrag(m)
+            until true
         end
     end
 
     local function pivotModel(m, cf)
         if m:IsA("Model") then m:PivotTo(cf)
-        else
-            local p = mainPart(m)
-            if p then p.CFrame = cf end
-        end
+        else local p = mainPart(m); if p then p.CFrame = cf end end
     end
 
     local function hoverFollow()
@@ -170,7 +192,7 @@ return function(C, R, UI)
         local baseCF  = CFrame.lookAt(above, above + forward)
         for _,m in ipairs(list) do
             if m and m.Parent then
-                pivotModel(m, baseCF)
+                pivotModel(m, baseCF) -- tight stack over head
             else
                 removeGather(m)
             end
@@ -189,6 +211,9 @@ return function(C, R, UI)
         if hoverConn then pcall(function() hoverConn:Disconnect() end) end; hoverConn = nil
     end
 
+    --========================
+    -- Placement
+    --========================
     local function groundAheadCF()
         local root = hrp(); if not root then return nil end
         local forward = root.CFrame.LookVector
@@ -202,23 +227,32 @@ return function(C, R, UI)
         return CFrame.lookAt(drop, drop + forward)
     end
 
+    local function spreadCF(i, baseCF)
+        local r   = 2 + math.floor((i-1)/8)
+        local idx = (i-1) % 8
+        local ang = (idx/8) * math.pi*2
+        return baseCF + Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
+    end
+
     local function placeDown()
         local baseCF = groundAheadCF(); if not baseCF then return end
+
+        -- Prevent immediate re-capture
         if GatherToggleCtrl and GatherToggleCtrl.Set then GatherToggleCtrl:Set(false) end
         stopGather()
 
+        -- Move items to target, spread to avoid interpenetration
         for i,m in ipairs(list) do
             if m and m.Parent then
                 startDrag(m)
-                local x = (i%6)*2
-                local z = math.floor(i/6)*2
-                pivotModel(m, baseCF + Vector3.new(x, 0, z))
+                pivotModel(m, spreadCF(i, baseCF))
                 stopDrag(m)
             end
         end
 
         task.wait(0.05)
 
+        -- Restore physics uniformly and nudge down
         for _,m in ipairs(list) do
             if m and m.Parent then
                 setAnchoredModel(m, false)
@@ -230,22 +264,38 @@ return function(C, R, UI)
                 end
             end
         end
+
         clearAll()
     end
 
-    local sets = {}
+    --========================
+    -- UI: Global single-selection with deselect-on-click
+    --========================
+    local sets, current = {}, { Junk=nil, Fuel=nil, Food=nil, Medical=nil, WA=nil, Misc=nil, Pelts=nil }
+
+    local function clearOthers(skipKey)
+        for k,setter in pairs(sets) do
+            if k ~= skipKey then
+                setter(nil)   -- clear visual selection
+                current[k] = nil
+            end
+        end
+    end
 
     local function choose(dropKey, value, special)
-        local same = (sel.name == value and sel.special == special)
-        if same then
+        -- Click-again to deselect
+        if current[dropKey] == value and ((sel.name == value) or (sel.special == special)) then
+            current[dropKey] = nil
             sel.name, sel.special = nil, nil
             clearAll()
-            if sets[dropKey] then sets[dropKey]("") end
+            sets[dropKey](nil)
             return
         end
+        -- New selection: set and clear all others
+        current[dropKey] = value
         sel.name, sel.special = value, special
         clearAll()
-        for k,f in pairs(sets) do if k ~= dropKey then f("") end end
+        clearOthers(dropKey)
     end
 
     tab:Section({ Title = "Gather • Single selection (global)", Icon = "layers" })
@@ -256,7 +306,8 @@ return function(C, R, UI)
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            choose("Junk", (v and v ~= "") and v or nil, nil)
+            v = (v ~= "" and v) or nil
+            choose("Junk", v, nil)
         end
     }).Set
 
@@ -266,7 +317,8 @@ return function(C, R, UI)
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            choose("Fuel", (v and v ~= "") and v or nil, nil)
+            v = (v ~= "" and v) or nil
+            choose("Fuel", v, nil)
         end
     }).Set
 
@@ -276,7 +328,8 @@ return function(C, R, UI)
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            choose("Food", (v and v ~= "") and v or nil, nil)
+            v = (v ~= "" and v) or nil
+            choose("Food", v, nil)
         end
     }).Set
 
@@ -286,7 +339,8 @@ return function(C, R, UI)
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            choose("Medical", (v and v ~= "") and v or nil, nil)
+            v = (v ~= "" and v) or nil
+            choose("Medical", v, nil)
         end
     }).Set
 
@@ -296,7 +350,8 @@ return function(C, R, UI)
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            choose("WA", (v and v ~= "") and v or nil, nil)
+            v = (v ~= "" and v) or nil
+            choose("WA", v, nil)
         end
     }).Set
 
@@ -306,6 +361,7 @@ return function(C, R, UI)
         Multi = false,
         AllowNone = true,
         Callback = function(v)
+            v = (v ~= "" and v) or nil
             if v == "Mossy Coin" then
                 choose("Misc", nil, "mossy")
             elseif v == "Cultist" then
@@ -313,7 +369,7 @@ return function(C, R, UI)
             elseif v == "Sapling" then
                 choose("Misc", nil, "sapling")
             else
-                choose("Misc", (v and v ~= "") and v or nil, nil)
+                choose("Misc", v, nil)
             end
         end
     }).Set
@@ -324,7 +380,8 @@ return function(C, R, UI)
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            choose("Pelts", (v and v ~= "") and v or nil, nil)
+            v = (v ~= "" and v) or nil
+            choose("Pelts", v, nil)
         end
     }).Set
 
@@ -343,11 +400,9 @@ return function(C, R, UI)
         end
     })
 
-    tab:Button({
-        Title = "Place Down",
-        Callback = placeDown
-    })
+    tab:Button({ Title = "Place Down", Callback = placeDown })
 
+    -- Safety: restart on respawn if still enabled
     lp.CharacterAdded:Connect(function()
         if gatherOn then
             task.defer(function()
