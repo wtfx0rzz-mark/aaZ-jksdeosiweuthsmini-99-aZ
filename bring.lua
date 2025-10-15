@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling) • Farthest-first + unique models
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling) • Farthest-first + unique models + Cultist Items
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -20,7 +20,8 @@ return function(C, R, UI)
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
+    -- Added "Cultist Items" to the Misc list
+    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling","Cultist Items"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
@@ -183,13 +184,15 @@ return function(C, R, UI)
         local out, seen, unique = {}, {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
-                if hasHumanoid(m) and not seen[m] then
-                    local mp = mainPart(m)
-                    if mp then
-                        seen[m] = true
-                        unique += 1
-                        out[#out+1] = {model=m, part=mp}
-                        if limit and unique >= limit then break end
+                if hasHumanoid(m) then -- NPCs only
+                    if not seen[m] then
+                        local mp = mainPart(m)
+                        if mp then
+                            seen[m] = true
+                            unique += 1
+                            out[#out+1] = {model=m, part=mp}
+                            if limit and unique >= limit then break end
+                        end
                     end
                 end
             end
@@ -209,6 +212,28 @@ return function(C, R, UI)
                     unique += 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and unique >= limit then break end
+                end
+            end
+        end
+        return sortedFarthest(out)
+    end
+
+    -- NEW: Cultist Items (items only, not NPCs) from Workspace.Items descendants
+    local function collectCultistItems(limit)
+        local out, seen, unique = {}, {}, 0
+        local items = WS:FindFirstChild("Items")
+        if not items then return out end
+        for _,d in ipairs(items:GetDescendants()) do
+            if d:IsA("Model") and not isExcludedModel(d) and not seen[d] then
+                local nm = (d.Name or ""):lower()
+                if (nm:find("cultist", 1, true) or nm:find("totem", 1, true)) and not hasHumanoid(d) then
+                    local mp = mainPart(d)
+                    if mp then
+                        seen[d] = true
+                        unique += 1
+                        out[#out+1] = {model=d, part=mp}
+                        if limit and unique >= limit then break end
+                    end
                 end
             end
         end
@@ -246,12 +271,14 @@ return function(C, R, UI)
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
-        local list = {}
+        local list
 
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
         elseif name == "Cultist" then
-            list = collectCultists(want)
+            list = collectCultists(want)       -- NPCs
+        elseif name == "Cultist Items" then
+            list = collectCultistItems(want)   -- Items only (incl. totems)
         elseif name == "Sapling" then
             list = collectSaplings(want)
         elseif table.find(pelts, name) then
@@ -260,7 +287,7 @@ return function(C, R, UI)
             list = collectByNameLoose(name, want)
         end
 
-        if #list == 0 then return end
+        if not list or #list == 0 then return end
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= want then break end
