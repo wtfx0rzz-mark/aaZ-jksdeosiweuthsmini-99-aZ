@@ -7,8 +7,8 @@ return function(C, R, UI)
     local tab = (UI and UI.Tabs and UI.Tabs.Bring) or error("Bring tab not found")
 
     local AMOUNT_TO_BRING =50
-    local DROP_FORWARD = 4
-    local DROP_UP      = 8
+    local DROP_FORWARD = 3
+    local DROP_UP      = 4
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
@@ -95,7 +95,7 @@ return function(C, R, UI)
     local function nudgeAsync(entry, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            local v = forward * 4 + Vector3.new(0, -12, 0)
+            local v = forward * 4 + Vector3.new(0, -18, 0)
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
             end
