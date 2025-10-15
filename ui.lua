@@ -37,7 +37,7 @@ local Tabs = {
     Bring   = Window:Tab({ Title = "Bring",   Icon = "backpack",   Desc = "Bring Items" }),
     Player   = Window:Tab({ Title = "Player",   Icon = "activity",   Desc = "Player options" }),
     Auto   = Window:Tab({ Title = "Auto",   Icon = "cpu",   Desc = "Automation" }),
-    Gather   = Window:Tab({ Title = "Visuals",   Icon = "eye",   Desc = "Gather" }),
+    Gather   = Window:Tab({ Title = "Gather",   Icon = "eye",   Desc = "Gather" }),
     Visuals   = Window:Tab({ Title = "Visuals",   Icon = "eye",   Desc = "Visuals" }),
 }
 
