@@ -1,7 +1,7 @@
 --=====================================================
 -- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
 --  • Farthest-first + unique models + Cultist Items
---  • FIX: Stream far targets before moving them (StreamingEnabled)
+--  • BATCH STREAMING: prefetch all targets once, then rapid bring
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -13,25 +13,36 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING = 50
-    local DROP_FORWARD = 5
-    local DROP_UP      = 5
+    --========================
+    -- Tunables
+    --========================
+    local AMOUNT_TO_BRING    = 50
+    local DROP_FORWARD       = 5
+    local DROP_UP            = 5
+
+    -- Batch streaming knobs
+    local STREAM_BATCH       = true          -- enable prefetch-all
+    local STREAM_TIMEOUT     = 1.2           -- seconds to wait once after all requests
+    local STREAM_BIN_SIZE    = 96            -- studs; dedupe requests by ~cell
+    local STREAM_STRIDE      = 16            -- requests per frame to avoid hitching
+
+    -- Bring loop delay between items
+    local BRING_DELAY_SEC    = 0.035         -- small; was 0.12 previously
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    -- Added extras to Misc (incl. Cultist/Cultist Items/Sapling/Mossy Coin)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling","Cultist Items"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    -------------------------------------------------------
+    --========================
     -- Utility
-    -------------------------------------------------------
+    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -72,21 +83,9 @@ return function(C, R, UI)
         return t
     end
 
-    -- NEW: Ensure far-away content is streamed to the client before moving it
-    local function requestStreamAt(pos, timeout)
-        timeout = timeout or 1.0
-        -- Try Workspace API
-        pcall(function() WS:RequestStreamAroundAsync(pos) end)
-        -- Some experiences expose it on Player as well; harmless if absent
-        pcall(function() lp:RequestStreamAroundAsync(pos) end)
-        -- Small grace period to allow replication to arrive
-        local t0 = os.clock()
-        repeat task.wait(0.05) until (os.clock() - t0) >= timeout
-    end
-
-    -------------------------------------------------------
+    --========================
     -- Drop positioning
-    -------------------------------------------------------
+    --========================
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -109,7 +108,7 @@ return function(C, R, UI)
         local stopRE  = getRemote("StopDraggingItem")
         if not (startRE and stopRE) then return end
         pcall(function() startRE:FireServer(model) end)
-        task.wait(0.04)
+        task.wait(0.03)
         pcall(function() stopRE:FireServer(model) end)
     end
 
@@ -117,7 +116,7 @@ return function(C, R, UI)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
             quickDrag(entry.model)
-            task.wait(0.08)
+            task.wait(0.05)
             local v = forward * 6 + Vector3.new(0, -30, 0)
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
@@ -125,14 +124,53 @@ return function(C, R, UI)
         end)
     end
 
+    --========================
+    -- Streaming helpers (BATCH)
+    --========================
+    local function binKeyFromPos(pos)
+        local bx = math.floor(pos.X / STREAM_BIN_SIZE)
+        local by = math.floor(pos.Y / STREAM_BIN_SIZE)
+        local bz = math.floor(pos.Z / STREAM_BIN_SIZE)
+        return string.format("%d,%d,%d", bx, by, bz)
+    end
+
+    local function prefetchForEntries(entries)
+        if not STREAM_BATCH or not entries or #entries == 0 then return end
+        local seenBins, binPositions = {}, {}
+        for _,e in ipairs(entries) do
+            local p = e.part and e.part.Position
+            if p then
+                local key = binKeyFromPos(p)
+                if not seenBins[key] then
+                    seenBins[key] = true
+                    binPositions[#binPositions+1] = p
+                end
+            end
+        end
+        -- Issue requests in small bursts to avoid hitching
+        local i, n = 1, #binPositions
+        while i <= n do
+            local j = math.min(i + STREAM_STRIDE - 1, n)
+            for k = i, j do
+                local pos = binPositions[k]
+                pcall(function() WS:RequestStreamAroundAsync(pos) end)
+                pcall(function() lp:RequestStreamAroundAsync(pos) end)
+            end
+            task.wait() -- yield one frame between bursts
+            i = j + 1
+        end
+        -- single grace wait after all requests
+        task.wait(STREAM_TIMEOUT)
+    end
+
+    --========================
+    -- Teleport one (no per-item streaming; we stream in batch)
+    --========================
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
         if not entry.model.Parent or entry.part.Anchored then return false end
         if isExcludedModel(entry.model) then return false end
-
-        -- NEW: ensure far-away targets are streamed to client first
-        requestStreamAt(entry.part.Position, 1.0)
 
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
@@ -149,9 +187,9 @@ return function(C, R, UI)
         return true
     end
 
-    -------------------------------------------------------
+    --========================
     -- Collectors (UNIQUE models, farthest-first)
-    -------------------------------------------------------
+    --========================
     local function sortedFarthest(list)
         local root = hrp()
         if not root then return list end
@@ -205,7 +243,7 @@ return function(C, R, UI)
         local out, seen, unique = {}, {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
-                if hasHumanoid(m) then -- NPCs only
+                if hasHumanoid(m) then
                     if not seen[m] then
                         local mp = mainPart(m)
                         if mp then
@@ -239,7 +277,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- Items only (incl. totems) that have "cultist" in name; exclude NPCs w/Humanoid
     local function collectCultistItems(limit)
         local out, seen, unique = {}, {}, 0
         local items = WS:FindFirstChild("Items")
@@ -286,9 +323,9 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -------------------------------------------------------
-    -- Dispatcher
-    -------------------------------------------------------
+    --========================
+    -- Dispatcher (with batch streaming)
+    --========================
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -299,7 +336,7 @@ return function(C, R, UI)
         elseif name == "Cultist" then
             list = collectCultists(want)       -- NPCs
         elseif name == "Cultist Items" then
-            list = collectCultistItems(want)   -- Items only (incl. totems)
+            list = collectCultistItems(want)   -- Items (incl. totems), not NPCs
         elseif name == "Sapling" then
             list = collectSaplings(want)
         elseif table.find(pelts, name) then
@@ -309,19 +346,27 @@ return function(C, R, UI)
         end
 
         if not list or #list == 0 then return end
+
+        -- NEW: pre-stream all targets once
+        prefetchForEntries(list)
+
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= want then break end
             if teleportOne(entry) then
                 brought += 1
-                task.wait(0.12)
+                if BRING_DELAY_SEC > 0 then
+                    task.wait(BRING_DELAY_SEC)
+                else
+                    task.wait() -- yield one frame
+                end
             end
         end
     end
 
-    -------------------------------------------------------
+    --========================
     -- UI
-    -------------------------------------------------------
+    --========================
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
