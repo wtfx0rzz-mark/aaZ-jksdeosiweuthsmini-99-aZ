@@ -105,7 +105,7 @@ return function(C, R, UI)
     end
 
     local function isSelectedModel(m)
-        if not sel.name then return false end
+        if not sel.name and not sel.special then return false end
         if sel.special == "mossy" then
             return (m.Name == "Mossy Coin" or m.Name:match("^Mossy Coin%d+$"))
         elseif sel.special == "cultist" then
@@ -210,7 +210,9 @@ return function(C, R, UI)
         for i,m in ipairs(list) do
             if m and m.Parent then
                 startDrag(m)
-                pivotModel(m, baseCF + Vector3.new((i%6)*2, 0, math.floor(i/6)*2))
+                local x = (i%6)*2
+                local z = math.floor(i/6)*2
+                pivotModel(m, baseCF + Vector3.new(x, 0, z))
                 stopDrag(m)
             end
         end
@@ -222,107 +224,107 @@ return function(C, R, UI)
                 setAnchoredModel(m, false)
                 setNoCollideModel(m, false)
                 for _,p in ipairs(m:GetDescendants()) do
-                    if p:IsA("BasePart") then p.AssemblyLinearVelocity = Vector3.new(0, -25, 0) end
+                    if p:IsA("BasePart") then
+                        p.AssemblyLinearVelocity = Vector3.new(0, -25, 0)
+                    end
                 end
             end
         end
         clearAll()
     end
 
-    local function selectOnly(name, special)
-        sel.name, sel.special = name, special
+    local sets = {}
+
+    local function choose(dropKey, value, special)
+        local same = (sel.name == value and sel.special == special)
+        if same then
+            sel.name, sel.special = nil, nil
+            clearAll()
+            if sets[dropKey] then sets[dropKey]("") end
+            return
+        end
+        sel.name, sel.special = value, special
         clearAll()
-    end
-    local function clearOtherDropdowns(skip)
-        if skip ~= "Junk"    and _G._JunkSet    then _G._JunkSet({}) end
-        if skip ~= "Fuel"    and _G._FuelSet    then _G._FuelSet({}) end
-        if skip ~= "Food"    and _G._FoodSet    then _G._FoodSet({}) end
-        if skip ~= "Medical" and _G._MedSet     then _G._MedSet({}) end
-        if skip ~= "WA"      and _G._WASet      then _G._WASet({}) end
-        if skip ~= "Misc"    and _G._MiscSet    then _G._MiscSet({}) end
-        if skip ~= "Pelts"   and _G._PeltsSet   then _G._PeltsSet({}) end
+        for k,f in pairs(sets) do if k ~= dropKey then f("") end end
     end
 
-    tab:Section({ Title = "Gather • Single selection", Icon = "layers" })
+    tab:Section({ Title = "Gather • Single selection (global)", Icon = "layers" })
 
-    _G._JunkSet = tab:Dropdown({
+    sets.Junk = tab:Dropdown({
         Title = "Junk",
         Values = junkItems,
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            clearOtherDropdowns("Junk")
-            if v and v ~= "" then selectOnly(v, nil) else selectOnly(nil, nil) end
+            choose("Junk", (v and v ~= "") and v or nil, nil)
         end
     }).Set
 
-    _G._FuelSet = tab:Dropdown({
+    sets.Fuel = tab:Dropdown({
         Title = "Fuel",
         Values = fuelItems,
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            clearOtherDropdowns("Fuel")
-            if v and v ~= "" then selectOnly(v, nil) else selectOnly(nil, nil) end
+            choose("Fuel", (v and v ~= "") and v or nil, nil)
         end
     }).Set
 
-    _G._FoodSet = tab:Dropdown({
+    sets.Food = tab:Dropdown({
         Title = "Food",
         Values = foodItems,
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            clearOtherDropdowns("Food")
-            if v and v ~= "" then selectOnly(v, nil) else selectOnly(nil, nil) end
+            choose("Food", (v and v ~= "") and v or nil, nil)
         end
     }).Set
 
-    _G._MedSet = tab:Dropdown({
+    sets.Medical = tab:Dropdown({
         Title = "Medical",
         Values = medicalItems,
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            clearOtherDropdowns("Medical")
-            if v and v ~= "" then selectOnly(v, nil) else selectOnly(nil, nil) end
+            choose("Medical", (v and v ~= "") and v or nil, nil)
         end
     }).Set
 
-    _G._WASet = tab:Dropdown({
+    sets.WA = tab:Dropdown({
         Title = "Weapons & Armor",
         Values = weaponsArmor,
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            clearOtherDropdowns("WA")
-            if v and v ~= "" then selectOnly(v, nil) else selectOnly(nil, nil) end
+            choose("WA", (v and v ~= "") and v or nil, nil)
         end
     }).Set
 
-    _G._MiscSet = tab:Dropdown({
+    sets.Misc = tab:Dropdown({
         Title = "Ammo & Misc",
         Values = ammoMisc,
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            clearOtherDropdowns("Misc")
-            if v == "Mossy Coin" then selectOnly(nil, "mossy")
-            elseif v == "Cultist" then selectOnly(nil, "cultist")
-            elseif v == "Sapling" then selectOnly(nil, "sapling")
-            elseif v and v ~= "" then selectOnly(v, nil)
-            else selectOnly(nil, nil) end
+            if v == "Mossy Coin" then
+                choose("Misc", nil, "mossy")
+            elseif v == "Cultist" then
+                choose("Misc", nil, "cultist")
+            elseif v == "Sapling" then
+                choose("Misc", nil, "sapling")
+            else
+                choose("Misc", (v and v ~= "") and v or nil, nil)
+            end
         end
     }).Set
 
-    _G._PeltsSet = tab:Dropdown({
+    sets.Pelts = tab:Dropdown({
         Title = "Pelts",
         Values = pelts,
         Multi = false,
         AllowNone = true,
         Callback = function(v)
-            clearOtherDropdowns("Pelts")
-            if v and v ~= "" then selectOnly(v, nil) else selectOnly(nil, nil) end
+            choose("Pelts", (v and v ~= "") and v or nil, nil)
         end
     }).Set
 
