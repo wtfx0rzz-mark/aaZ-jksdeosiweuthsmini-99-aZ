@@ -1,114 +1,246 @@
 --=====================================================
--- 1337 Nights | Gather Module (WindUI-safe)
---  • Switch + Place button at top
---  • WindUI-friendly selectors (no broken Dropdown API)
---  • Place pile 10 studs forward + 10 up
+-- 1337 Nights | Gather Module
+--  • Captures targets within AuraRadius
+--  • Hover carry: 5 studs above HRP, tight stack
+--  • Place Down: moves 5 forward + 5 up, spreads, re-enables physics
+--  • Auto-turn-off gather before drop
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
-    local lp      = Players.LocalPlayer
+    local RS      = C.Services.RS
+    local WS      = C.Services.WS
+    local Run     = C.Services.Run
 
-    local Tabs = UI and UI.Tabs or {}
-    local tab  = Tabs.Gather
-    assert(tab, "Gather tab not found")
+    local lp  = Players.LocalPlayer
+    local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
+    assert(tab, "Gather tab not found (use UI.Tabs.Gather or UI.Tabs.Auto)")
 
-    C.State       = C.State or {}
-    C.State.Gather = C.State.Gather or { Enabled = false, Items = {}, Selected = {} }
-    local G = C.State.Gather
+    local SELECT_VALUES = {"Log"}
+    local selectedName  = SELECT_VALUES[1]
 
-    -- ===== catalogs =====
-    local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
-    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
-    local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
-    local medicalItems = {"Bandage","MedKit"}
-    local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack"}
+    local gatherOn      = false
+    local hoverHeight   = 5
+    local forwardDrop   = 5
+    local upDrop        = 5
 
-    -- ===== WindUI helpers (Title/Name variants) =====
-    local function addLabel(text)
-        if not pcall(function() tab:Label({ Title = text }) end) then
-            pcall(function() tab:Label({ Name = text }) end)
+    local scanConn, hoverConn
+    local gathered = {}      -- { [model]=true }
+    local gatheredList = {}  -- array of models for ordering
+    local GatherToggleCtrl
+
+    local function hrp()
+        local ch = lp.Character or lp.CharacterAdded:Wait()
+        return ch and ch:FindFirstChild("HumanoidRootPart")
+    end
+    local function humanoid()
+        local ch = lp.Character
+        return ch and ch:FindFirstChildOfClass("Humanoid")
+    end
+    local function auraRadius()
+        return math.clamp(tonumber(C.State and C.State.AuraRadius) or 150, 0, 500)
+    end
+    local function mainPart(obj)
+        if not obj then return nil end
+        if obj:IsA("BasePart") then return obj end
+        if obj:IsA("Model") then
+            if obj.PrimaryPart then return obj.PrimaryPart end
+            return obj:FindFirstChildWhichIsA("BasePart")
+        end
+        return nil
+    end
+    local function getRemote(n)
+        local f = RS:FindFirstChild("RemoteEvents")
+        return f and f:FindFirstChild(n) or nil
+    end
+    local function startDrag(m)
+        local re = getRemote("RequestStartDraggingItem")
+        if re then pcall(function() re:FireServer(m) end) end
+    end
+    local function stopDrag(m)
+        local re = getRemote("StopDraggingItem")
+        if re then pcall(function() re:FireServer(m) end) end
+    end
+    local function setNoCollideModel(m, on)
+        for _,d in ipairs(m:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.CanCollide = not on and true or false
+                d.CanQuery   = not on and true or false
+                d.CanTouch   = not on and true or false
+                d.Massless   = on and true or d.Massless
+                d.AssemblyLinearVelocity = Vector3.new()
+                d.AssemblyAngularVelocity = Vector3.new()
+            end
+        end
+    end
+    local function setAnchoredModel(m, on)
+        for _,d in ipairs(m:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.Anchored = on and true or false
+            end
+        end
+    end
+    local function addGather(m)
+        if gathered[m] then return end
+        gathered[m] = true
+        table.insert(gatheredList, m)
+    end
+    local function removeGather(m)
+        if not gathered[m] then return end
+        gathered[m] = nil
+        for i=#gatheredList,1,-1 do
+            if gatheredList[i] == m then table.remove(gatheredList, i) break end
+        end
+    end
+    local function clearAll()
+        for m,_ in pairs(gathered) do removeGather(m) end
+    end
+
+    local function nearAndNamed(m, name, origin, rad)
+        if not (m and m:IsA("Model") and m.Parent) then return false end
+        if m.Name ~= name then return false end
+        local mp = mainPart(m)
+        if not mp then return false end
+        local d = (mp.Position - origin).Magnitude
+        return d <= rad
+    end
+
+    local function pivotModel(m, cf)
+        if m:IsA("Model") then m:PivotTo(cf)
+        else
+            local p = mainPart(m)
+            if p then p.CFrame = cf end
         end
     end
 
-    local function addToggle(title, default, cb)
-        local w
-        if not pcall(function() w = tab:Toggle({ Title = title, Default = default, Callback = cb }) end) or not w then
-            pcall(function() w = tab:Toggle({ Name = title, Default = default, Callback = cb }) end)
-        end
-        return w
+    local function computeHoverCF(i, baseCF)
+        return baseCF
     end
 
-    local function addButton(title, cb)
-        if not pcall(function() tab:Button({ Title = title, Callback = cb }) end) then
-            pcall(function() tab:Button({ Name = title, Callback = cb }) end)
-        end
+    local function computeSpreadCF(i, baseCF)
+        local r = 2 + math.floor((i-1)/8)
+        local idx = (i-1)%8
+        local angle = (idx/8) * math.pi*2
+        local offset = Vector3.new(math.cos(angle)*r, 0, math.sin(angle)*r)
+        return baseCF + offset
     end
 
-    -- ===== WindUI-safe selector (button that cycles options) =====
-    local function addSelector(title, list, default, onChange)
-        local idx = table.find(list, default) or 1
-        local function label() return ("%s: %s"):format(title, list[idx]) end
-        addButton(label(), function()
-            idx = (idx % #list) + 1
-            onChange(list[idx])
-        end)
-        -- expose a tiny API if needed later
-        return {
-            Get = function() return list[idx] end,
-            Set = function(v)
-                local i = table.find(list, v); if i then idx = i; onChange(v) end
-            end,
-        }
-    end
+    local function captureIfNear()
+        local root = hrp()
+        if not root then return end
+        local origin = root.Position
+        local rad = auraRadius()
 
-    -- ===== placement =====
-    local function placeDown()
-        local char = lp.Character; if not char then return end
-        local hrp  = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+        local folders = {}
+        local items = WS:FindFirstChild("Items")
+        if items then table.insert(folders, items) else table.insert(folders, WS) end
 
-        local basePos = hrp.Position + hrp.CFrame.LookVector * 10 + Vector3.new(0, 10, 0)
-
-        for i, mdl in ipairs(G.Items) do
-            if mdl and mdl.Parent then
-                local pp = mdl.PrimaryPart or mdl:FindFirstChildWhichIsA("BasePart", true)
-                if pp then
-                    mdl.PrimaryPart = pp
-                    for _, d in ipairs(mdl:GetDescendants()) do
-                        if d:IsA("BasePart") then
-                            d.Anchored = false
-                            d.CanCollide = true
-                            d.Massless = false
-                            d.AssemblyLinearVelocity = Vector3.zero
-                            d.AssemblyAngularVelocity = Vector3.zero
-                        end
+        for _,rootNode in ipairs(folders) do
+            for _,m in ipairs(rootNode:GetChildren()) do
+                if nearAndNamed(m, selectedName, origin, rad) and not gathered[m] then
+                    local mp = mainPart(m)
+                    if mp and not mp.Anchored then
+                        startDrag(m)
+                        task.wait(0.02)
+                        pcall(function() mp:SetNetworkOwner(lp) end)
+                        setNoCollideModel(m, true)
+                        setAnchoredModel(m, true)
+                        addGather(m)
+                        stopDrag(m)
                     end
-                    local offset = Vector3.new((i % 5) * 2, 0, math.floor(i / 5) * 2)
-                    mdl:SetPrimaryPartCFrame(CFrame.new(basePos + offset))
-                    pp.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
-                    task.wait()
                 end
             end
         end
-
-        -- auto-disable gather switch after placing
-        G.Enabled = false
-        if G._toggle and G._toggle.Set then pcall(function() G._toggle:Set(false) end) end
     end
 
-    -- ===== controls at top =====
-    G._toggle = addToggle("Enable Gather", G.Enabled, function(v) G.Enabled = v end)
-    addButton("Place Items Now", placeDown)
+    local function hoverFollow()
+        local root = hrp()
+        if not root then return end
+        local forward = root.CFrame.LookVector
+        local above = root.Position + Vector3.new(0, hoverHeight, 0)
+        local cfBase = CFrame.lookAt(above, above + forward)
+        for i,m in ipairs(gatheredList) do
+            if m and m.Parent then
+                local cf = computeHoverCF(i, cfBase)
+                pivotModel(m, cf)
+            else
+                removeGather(m)
+            end
+        end
+    end
 
-    addLabel("Selections")
+    local function startGather()
+        if scanConn then return end
+        gatherOn = true
+        scanConn = Run.Heartbeat:Connect(captureIfNear)
+        hoverConn = Run.RenderStepped:Connect(hoverFollow)
+    end
+    local function stopGather()
+        gatherOn = false
+        if scanConn then pcall(function() scanConn:Disconnect() end) end
+        if hoverConn then pcall(function() hoverConn:Disconnect() end) end
+        scanConn, hoverConn = nil, nil
+    end
 
-    -- ===== selectors (WindUI-safe) =====
-    addSelector("Junk",          junkItems,    junkItems[1],    function(v) G.Selected.Junk    = v end)
-    addSelector("Fuel",          fuelItems,    fuelItems[1],    function(v) G.Selected.Fuel    = v end)
-    addSelector("Food",          foodItems,    foodItems[1],    function(v) G.Selected.Food    = v end)
-    addSelector("Medical",       medicalItems, medicalItems[1], function(v) G.Selected.Medical = v end)
-    addSelector("Weapons/Armor", weaponsArmor, weaponsArmor[1], function(v) G.Selected.WA      = v end)
-    addSelector("Ammo/Misc",     ammoMisc,     ammoMisc[1],     function(v) G.Selected.Misc    = v end)
+    local function placeDown()
+        local root = hrp()
+        if not root then return end
 
-    addLabel("Gather Module Loaded")
+        if GatherToggleCtrl and GatherToggleCtrl.Set then
+            GatherToggleCtrl:Set(false)
+        end
+        stopGather()
+
+        local forward = root.CFrame.LookVector
+        local dropPos = root.Position + forward * forwardDrop + Vector3.new(0, upDrop, 0)
+        local baseCF = CFrame.lookAt(dropPos, dropPos + forward)
+
+        for i,m in ipairs(gatheredList) do
+            if m and m.Parent then
+                local cf = computeSpreadCF(i, baseCF)
+                pivotModel(m, cf)
+            end
+        end
+
+        task.wait(0.05)
+
+        for _,m in ipairs(gatheredList) do
+            if m and m.Parent then
+                setAnchoredModel(m, false)
+                setNoCollideModel(m, false)
+            end
+        end
+
+        clearAll()
+    end
+
+    tab:Section({ Title = "Gather", Icon = "layers" })
+    tab:Dropdown({
+        Title = "Item",
+        Values = SELECT_VALUES,
+        Multi = false,
+        AllowNone = false,
+        Callback = function(v) if v and v ~= "" then selectedName = v end end
+    })
+
+    GatherToggleCtrl = tab:Toggle({
+        Title = "Enable Gather",
+        Value = false,
+        Callback = function(state)
+            if state then startGather() else stopGather() end
+        end
+    })
+
+    tab:Button({
+        Title = "Place Down",
+        Callback = placeDown
+    })
+
+    Players.LocalPlayer.CharacterAdded:Connect(function()
+        if gatherOn then
+            task.defer(function()
+                stopGather()
+                startGather()
+            end)
+        end
+    end)
 end
