@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling) • Farthest-first
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling) • Farthest-first + unique models
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -11,7 +11,7 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING = 1
+    local AMOUNT_TO_BRING = 50
     local DROP_FORWARD = 5
     local DROP_UP      = 5
 
@@ -110,8 +110,6 @@ return function(C, R, UI)
         end)
     end
 
-    private_teleport_debug = false
-
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
@@ -130,7 +128,7 @@ return function(C, R, UI)
     end
 
     -------------------------------------------------------
-    -- Collectors
+    -- Collectors (UNIQUE models, farthest-first)
     -------------------------------------------------------
     local function sortedFarthest(list)
         local root = hrp()
@@ -142,16 +140,17 @@ return function(C, R, UI)
     end
 
     local function collectByNameLoose(name, limit)
-        local found, n = {}, 0
+        local found, seen, unique = {}, {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
-                if model and model:IsA("Model") and not isExcludedModel(model) then
+                if model and model:IsA("Model") and not isExcludedModel(model) and not seen[model] then
                     local mp = mainPart(model)
                     if mp then
-                        n += 1
+                        seen[model] = true
+                        unique += 1
                         found[#found+1] = {model=model, part=mp}
-                        if limit and n >= limit then break end
+                        if limit and unique >= limit then break end
                     end
                 end
             end
@@ -160,16 +159,19 @@ return function(C, R, UI)
     end
 
     local function collectMossyCoins(limit)
-        local out, n = {}, 0
+        local out, seen, unique = {}, {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and not isExcludedModel(m) then
                 local nm = m.Name
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
-                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
-                    if mp then
-                        n += 1
-                        out[#out+1] = {model=m, part=mp}
-                        if limit and n >= limit then break end
+                    if not seen[m] then
+                        local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
+                        if mp then
+                            seen[m] = true
+                            unique += 1
+                            out[#out+1] = {model=m, part=mp}
+                            if limit and unique >= limit then break end
+                        end
                     end
                 end
             end
@@ -178,15 +180,16 @@ return function(C, R, UI)
     end
 
     local function collectCultists(limit)
-        local out, n = {}, 0
+        local out, seen, unique = {}, {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
-                if hasHumanoid(m) then
+                if hasHumanoid(m) and not seen[m] then
                     local mp = mainPart(m)
                     if mp then
-                        n += 1
+                        seen[m] = true
+                        unique += 1
                         out[#out+1] = {model=m, part=mp}
-                        if limit and n >= limit then break end
+                        if limit and unique >= limit then break end
                     end
                 end
             end
@@ -195,16 +198,17 @@ return function(C, R, UI)
     end
 
     local function collectSaplings(limit)
-        local out, n = {}, 0
+        local out, seen, unique = {}, {}, 0
         local items = WS:FindFirstChild("Items")
         if not items then return out end
         for _,m in ipairs(items:GetChildren()) do
-            if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
+            if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) and not seen[m] then
                 local mp = mainPart(m)
                 if mp then
-                    n += 1
+                    seen[m] = true
+                    unique += 1
                     out[#out+1] = {model=m, part=mp}
-                    if limit and n >= limit then break end
+                    if limit and unique >= limit then break end
                 end
             end
         end
@@ -212,9 +216,9 @@ return function(C, R, UI)
     end
 
     local function collectPelts(which, limit)
-        local out, n = {}, 0
+        local out, seen, unique = {}, {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and not isExcludedModel(m) then
+            if m:IsA("Model") and not isExcludedModel(m) and not seen[m] then
                 local nm = m.Name
                 local ok =
                     (which == "Bunny Foot" and nm == "Bunny Foot") or
@@ -222,13 +226,13 @@ return function(C, R, UI)
                     (which == "Alpha Wolf Pelt" and nm:lower():find("alpha") and nm:lower():find("wolf")) or
                     (which == "Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar")) or
                     (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
-
                 if ok then
                     local mp = mainPart(m)
                     if mp then
-                        n += 1
+                        seen[m] = true
+                        unique += 1
                         out[#out+1] = {model=m, part=mp}
-                        if limit and n >= limit then break end
+                        if limit and unique >= limit then break end
                     end
                 end
             end
