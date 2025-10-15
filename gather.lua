@@ -41,10 +41,11 @@ return function(C, R, UI)
     local baselineY = nil
     local rsConn = nil
     local scanRunning = false
+    local gatherToggle = nil -- UI handle
 
     local function toList(t)
         local out, n = {}, 0
-        for k in pairs(t) do n += 1; out[n] = k end
+        for k in pairs(t) do n = n + 1; out[n] = k end
         return out
     end
 
@@ -107,7 +108,7 @@ return function(C, R, UI)
     local function removeCarry(m)
         if not carried[m] then return end
         carried[m] = nil
-        carryCount -= 1
+        carryCount = carryCount - 1
         if carryCount < 0 then carryCount = 0 end
         carryList = toList(carried)
     end
@@ -243,22 +244,19 @@ return function(C, R, UI)
     end
 
     local function setItemsPileDrop()
-        local root = hrp(); if not root then return end
-        -- stop the under-map tether for good measure while we place
-        if rsConn then rsConn:Disconnect(); rsConn = nil end
+        -- Flip the gather toggle OFF to prevent re-tethering under map
+        if gatherToggle and gatherToggle.SetValue then pcall(function() gatherToggle:SetValue(false) end) end
+        disable()
 
+        local root = hrp(); if not root then return end
         local forward = root.CFrame.LookVector
         local pilePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
 
-        -- small jitter to avoid Z-fighting and promote natural pile
         local function jitter()
             return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8)
         end
-
-        -- downward nudge so they definitely fall
         local downVel = Vector3.new(0, -30, 0)
 
-        -- snapshot list to avoid mutation while iterating
         local list = {}
         for i = 1, #carryList do list[i] = carryList[i] end
 
@@ -280,11 +278,6 @@ return function(C, R, UI)
             end
             removeCarry(m)
         end
-
-        -- if user keeps the toggle on, restart tether for remaining future pickups
-        if enabled and not rsConn then
-            rsConn = Run.RenderStepped:Connect(repositionAll)
-        end
     end
 
     -- Respawn baseline refresh
@@ -297,7 +290,7 @@ return function(C, R, UI)
     -- UI
     tab:Section({ Title = "Gather" })
 
-    tab:Toggle({
+    gatherToggle = tab:Toggle({
         Title = "Carry Under Map",
         Value = false,
         Callback = function(state)
