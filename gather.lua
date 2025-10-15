@@ -19,10 +19,11 @@ return function(C, R, UI)
     local SCAN_INTERVAL  = 0.25
 
     -- neat log stack config
-    local STACK_COLS             = 10
-    local STACK_H_GAP            = 0.4   -- horizontal spacing buffer
-    local STACK_V_GAP            = 0.2   -- vertical spacing buffer
-    local ANCHOR_STACKED_LOGS    = true  -- anchor after stacking for a clean stack
+    local STACK_COLS          = 10
+    local STACK_H_GAP         = 0.35
+    local STACK_V_GAP         = 0.15
+    local LOCK_EACH_LOG       = true   -- anchor each log as soon as it’s placed
+    local LOG_ALIGN_ALONG_FWD = true   -- orient logs facing player look direction
 
     ----------------------------------------------------------------
     -- Helpers
@@ -250,37 +251,8 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- Placement
+    -- Placement helpers
     ----------------------------------------------------------------
-    local function dropPhysicsify(m, dropVelocity, anchorAfter)
-        if m:IsA("Model") then
-            for _,d in ipairs(m:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    d.Anchored = anchorAfter or false
-                    d.CanCollide = true
-                    if typeof(d.SetNetworkOwner) == "function" then
-                        pcall(function() d:SetNetworkOwner(lp) end)
-                    end
-                    d.AssemblyAngularVelocity = anchorAfter and Vector3.new() or Vector3.new(0, math.random()*2, 0)
-                    d.AssemblyLinearVelocity  = anchorAfter and Vector3.new() or dropVelocity
-                    d.Massless = false
-                end
-            end
-        else
-            local p = mainPart(m)
-            if p then
-                p.Anchored = anchorAfter or false
-                p.CanCollide = true
-                if typeof(p.SetNetworkOwner) == "function" then
-                    pcall(function() p:SetNetworkOwner(lp) end)
-                end
-                p.AssemblyAngularVelocity = anchorAfter and Vector3.new() or Vector3.new(0, math.random()*2, 0)
-                p.AssemblyLinearVelocity  = anchorAfter and Vector3.new() or dropVelocity
-                p.Massless = false
-            end
-        end
-    end
-
     local function avgSize(objs)
         local sum = Vector3.new()
         local n = 0
@@ -299,36 +271,59 @@ return function(C, R, UI)
         return sum / n
     end
 
-    local function placeLogStack(list)
+    local function anchorModel(m, anchored)
+        if m:IsA("Model") then
+            for _,d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    d.Anchored = anchored and true or false
+                    d.CanCollide = true
+                    d.AssemblyAngularVelocity = Vector3.new()
+                    d.AssemblyLinearVelocity  = Vector3.new()
+                    d.Massless = false
+                end
+            end
+        else
+            local p = mainPart(m)
+            if p then
+                p.Anchored = anchored and true or false
+                p.CanCollide = true
+                p.AssemblyAngularVelocity = Vector3.new()
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.Massless = false
+            end
+        end
+    end
+
+    -- sequential, one-by-one placement for logs; each locked immediately
+    local function placeLogStackSequential(list)
         local root = hrp(); if not root then return end
         local forward = root.CFrame.LookVector
         local right   = root.CFrame.RightVector
+
         -- base position: 5 up + 5 forward
         local basePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
 
-        -- compute consistent step from average size
         local s = avgSize(list)
         local stepX = s.X + STACK_H_GAP
         local stepY = s.Y + STACK_V_GAP
-
-        -- center the row around player: columns -((cols-1)/2) .. ((cols-1)/2)
         local halfCols = (STACK_COLS - 1) / 2
 
         local i = 0
         for _, m in ipairs(list) do
             if not (m and m.Parent) then goto cont end
+
             ensurePrimary(m)
             stopDrag(m)
             setNoCollide(m, false)
 
             local col = i % STACK_COLS
             local row = math.floor(i / STACK_COLS)
-
             local lateral = (col - halfCols) * stepX
             local height  = row * stepY
-
             local pos = basePos + right * lateral + Vector3.new(0, height, 0)
-            local cf  = CFrame.new(pos, pos + forward)
+
+            local lookDir = LOG_ALIGN_ALONG_FWD and forward or right
+            local cf = CFrame.new(pos, pos + lookDir)
 
             local mp = mainPart(m)
             if m:IsA("Model") and m.PrimaryPart then
@@ -337,13 +332,14 @@ return function(C, R, UI)
                 pcall(function() mp.CFrame = cf end)
             end
 
-            dropPhysicsify(m, Vector3.new(0,-25,0), ANCHOR_STACKED_LOGS)
-            ::cont::
-            i += 1
-        end
+            -- lock immediately to avoid physics collapsing the stack
+            anchorModel(m, LOCK_EACH_LOG)
 
-        -- remove from carried after placing
-        for _, m in ipairs(list) do removeCarry(m) end
+            removeCarry(m)
+            i += 1
+            task.wait(0.01) -- small yield to ensure visual placement order
+            ::cont::
+        end
     end
 
     local function placeLoosePile(list)
@@ -351,7 +347,6 @@ return function(C, R, UI)
         local forward = root.CFrame.LookVector
         local pilePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
         local function jitter() return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8) end
-        local downVel = Vector3.new(0, -30, 0)
 
         for _, m in ipairs(list) do
             if m and m.Parent then
@@ -367,10 +362,11 @@ return function(C, R, UI)
                 elseif mp then
                     pcall(function() mp.CFrame = targetCF end)
                 end
-
-                dropPhysicsify(m, downVel, false)
+                -- lightly lock others too so they do not slide away
+                anchorModel(m, true)
             end
             removeCarry(m)
+            task.wait(0.005)
         end
     end
 
@@ -379,7 +375,7 @@ return function(C, R, UI)
         setToggleCompat(gatherToggleHandle, false)
         setEnabled(false)
 
-        -- copy snapshot
+        -- snapshot
         local list = {}
         for i = 1, #carryList do list[i] = carryList[i] end
         if #list == 0 then return end
@@ -395,7 +391,7 @@ return function(C, R, UI)
             end
         end
 
-        if #logs > 0 then placeLogStack(logs) end
+        if #logs > 0 then placeLogStackSequential(logs) end
         if #others > 0 then placeLoosePile(others) end
     end
 
@@ -417,7 +413,16 @@ return function(C, R, UI)
         Title = "Gather Items",
         Value = false,
         Callback = function(state)
-            setEnabled(state)
+            if state then
+                gatherEnabled = true
+                baselineY = groundBaselineY()
+                startTether()
+                startScanner()
+            else
+                gatherEnabled = false
+                stopScanner()
+                stopTether()
+            end
         end
     })
 
