@@ -10,165 +10,18 @@ return function(C, R, UI)
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
+    -- Tunables
     C.Config.CHOP_SWING_DELAY     = C.Config.CHOP_SWING_DELAY     or 0.55
     C.Config.TREE_NAME            = C.Config.TREE_NAME            or "Small Tree"
     C.Config.UID_SUFFIX           = C.Config.UID_SUFFIX           or "0000000000"
     C.Config.ChopPrefer           = C.Config.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
-    C.Config.MAX_TARGETS_PER_WAVE = C.Config.MAX_TARGETS_PER_WAVE or 80
+    C.Config.MAX_TARGETS_PER_WAVE = C.Config.MAX_TARGETS_PER_WAVE or 80 -- how many we hit per wave
 
     local running = { SmallTree = false, Character = false }
 
-    local LoggerGui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui") and game:GetService("Players").LocalPlayer.PlayerGui:FindFirstChild("EdgeDebugLogger")
-    if not LoggerGui then
-        LoggerGui = Instance.new("ScreenGui")
-        LoggerGui.Name = "EdgeDebugLogger"
-        LoggerGui.ResetOnSpawn = false
-        LoggerGui.IgnoreGuiInset = true
-        LoggerGui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
-        local Frame = Instance.new("Frame")
-        Frame.Name = "Panel"
-        Frame.AnchorPoint = Vector2.new(1,1)
-        Frame.Position = UDim2.new(1,-12,1,-12)
-        Frame.Size = UDim2.new(0,480,0,260)
-        Frame.BackgroundColor3 = Color3.fromRGB(18,18,22)
-        Frame.BackgroundTransparency = 0.1
-        Frame.BorderSizePixel = 0
-        Frame.Parent = LoggerGui
-        local UICorner = Instance.new("UICorner", Frame)
-        UICorner.CornerRadius = UDim.new(0,10)
-
-        local Title = Instance.new("TextLabel")
-        Title.Name = "Title"
-        Title.Text = "1337 Nights • Combat Debug"
-        Title.Font = Enum.Font.GothamMedium
-        Title.TextSize = 14
-        Title.TextColor3 = Color3.fromRGB(230,230,235)
-        Title.BackgroundTransparency = 1
-        Title.Size = UDim2.new(1, -120, 0, 24)
-        Title.Position = UDim2.new(0, 12, 0, 8)
-        Title.TextXAlignment = Enum.TextXAlignment.Left
-        Title.Parent = Frame
-
-        local Close = Instance.new("TextButton")
-        Close.Name = "Close"
-        Close.Text = "×"
-        Close.Font = Enum.Font.GothamBold
-        Close.TextSize = 18
-        Close.TextColor3 = Color3.fromRGB(230,230,235)
-        Close.BackgroundColor3 = Color3.fromRGB(45,45,55)
-        Close.Size = UDim2.new(0,28,0,24)
-        Close.Position = UDim2.new(1,-32,0,8)
-        Close.Parent = Frame
-        local CloseCorner = Instance.new("UICorner", Close)
-        CloseCorner.CornerRadius = UDim.new(0,6)
-
-        local Copy = Instance.new("TextButton")
-        Copy.Name = "Copy"
-        Copy.Text = "Copy"
-        Copy.Font = Enum.Font.Gotham
-        Copy.TextSize = 13
-        Copy.TextColor3 = Color3.fromRGB(230,230,235)
-        Copy.BackgroundColor3 = Color3.fromRGB(60,60,72)
-        Copy.Size = UDim2.new(0,64,0,24)
-        Copy.Position = UDim2.new(1,-100,0,8)
-        Copy.Parent = Frame
-        local CopyCorner = Instance.new("UICorner", Copy)
-        CopyCorner.CornerRadius = UDim.new(0,6)
-
-        local Clear = Instance.new("TextButton")
-        Clear.Name = "Clear"
-        Clear.Text = "Clear"
-        Clear.Font = Enum.Font.Gotham
-        Clear.TextSize = 13
-        Clear.TextColor3 = Color3.fromRGB(230,230,235)
-        Clear.BackgroundColor3 = Color3.fromRGB(60,60,72)
-        Clear.Size = UDim2.new(0,64,0,24)
-        Clear.Position = UDim2.new(1,-168,0,8)
-        Clear.Parent = Frame
-        local ClearCorner = Instance.new("UICorner", Clear)
-        ClearCorner.CornerRadius = UDim.new(0,6)
-
-        local Scroll = Instance.new("ScrollingFrame")
-        Scroll.Name = "Scroll"
-        Scroll.BackgroundTransparency = 0.2
-        Scroll.BackgroundColor3 = Color3.fromRGB(28,28,34)
-        Scroll.BorderSizePixel = 0
-        Scroll.Position = UDim2.new(0, 12, 0, 40)
-        Scroll.Size = UDim2.new(1, -24, 1, -52)
-        Scroll.ScrollBarThickness = 6
-        Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-        Scroll.CanvasSize = UDim2.new()
-        Scroll.Parent = Frame
-        local ScrollCorner = Instance.new("UICorner", Scroll)
-        ScrollCorner.CornerRadius = UDim.new(0,8)
-
-        local LogBox = Instance.new("TextLabel")
-        LogBox.Name = "Log"
-        LogBox.Text = ""
-        LogBox.TextWrapped = false
-        LogBox.Font = Enum.Font.Code
-        LogBox.TextXAlignment = Enum.TextXAlignment.Left
-        LogBox.TextYAlignment = Enum.TextYAlignment.Top
-        LogBox.TextColor3 = Color3.fromRGB(220,220,230)
-        LogBox.TextSize = 14
-        LogBox.BackgroundTransparency = 1
-        LogBox.Size = UDim2.new(1,-12,0,0)
-        LogBox.AutomaticSize = Enum.AutomaticSize.Y
-        LogBox.Parent = Scroll
-
-        local HiddenCopy = Instance.new("TextBox")
-        HiddenCopy.Name = "HiddenCopy"
-        HiddenCopy.TextEditable = false
-        HiddenCopy.Visible = false
-        HiddenCopy.Parent = Frame
-
-        Close.MouseButton1Click:Connect(function()
-            LoggerGui.Enabled = false
-        end)
-
-        Clear.MouseButton1Click:Connect(function()
-            LogBox.Text = ""
-            LogBox:SetAttribute("Lines", 0)
-        end)
-
-        Copy.MouseButton1Click:Connect(function()
-            local txt = LogBox.Text or ""
-            if typeof(getgenv) == "function" and typeof(getgenv().setclipboard) == "function" then
-                getgenv().setclipboard(txt)
-            elseif typeof(setclipboard) == "function" then
-                setclipboard(txt)
-            else
-                HiddenCopy.Text = txt
-                HiddenCopy:CaptureFocus()
-                HiddenCopy:ReleaseFocus(true)
-            end
-        end)
-    end
-
-    local Panel = LoggerGui.Panel
-    local LogBox = Panel.Scroll.Log
-    local function ts()
-        return string.format("[%0.2f]", os.clock() % 10000)
-    end
-    local function log(s)
-        local prev = LogBox.Text
-        local new = (prev == "" and (ts().." "..s)) or (prev.."\n"..ts().." "..s)
-        LogBox.Text = new
-        Panel.Scroll.CanvasPosition = Vector2.new(0, 1e9)
-        local lines = (LogBox:GetAttribute("Lines") or 0) + 1
-        if lines > 600 then
-            local cut = string.find(new, "\n")
-            if cut then
-                LogBox.Text = string.sub(new, cut + 1)
-            end
-            lines = 600
-        end
-        LogBox:SetAttribute("Lines", lines)
-    end
-    local function showLogger(on)
-        LoggerGui.Enabled = on and true or false
-    end
-
+    --------------------------------------------------------------------
+    -- Helpers
+    --------------------------------------------------------------------
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
 
     local function findInInventory(name)
@@ -187,46 +40,17 @@ return function(C, R, UI)
         if not tool then return end
         local ev = RS:FindFirstChild("RemoteEvents")
         ev = ev and ev:FindFirstChild("EquipItemHandle")
-        if ev then
-            log("EquipItemHandle -> "..tool.Name)
-            ev:FireServer("FireAllClients", tool)
-        else
-            log("EquipItemHandle missing")
-        end
+        if ev then ev:FireServer("FireAllClients", tool) end
     end
 
     local function ensureEquipped(wantedName)
         if not wantedName then return nil end
-        local ch = lp and lp.Character
-        if ch then
-            local t = ch:FindFirstChildOfClass("Tool")
-            if t and t.Name == wantedName then
-                log("Tool already equipped: "..wantedName)
-                return t
-            end
+        if equippedToolName() == wantedName then
+            return findInInventory(wantedName)
         end
         local tool = findInInventory(wantedName)
-        if tool then
-            log("Equipping from inventory: "..wantedName)
-            SafeEquip(tool)
-            local deadline = os.clock() + 0.5
-            repeat
-                task.wait()
-                ch = lp and lp.Character
-                if ch then
-                    local nowTool = ch:FindFirstChildOfClass("Tool")
-                    if nowTool and nowTool.Name == wantedName then
-                        log("Equipped confirmed: "..wantedName)
-                        return nowTool
-                    end
-                end
-            until os.clock() > deadline
-            log("Equip not confirmed in time; proceeding with inventory ref")
-            return tool
-        else
-            log("Tool not found in inventory: "..wantedName)
-        end
-        return nil
+        if tool then SafeEquip(tool) end
+        return tool
     end
 
     local function bestTreeHitPart(tree)
@@ -272,25 +96,26 @@ return function(C, R, UI)
     local function HitTarget(targetModel, tool, hitId, impactCF)
         local evs = RS:FindFirstChild("RemoteEvents")
         local dmg = evs and evs:FindFirstChild("ToolDamageObject")
-        if not dmg then
-            log("ToolDamageObject missing")
-            return
-        end
-        log("Invoke ToolDamageObject → model="..(targetModel and targetModel.Name or "?").." tool="..(tool and tool.Name or "?").." id="..tostring(hitId))
+        if not dmg then return end
         dmg:InvokeServer(targetModel, tool, hitId, impactCF)
     end
 
+    --------------------------------------------------------------------
+    -- Attribute helpers (per-tree sequencing)
+    --------------------------------------------------------------------
     local function attrBucket(treeModel)
         local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
         return (hr and hr:IsA("Instance")) and hr or treeModel
     end
 
     local function parseHitAttrKey(k)
+        -- matches "123_0000000000"
         local n = string.match(k or "", "^(%d+)_" .. C.Config.UID_SUFFIX .. "$")
         return n and tonumber(n) or nil
     end
 
     local function nextPerTreeHitId(treeModel)
+        -- Read attributes under HitRegisters; choose next N then return "N_SUFFIX"
         local bucket = attrBucket(treeModel)
         local maxN = 0
         local attrs = bucket and bucket:GetAttributes() or nil
@@ -304,6 +129,9 @@ return function(C, R, UI)
         return tostring(nextN) .. "_" .. C.Config.UID_SUFFIX
     end
 
+    --------------------------------------------------------------------
+    -- Collectors (trees recursive, characters flat) + deterministic order
+    --------------------------------------------------------------------
     local function collectTreesInRadius(roots, origin, radius)
         local out, n = {}, 0
         local function walk(node)
@@ -328,6 +156,7 @@ return function(C, R, UI)
         for _, root in ipairs(roots) do
             walk(root)
         end
+        -- Sort nearest-first; tie-break by name for determinism
         table.sort(out, function(a, b)
             local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
             local da = pa and (pa.Position - origin).Magnitude or math.huge
@@ -362,53 +191,48 @@ return function(C, R, UI)
         return out
     end
 
+    --------------------------------------------------------------------
+    -- Wave executor (trees: per-tree IDs; chars: no tagging)
+    --------------------------------------------------------------------
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         local toolName
         for _, n in ipairs(C.Config.ChopPrefer) do
-            if findInInventory(n) or (equippedToolName() == n) then
-                toolName = n
-                break
-            end
+            if findInInventory(n) then toolName = n break end
         end
-        if not toolName then
-            log("No preferred tool available")
-            task.wait(0.35)
-            return
-        end
+        if not toolName then task.wait(0.35) return end
         local tool = ensureEquipped(toolName)
-        if not tool then
-            log("Tool equip failed: "..toolName)
-            task.wait(0.35)
-            return
-        end
+        if not tool then task.wait(0.35) return end
+
+        -- Fire all targets in parallel; each tree computes its own next ID
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
                 local hitPart = hitPartGetter(mdl)
-                if not hitPart then
-                    log("No hit part: "..(mdl and mdl.Name or "?"))
-                    return
-                end
-                local ch = lp.Character
-                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-                local dist = hrp and (hitPart.Position - hrp.Position).Magnitude or math.huge
-                log(string.format("Hit %s at d=%.1f using %s", mdl.Name, dist, tool.Name))
+                if not hitPart then return end
+
                 local impactCF = computeImpactCFrame(mdl, hitPart)
                 local hitId
                 if isTree then
                     hitId = nextPerTreeHitId(mdl)
+                    -- write attribute before invoking
                     pcall(function()
                         local bucket = attrBucket(mdl)
                         if bucket then bucket:SetAttribute(hitId, true) end
                     end)
                 else
+                    -- characters don't need attributes; still send a unique-ish id
                     hitId = tostring(tick()) .. "_" .. C.Config.UID_SUFFIX
                 end
+
                 HitTarget(mdl, tool, hitId, impactCF)
             end)
         end
-        task.wait(swingDelay)
+
+        task.wait(swingDelay) -- between waves
     end
 
+    --------------------------------------------------------------------
+    -- Auras
+    --------------------------------------------------------------------
     local function startCharacterAura()
         if running.Character then return end
         running.Character = true
@@ -416,16 +240,14 @@ return function(C, R, UI)
             while running.Character do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then
-                    log("No HRP (character aura)")
-                    task.wait(0.2)
-                    break
-                end
+                if not hrp then task.wait(0.2) break end
+
                 local origin = hrp.Position
                 local radius = tonumber(C.State.AuraRadius) or 150
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
-                log("Characters in range: "..tostring(#targets))
+
                 if #targets > 0 then
+                    -- We simply hit everyone we found (no round-robin needed usually)
                     local batch = targets
                     if C.Config.MAX_TARGETS_PER_WAVE and #batch > C.Config.MAX_TARGETS_PER_WAVE then
                         batch = {}
@@ -440,11 +262,9 @@ return function(C, R, UI)
             end
         end)
     end
+    local function stopCharacterAura() running.Character = false end
 
-    local function stopCharacterAura()
-        running.Character = false
-    end
-
+    -- Cursor used for round-robin of trees across waves
     C.State._treeCursor = C.State._treeCursor or 1
 
     local function startSmallTreeAura()
@@ -454,18 +274,21 @@ return function(C, R, UI)
             while running.SmallTree do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then
-                    log("No HRP (tree aura)")
-                    task.wait(0.2)
-                    break
-                end
+                if not hrp then task.wait(0.2) break end
+
                 local origin = hrp.Position
                 local radius = tonumber(C.State.AuraRadius) or 150
-                local roots = { WS, RS:FindFirstChild("Assets"), RS:FindFirstChild("CutsceneSets") }
+
+                local roots = {
+                    WS,                                     -- Map, Foliage, Landmarks, FakeForest, etc.
+                    RS:FindFirstChild("Assets"),            -- ReplicatedStorage.Assets (CutsceneSets.*.Decor.*)
+                    RS:FindFirstChild("CutsceneSets"),      -- fallback if Assets nests differently
+                }
+
                 local allTrees = collectTreesInRadius(roots, origin, radius)
                 local total = #allTrees
-                log("Trees in range: "..tostring(total).." (radius="..tostring(radius)..")")
                 if total > 0 then
+                    -- round-robin slice
                     local batchSize = math.min(C.Config.MAX_TARGETS_PER_WAVE, total)
                     if C.State._treeCursor > total then C.State._treeCursor = 1 end
                     local batch = table.create(batchSize)
@@ -481,20 +304,11 @@ return function(C, R, UI)
             end
         end)
     end
+    local function stopSmallTreeAura() running.SmallTree = false end
 
-    local function stopSmallTreeAura()
-        running.SmallTree = false
-    end
-
-    CombatTab:Toggle({
-        Title = "Show Combat Debug",
-        Value = C.State.Toggles.CombatDebug or true,
-        Callback = function(on)
-            C.State.Toggles.CombatDebug = on
-            showLogger(on)
-        end
-    })
-
+    --------------------------------------------------------------------
+    -- UI
+    --------------------------------------------------------------------
     CombatTab:Toggle({
         Title = "Character Aura",
         Value = C.State.Toggles.CharacterAura or false,
@@ -518,10 +332,6 @@ return function(C, R, UI)
         Value = { Min = 0, Max = 1000, Default = C.State.AuraRadius or 150 },
         Callback = function(v)
             C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 1000)
-            log("Set AuraRadius to "..tostring(C.State.AuraRadius))
         end
     })
-
-    showLogger(C.State.Toggles.CombatDebug ~= false)
-    log("Logger ready")
 end
