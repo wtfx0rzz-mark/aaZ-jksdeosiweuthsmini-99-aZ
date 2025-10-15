@@ -1,8 +1,4 @@
---=====================================================
 -- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
---  • Farthest-first + unique models + Cultist Items
---  • BATCH STREAMING: prefetch all targets once, then rapid bring
---=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -13,21 +9,16 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    --========================
-    -- Tunables
-    --========================
-    local AMOUNT_TO_BRING    = 50
-    local DROP_FORWARD       = 5
-    local DROP_UP            = 5
+    local AMOUNT_TO_BRING = 50
+    local DROP_FORWARD    = 5
+    local DROP_UP         = 5
 
-    -- Batch streaming knobs
-    local STREAM_BATCH       = true          -- enable prefetch-all
-    local STREAM_TIMEOUT     = 1.2           -- seconds to wait once after all requests
-    local STREAM_BIN_SIZE    = 96            -- studs; dedupe requests by ~cell
-    local STREAM_STRIDE      = 16            -- requests per frame to avoid hitching
+    local STREAM_BATCH    = true
+    local STREAM_TIMEOUT  = 1.2
+    local STREAM_BIN_SIZE = 96
+    local STREAM_STRIDE   = 16
 
-    -- Bring loop delay between items
-    local BRING_DELAY_SEC    = 0.035         -- small; was 0.12 previously
+    local BRING_DELAY_SEC = 0.035
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
@@ -40,9 +31,6 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    --========================
-    -- Utility
-    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -83,9 +71,6 @@ return function(C, R, UI)
         return t
     end
 
-    --========================
-    -- Drop positioning
-    --========================
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -124,9 +109,6 @@ return function(C, R, UI)
         end)
     end
 
-    --========================
-    -- Streaming helpers (BATCH)
-    --========================
     local function binKeyFromPos(pos)
         local bx = math.floor(pos.X / STREAM_BIN_SIZE)
         local by = math.floor(pos.Y / STREAM_BIN_SIZE)
@@ -147,7 +129,6 @@ return function(C, R, UI)
                 end
             end
         end
-        -- Issue requests in small bursts to avoid hitching
         local i, n = 1, #binPositions
         while i <= n do
             local j = math.min(i + STREAM_STRIDE - 1, n)
@@ -156,16 +137,25 @@ return function(C, R, UI)
                 pcall(function() WS:RequestStreamAroundAsync(pos) end)
                 pcall(function() lp:RequestStreamAroundAsync(pos) end)
             end
-            task.wait() -- yield one frame between bursts
+            task.wait()
             i = j + 1
         end
-        -- single grace wait after all requests
         task.wait(STREAM_TIMEOUT)
     end
 
-    --========================
-    -- Teleport one (no per-item streaming; we stream in batch)
-    --========================
+    -- proximity spoof
+    local function withSpoofedProximity(pos, fn)
+        local root = hrp()
+        if not (root and pos) then return false end
+        local back = root.CFrame
+        root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+        task.wait(0.10)
+        local ok, err = pcall(fn)
+        root.CFrame = back
+        if not ok then warn(err) end
+        return ok
+    end
+
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
@@ -175,21 +165,25 @@ return function(C, R, UI)
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
 
-        pcall(function() entry.part:SetNetworkOwner(lp) end)
+        local pos = entry.part.Position
+        pcall(function() WS:RequestStreamAroundAsync(pos) end)
+        pcall(function() lp:RequestStreamAroundAsync(pos) end)
 
-        if entry.model:IsA("Model") then
-            entry.model:PivotTo(dropCF)
-        else
-            entry.part.CFrame = dropCF
-        end
+        local ok = withSpoofedProximity(pos, function()
+            pcall(function() entry.part:SetNetworkOwner(lp) end)
+            quickDrag(entry.model)
+            if entry.model:IsA("Model") then
+                entry.model:PivotTo(dropCF)
+            else
+                entry.part.CFrame = dropCF
+            end
+        end)
+        if not ok then return false end
 
         dropAndNudgeAsync(entry, dropCF, forward)
         return true
     end
 
-    --========================
-    -- Collectors (UNIQUE models, farthest-first)
-    --========================
     local function sortedFarthest(list)
         local root = hrp()
         if not root then return list end
@@ -208,7 +202,7 @@ return function(C, R, UI)
                     local mp = mainPart(model)
                     if mp then
                         seen[model] = true
-                        unique += 1
+                        unique = unique + 1
                         found[#found+1] = {model=model, part=mp}
                         if limit and unique >= limit then break end
                     end
@@ -228,7 +222,7 @@ return function(C, R, UI)
                         local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
                         if mp then
                             seen[m] = true
-                            unique += 1
+                            unique = unique + 1
                             out[#out+1] = {model=m, part=mp}
                             if limit and unique >= limit then break end
                         end
@@ -248,7 +242,7 @@ return function(C, R, UI)
                         local mp = mainPart(m)
                         if mp then
                             seen[m] = true
-                            unique += 1
+                            unique = unique + 1
                             out[#out+1] = {model=m, part=mp}
                             if limit and unique >= limit then break end
                         end
@@ -268,7 +262,7 @@ return function(C, R, UI)
                 local mp = mainPart(m)
                 if mp then
                     seen[m] = true
-                    unique += 1
+                    unique = unique + 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and unique >= limit then break end
                 end
@@ -288,7 +282,7 @@ return function(C, R, UI)
                     local mp = mainPart(d)
                     if mp then
                         seen[d] = true
-                        unique += 1
+                        unique = unique + 1
                         out[#out+1] = {model=d, part=mp}
                         if limit and unique >= limit then break end
                     end
@@ -313,7 +307,7 @@ return function(C, R, UI)
                     local mp = mainPart(m)
                     if mp then
                         seen[m] = true
-                        unique += 1
+                        unique = unique + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and unique >= limit then break end
                     end
@@ -323,20 +317,16 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    --========================
-    -- Dispatcher (with batch streaming)
-    --========================
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
         local list
-
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
         elseif name == "Cultist" then
-            list = collectCultists(want)       -- NPCs
+            list = collectCultists(want)
         elseif name == "Cultist Items" then
-            list = collectCultistItems(want)   -- Items (incl. totems), not NPCs
+            list = collectCultistItems(want)
         elseif name == "Sapling" then
             list = collectSaplings(want)
         elseif table.find(pelts, name) then
@@ -344,29 +334,24 @@ return function(C, R, UI)
         else
             list = collectByNameLoose(name, want)
         end
-
         if not list or #list == 0 then return end
 
-        -- NEW: pre-stream all targets once
         prefetchForEntries(list)
 
         local brought = 0
         for _,entry in ipairs(list) do
             if brought >= want then break end
             if teleportOne(entry) then
-                brought += 1
+                brought = brought + 1
                 if BRING_DELAY_SEC > 0 then
                     task.wait(BRING_DELAY_SEC)
                 else
-                    task.wait() -- yield one frame
+                    task.wait()
                 end
             end
         end
     end
 
-    --========================
-    -- UI
-    --========================
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
