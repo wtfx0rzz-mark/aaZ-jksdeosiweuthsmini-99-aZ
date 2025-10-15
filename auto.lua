@@ -173,7 +173,7 @@ return function(C, R, UI)
     --========================
     -- Plant Saplings (raycast from sky ahead)
     --========================
-    local AHEAD_DIST  = 1
+    local AHEAD_DIST  = 3
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
 
