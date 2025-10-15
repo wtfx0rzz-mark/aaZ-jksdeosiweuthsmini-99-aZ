@@ -329,9 +329,9 @@ return function(C, R, UI)
 
     CombatTab:Slider({
         Title = "Distance",
-        Value = { Min = 0, Max = 1000, Default = C.State.AuraRadius or 150 },
+        Value = { Min = 0, Max = 500, Default = C.State.AuraRadius or 100 },
         Callback = function(v)
-            C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 1000)
+            C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 500)
         end
     })
 end
