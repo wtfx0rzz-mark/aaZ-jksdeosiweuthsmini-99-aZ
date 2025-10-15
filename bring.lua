@@ -1,8 +1,3 @@
---=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
---  • Farthest-first
---  • Fix: start drag BEFORE moving logs (fresh-cut constraints)
---=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -28,12 +23,19 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    --========================
-    -- Utility
-    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function auraRadius()
+        return math.clamp(tonumber(C.State and C.State.AuraRadius) or 150, 0, 500)
+    end
+
+    local function withinRadius(pos)
+        local root = hrp()
+        if not root then return true end
+        return (pos - root.Position).Magnitude <= auraRadius()
     end
 
     local function isExcludedModel(m)
@@ -71,9 +73,6 @@ return function(C, R, UI)
         return t
     end
 
-    --========================
-    -- Drop positioning
-    --========================
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -91,9 +90,6 @@ return function(C, R, UI)
         return f and f:FindFirstChild(n) or nil
     end
 
-    --========================
-    -- Nudge after teleport
-    --========================
     local function nudgeAsync(entry, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
@@ -104,9 +100,6 @@ return function(C, R, UI)
         end)
     end
 
-    --========================
-    -- Teleport one (drag-first fix)
-    --========================
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
@@ -116,7 +109,6 @@ return function(C, R, UI)
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
 
-        -- Start dragging BEFORE we move so server-side constraints allow relocation
         local startRE = getRemote("RequestStartDraggingItem")
         local stopRE  = getRemote("StopDraggingItem")
         if startRE then pcall(function() startRE:FireServer(entry.model) end) end
@@ -132,7 +124,6 @@ return function(C, R, UI)
 
         nudgeAsync(entry, forward)
 
-        -- Stop drag shortly after to release server authority
         task.delay(0.08, function()
             if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
         end)
@@ -140,9 +131,6 @@ return function(C, R, UI)
         return true
     end
 
-    --========================
-    -- Collectors (farthest-first)
-    --========================
     local function sortedFarthest(list)
         local root = hrp()
         if not root then return list end
@@ -159,8 +147,8 @@ return function(C, R, UI)
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) then
                     local mp = mainPart(model)
-                    if mp then
-                        n += 1
+                    if mp and withinRadius(mp.Position) then
+                        n = n + 1
                         found[#found+1] = {model=model, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -177,8 +165,8 @@ return function(C, R, UI)
                 local nm = m.Name
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
                     local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
-                    if mp then
-                        n += 1
+                    if mp and withinRadius(mp.Position) then
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -194,8 +182,8 @@ return function(C, R, UI)
             if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
-                    if mp then
-                        n += 1
+                    if mp and withinRadius(mp.Position) then
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -212,8 +200,8 @@ return function(C, R, UI)
         for _,m in ipairs(items:GetChildren()) do
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
-                if mp then
-                    n += 1
+                if mp and withinRadius(mp.Position) then
+                    n = n + 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and n >= limit then break end
                 end
@@ -236,8 +224,8 @@ return function(C, R, UI)
 
                 if ok then
                     local mp = mainPart(m)
-                    if mp then
-                        n += 1
+                    if mp and withinRadius(mp.Position) then
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -247,9 +235,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    --========================
-    -- Dispatcher
-    --========================
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -272,15 +257,12 @@ return function(C, R, UI)
         for _,entry in ipairs(list) do
             if brought >= want then break end
             if teleportOne(entry) then
-                brought += 1
+                brought = brought + 1
                 task.wait(0.12)
             end
         end
     end
 
-    --========================
-    -- UI
-    --========================
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
