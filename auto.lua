@@ -1,10 +1,7 @@
 --=====================================================
--- 1337 Nights | Auto Tab • Edge Buttons + Lost Child TP
---  - Phase 10 / Teleport / Plant Saplings
---  - Teleport-to-Lost-Child: auto noclip for jump; scan stops after 4 saved
+-- 1337 Nights | Auto Tab • Edge Buttons + Lost Child Toggle
 --=====================================================
 return function(C, R, UI)
-    -- Services (defensive fallbacks)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
@@ -17,9 +14,6 @@ return function(C, R, UI)
         return
     end
 
-    --========================
-    -- Utilities
-    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -79,12 +73,8 @@ return function(C, R, UI)
         return (total > 0) and ((off / total) >= 0.9) or false
     end
 
-    --========================
-    -- Edge buttons (no Rayfield)
-    --========================
-    local PHASE_DIST = 10 -- Phase 10 forward distance
+    local PHASE_DIST = 10
 
-    -- Reuse a single ScreenGui; persist across respawns
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -101,7 +91,7 @@ return function(C, R, UI)
             b = Instance.new("TextButton")
             b.Name = name
             b.AnchorPoint = Vector2.new(1, 0)
-            b.Position    = UDim2.new(1, -6, 0, 6 + (row-1)*36) -- rows: 1,2,3
+            b.Position    = UDim2.new(1, -6, 0, 6 + (row-1)*36)
             b.Size        = UDim2.new(0, 120, 0, 30)
             b.Text        = label
             b.TextSize    = 12
@@ -121,14 +111,11 @@ return function(C, R, UI)
         return b
     end
 
-    -- Buttons (fixed rows)
     local phaseBtn = makeEdgeBtn("Phase10Edge", 1, "Phase 10")
     local tpBtn    = makeEdgeBtn("TpEdge",      2, "Teleport")
     local plantBtn = makeEdgeBtn("PlantEdge",   3, "Plant")
+    local lostBtn  = makeEdgeBtn("LostEdge",    4, "Lost Child")
 
-    --========================
-    -- Phase 10
-    --========================
     phaseBtn.MouseButton1Click:Connect(function()
         local root = hrp()
         if not root then return end
@@ -136,9 +123,6 @@ return function(C, R, UI)
         teleportTo(CFrame.new(dest, dest + root.CFrame.LookVector))
     end)
 
-    --========================
-    -- Teleport (hold to mark, tap to go)
-    --========================
     local markedCF = nil
     local HOLD_THRESHOLD = 0.5
     local downAt, suppressClick = 0, false
@@ -170,9 +154,6 @@ return function(C, R, UI)
         teleportTo(markedCF)
     end)
 
-    --========================
-    -- Plant Saplings (raycast from sky ahead)
-    --========================
     local AHEAD_DIST  = 3
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
@@ -247,13 +228,11 @@ return function(C, R, UI)
         plantNearestSaplingInFront()
     end)
 
-    --========================
-    -- Teleport to Lost Child (scan + click)
-    --========================
     local MAX_TO_SAVE   = 4
     local SCAN_INTERVAL = 0.5
     local savedCount    = 0
-    local knownLost     = {} -- [Model] = bool
+    local knownLost     = {}
+    local autoLostEnabled = false
 
     local function isLostChildModel(m)
         return m and m:IsA("Model") and m.Name:match("^Lost Child")
@@ -275,29 +254,6 @@ return function(C, R, UI)
         end
         return best
     end
-
-    -- background scanner: count when a Lost Child flips Lost=true -> false
-    task.spawn(function()
-        while savedCount < MAX_TO_SAVE do
-            for _,d in ipairs(WS:GetDescendants()) do
-                if isLostChildModel(d) then
-                    local cur = d:GetAttribute("Lost") == true
-                    local prev = knownLost[d]
-                    if prev == nil then
-                        knownLost[d] = cur
-                    elseif prev == true and cur == false then
-                        savedCount += 1
-                        knownLost[d] = cur
-                    else
-                        knownLost[d] = cur
-                    end
-                end
-            end
-            task.wait(SCAN_INTERVAL)
-        end
-        local btn = tab and tab._lostTpButton
-        if btn then btn.Visible = false end
-    end)
 
     local function teleportToNearestLost()
         if savedCount >= MAX_TO_SAVE then return end
@@ -322,14 +278,43 @@ return function(C, R, UI)
         end
     end
 
-    tab._lostTpButton = tab:Button({
-        Title = "Teleport to Lost Child",
-        Callback = function() teleportToNearestLost() end
-    })
+    lostBtn.MouseButton1Click:Connect(function()
+        teleportToNearestLost()
+    end)
 
-    --========================
-    -- Wind UI toggles for edge buttons
-    --========================
+    task.spawn(function()
+        while true do
+            for _,d in ipairs(WS:GetDescendants()) do
+                if isLostChildModel(d) then
+                    local cur = d:GetAttribute("Lost") == true
+                    local prev = knownLost[d]
+                    if prev == nil then
+                        knownLost[d] = cur
+                    elseif prev == true and cur == false then
+                        if savedCount < MAX_TO_SAVE then
+                            savedCount += 1
+                        end
+                        knownLost[d] = cur
+                    else
+                        knownLost[d] = cur
+                    end
+                end
+            end
+
+            local anyEligible = false
+            if savedCount < MAX_TO_SAVE and autoLostEnabled then
+                anyEligible = (findNearestEligibleLost() ~= nil)
+            end
+            lostBtn.Visible = anyEligible
+
+            if savedCount >= MAX_TO_SAVE then
+                lostBtn.Visible = false
+            end
+
+            task.wait(SCAN_INTERVAL)
+        end
+    end)
+
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
 
     tab:Toggle({
@@ -356,7 +341,17 @@ return function(C, R, UI)
         end
     })
 
-    -- Buttons persist across respawn; if PlayerGui is rebuilt externally, reattach
+    tab:Toggle({
+        Title = "Auto Teleport to Lost Child",
+        Value = false,
+        Callback = function(state)
+            autoLostEnabled = state
+            if not state then
+                lostBtn.Visible = false
+            end
+        end
+    })
+
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if edgeGui.Parent ~= playerGui then
             edgeGui.Parent = playerGui
