@@ -1,5 +1,7 @@
 --=====================================================
 -- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
+--  • Farthest-first
+--  • Fix: start drag BEFORE moving logs (fresh-cut constraints)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -26,6 +28,9 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
+    --========================
+    -- Utility
+    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -66,6 +71,9 @@ return function(C, R, UI)
         return t
     end
 
+    --========================
+    -- Drop positioning
+    --========================
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -83,20 +91,12 @@ return function(C, R, UI)
         return f and f:FindFirstChild(n) or nil
     end
 
-    local function quickDrag(model)
-        local startRE = getRemote("RequestStartDraggingItem")
-        local stopRE  = getRemote("StopDraggingItem")
-        if not (startRE and stopRE) then return end
-        pcall(function() startRE:FireServer(model) end)
-        task.wait(0.04)
-        pcall(function() stopRE:FireServer(model) end)
-    end
-
-    local function dropAndNudgeAsync(entry, dropCF, forward)
+    --========================
+    -- Nudge after teleport
+    --========================
+    local function nudgeAsync(entry, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            quickDrag(entry.model)
-            task.wait(0.08)
             local v = forward * 6 + Vector3.new(0, -30, 0)
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
@@ -104,24 +104,45 @@ return function(C, R, UI)
         end)
     end
 
+    --========================
+    -- Teleport one (drag-first fix)
+    --========================
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
         if not entry.model.Parent or entry.part.Anchored then return false end
         if isExcludedModel(entry.model) then return false end
+
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
+
+        -- Start dragging BEFORE we move so server-side constraints allow relocation
+        local startRE = getRemote("RequestStartDraggingItem")
+        local stopRE  = getRemote("StopDraggingItem")
+        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
+        task.wait(0.03)
+
         pcall(function() entry.part:SetNetworkOwner(lp) end)
+
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
         else
             entry.part.CFrame = dropCF
         end
-        dropAndNudgeAsync(entry, dropCF, forward)
+
+        nudgeAsync(entry, forward)
+
+        -- Stop drag shortly after to release server authority
+        task.delay(0.08, function()
+            if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
+        end)
+
         return true
     end
 
-    -- farthest-first
+    --========================
+    -- Collectors (farthest-first)
+    --========================
     local function sortedFarthest(list)
         local root = hrp()
         if not root then return list end
@@ -226,6 +247,9 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
+    --========================
+    -- Dispatcher
+    --========================
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -254,6 +278,9 @@ return function(C, R, UI)
         end
     end
 
+    --========================
+    -- UI
+    --========================
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
