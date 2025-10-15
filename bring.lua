@@ -27,6 +27,12 @@ return function(C, R, UI)
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
 
+    local function auraRadius()
+        local S = C.State or {}
+        local r = tonumber(S.AuraRadius) or 150
+        return math.max(0, r)
+    end
+
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return false end
         local n = m.Name:lower()
@@ -89,7 +95,7 @@ return function(C, R, UI)
     local function nudgeAsync(entry, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            local v = forward * 3 + Vector3.new(0, -12, 0)
+            local v = forward * 3 + Vector3.new(0, -8, 0)
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
             end
@@ -136,13 +142,26 @@ return function(C, R, UI)
         return true
     end
 
-    local function sortedFarthest(list)
+    local function withinRadius(partPos, origin, rad)
+        return (partPos - origin).Magnitude <= rad
+    end
+
+    local function sortedFarthestFiltered(list)
         local root = hrp()
-        if not root then return list end
-        table.sort(list, function(a,b)
-            return (a.part.Position - root.Position).Magnitude > (b.part.Position - root.Position).Magnitude
-        end)
-        return list
+        if not root then return {} end
+        local origin = root.Position
+        local rad = auraRadius()
+        local kept = {}
+        for i = 1, #list do
+            local e = list[i]
+            local d = (e.part.Position - origin).Magnitude
+            if d <= rad then
+                e._d = d
+                kept[#kept+1] = e
+            end
+        end
+        table.sort(kept, function(a,b) return a._d > b._d end)
+        return kept
     end
 
     local function modelFrom(candidate)
@@ -192,34 +211,29 @@ return function(C, R, UI)
         if not (m and m:IsA("Model")) then return false end
         if m.Name ~= "Log" then return false end
         local items = WS:FindFirstChild("Items")
-        if not items or m.Parent ~= items then return false end
-        local hasMain = m:FindFirstChild("Main")
-        if not hasMain then return false end
-        local ok = false
+        if items and m.Parent ~= items then return false end
         for _,d in ipairs(m:GetDescendants()) do
-            if d:IsA("BasePart") and d.Name:lower() == "log_cylinder" then
-                ok = true
-                break
-            end
+            if d:IsA("BasePart") then return true end
         end
-        return ok
+        return false
     end
 
     local function collectLogsStrict(limit)
         local out, n = {}, 0
         local items = WS:FindFirstChild("Items")
-        if not items then return out end
-        for _,m in ipairs(items:GetChildren()) do
-            if n == limit then break end
-            if isPickupLog(m) and not isExcludedModel(m) and not hasHumanoid(m) then
-                local mp = mainPart(m)
-                if mp then
-                    n = n + 1
-                    out[#out+1] = {model=m, part=mp}
+        if items then
+            for _,m in ipairs(items:GetChildren()) do
+                if limit and n >= limit then break end
+                if isPickupLog(m) and not isExcludedModel(m) and not hasHumanoid(m) then
+                    local mp = mainPart(m)
+                    if mp then
+                        n = n + 1
+                        out[#out+1] = {model=m, part=mp}
+                    end
                 end
             end
         end
-        return sortedFarthest(out)
+        return sortedFarthestFiltered(out)
     end
 
     local function collectByNameFuzzy(name, limit)
@@ -240,7 +254,7 @@ return function(C, R, UI)
                 list[#list+1] = e
             end
         end
-        return sortedFarthest(list)
+        return sortedFarthestFiltered(list)
     end
 
     local function collectMossyCoins(limit)
@@ -258,7 +272,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedFarthest(out)
+        return sortedFarthestFiltered(out)
     end
 
     local function collectCultists(limit)
@@ -275,7 +289,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedFarthest(out)
+        return sortedFarthestFiltered(out)
     end
 
     local function collectSaplings(limit)
@@ -294,7 +308,7 @@ return function(C, R, UI)
             end
         end
         if limit and n >= limit then
-            return sortedFarthest(out)
+            return sortedFarthestFiltered(out)
         end
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
@@ -306,7 +320,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedFarthest(out)
+        return sortedFarthestFiltered(out)
     end
 
     local function collectPelts(which, limit)
@@ -332,7 +346,7 @@ return function(C, R, UI)
                 end
             end
         end
-        return sortedFarthest(out)
+        return sortedFarthestFiltered(out)
     end
 
     local function bringSelected(name, count)
