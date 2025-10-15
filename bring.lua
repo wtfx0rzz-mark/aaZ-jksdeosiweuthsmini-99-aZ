@@ -6,7 +6,7 @@ return function(C, R, UI)
 
     local tab = (UI and UI.Tabs and UI.Tabs.Bring) or error("Bring tab not found")
 
-    local AMOUNT_TO_BRING = 50
+    local AMOUNT_TO_BRING = 10
     local DROP_FORWARD = 3
     local DROP_UP      = 4
     local running      = false
