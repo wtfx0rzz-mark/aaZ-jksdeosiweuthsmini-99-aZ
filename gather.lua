@@ -5,19 +5,23 @@ return function(C, R, UI)
     local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
 
     local lp  = Players.LocalPlayer
-    local tab = UI and UI.Tabs and UI.Tabs.Gather
-    if not tab then return end
+    local Tabs = UI and UI.Tabs or {}
+    local tab  = Tabs.Gather
+    assert(tab, "Gather tab not found in UI")
 
+    -- Tunables
     local MAX_CARRY      = 50
     local DEFAULT_RADIUS = 80
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
 
+    -- Remotes
     local RemoteFolder = RS:FindFirstChild("RemoteEvents")
     local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem")
     local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem")
 
-    local carried   = {}
+    -- State
+    local carried   = {}   -- [Model]=true
     local carryList = {}
     local carryCount = 0
     local enabled = false
@@ -26,11 +30,12 @@ return function(C, R, UI)
     local carryDepth  = DEFAULT_DEPTH
     local baselineY = nil
     local rsConn = nil
-    local scanThread = nil
+    local scanThreadRunning = false
 
-    local function toList(tbl)
-        local out, n = {}, 0
-        for k in pairs(tbl) do n = n + 1; out[n] = k end
+    -- Helpers
+    local function toList(t)
+        local out = {}
+        for k in pairs(t) do out[#out+1] = k end
         return out
     end
 
@@ -42,15 +47,14 @@ return function(C, R, UI)
     local function groundBaselineY()
         local root = hrp(); if not root then return nil end
         local origin = root.Position + Vector3.new(0, 500, 0)
-        local result = WS:Raycast(origin, Vector3.new(0, -2000, 0))
-        return result and result.Position.Y or (root.Position.Y - 10)
+        local rc = WS:Raycast(origin, Vector3.new(0, -2000, 0))
+        return rc and rc.Position.Y or (root.Position.Y - 10)
     end
 
     local function belowMapCFrame()
         local root = hrp(); if not (root and baselineY) then return nil end
         local pos = Vector3.new(root.Position.X, baselineY - carryDepth, root.Position.Z)
-        local look = root.CFrame.LookVector
-        return CFrame.new(pos, pos + look)
+        return CFrame.new(pos, pos + root.CFrame.LookVector)
     end
 
     local function mainPart(m)
@@ -64,28 +68,28 @@ return function(C, R, UI)
     end
 
     local function ensurePrimary(m)
-        if not (m and m:IsA("Model")) then return end
-        if m.PrimaryPart then return end
-        local p = m:FindFirstChildWhichIsA("BasePart")
-        if p then m.PrimaryPart = p end
+        if m and m:IsA("Model") and not m.PrimaryPart then
+            local p = m:FindFirstChildWhichIsA("BasePart")
+            if p then m.PrimaryPart = p end
+        end
     end
 
     local function matchesResource(name)
         local n = string.lower(name or "")
-        if resourceType == "Logs"   then return n:find("log", 1, true) ~= nil end
-        if resourceType == "Stone"  then return n:find("stone", 1, true) ~= nil or n:find("rock", 1, true) ~= nil end
+        if resourceType == "Logs"    then return n:find("log",   1, true) ~= nil end
+        if resourceType == "Stone"   then return n:find("stone", 1, true) or n:find("rock", 1, true) end
         if resourceType == "Berries" then return n:find("berry", 1, true) ~= nil end
         return false
     end
 
     local function blacklist(m)
         local n = string.lower(m.Name or "")
-        return n:find("trader", 1, true) or n:find("shopkeeper", 1, true)
+        -- avoid NPCs, traders, shopkeepers, campfire models
+        return n:find("trader", 1, true) or n:find("shopkeeper", 1, true) or n:find("campfire", 1, true)
     end
 
     local function addCarry(m)
-        if carried[m] then return false end
-        if carryCount >= MAX_CARRY then return false end
+        if carried[m] or carryCount >= MAX_CARRY then return false end
         carried[m] = true
         carryCount = carryCount + 1
         carryList = toList(carried)
@@ -100,21 +104,17 @@ return function(C, R, UI)
     end
 
     local function startDrag(m)
-        if not (StartDrag and m) then return end
-        pcall(function() StartDrag:FireServer(m) end)
+        if StartDrag and m then pcall(function() StartDrag:FireServer(m) end) end
     end
 
     local function stopDrag(m)
-        if not (StopDrag and m) then return end
-        pcall(function() StopDrag:FireServer(m) end)
+        if StopDrag and m then pcall(function() StopDrag:FireServer(m) end) end
     end
 
     local function clearRemoved()
         for i = #carryList, 1, -1 do
             local m = carryList[i]
-            if not (m and m.Parent) then
-                removeCarry(m)
-            end
+            if not (m and m.Parent) then removeCarry(m) end
         end
     end
 
@@ -123,13 +123,13 @@ return function(C, R, UI)
         if m:IsA("Model") then
             for _,d in ipairs(m:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    d.CanCollide = on and false or d.CanCollide
+                    if on then d.CanCollide = false end
                     d.Anchored = false
                     pcall(function() d:SetNetworkOwner(lp) end)
                 end
             end
         else
-            mp.CanCollide = on and false or mp.CanCollide
+            if on then mp.CanCollide = false end
             mp.Anchored = false
             pcall(function() mp:SetNetworkOwner(lp) end)
         end
@@ -153,32 +153,31 @@ return function(C, R, UI)
     end
 
     local function scanAndPickup()
-        while enabled do
-            clearRemoved()
-            local items = WS:FindFirstChild("Items")
-            local root = hrp()
-            if items and root then
-                local origin = root.Position
-                for _,m in ipairs(items:GetChildren()) do
-                    if not enabled then break end
-                    if carryCount >= MAX_CARRY then break end
-                    if m:IsA("Model") and not blacklist(m) and matchesResource(m.Name) then
-                        if not carried[m] then
+        if scanThreadRunning then return end
+        scanThreadRunning = true
+        task.spawn(function()
+            while enabled do
+                clearRemoved()
+                local items = WS:FindFirstChild("Items")
+                local root = hrp()
+                if items and root then
+                    local origin = root.Position
+                    for _,m in ipairs(items:GetChildren()) do
+                        if not enabled or carryCount >= MAX_CARRY then break end
+                        if m:IsA("Model") and not carried[m] and not blacklist(m) and matchesResource(m.Name) then
                             local mp = mainPart(m)
-                            if mp then
-                                local d = (mp.Position - origin).Magnitude
-                                if d <= carryRadius then
-                                    startDrag(m)
-                                    addCarry(m)
-                                    setNoCollide(m, true)
-                                end
+                            if mp and (mp.Position - origin).Magnitude <= carryRadius then
+                                startDrag(m)
+                                addCarry(m)
+                                setNoCollide(m, true)
                             end
                         end
                     end
                 end
+                task.wait(SCAN_INTERVAL)
             end
-            task.wait(SCAN_INTERVAL)
-        end
+            scanThreadRunning = false
+        end)
     end
 
     local function enable()
@@ -187,15 +186,13 @@ return function(C, R, UI)
         baselineY = groundBaselineY()
         if rsConn then rsConn:Disconnect() end
         rsConn = Run.RenderStepped:Connect(repositionAll)
-        if scanThread then task.cancel(scanThread) end
-        scanThread = task.spawn(scanAndPickup)
+        scanAndPickup()
     end
 
     local function disable()
         if not enabled then return end
         enabled = false
         if rsConn then rsConn:Disconnect(); rsConn = nil end
-        if scanThread then scanThread = nil end
         for m in pairs(carried) do
             stopDrag(m)
             setNoCollide(m, false)
@@ -205,7 +202,7 @@ return function(C, R, UI)
 
     local function modelSize(m)
         if m:IsA("Model") then
-            local cf, size = m:GetBoundingBox()
+            local _, size = m:GetBoundingBox()
             return size
         else
             local p = mainPart(m)
@@ -219,50 +216,50 @@ return function(C, R, UI)
         local colCount = 5
         local i = 0
         for _, m in ipairs(carryList) do
-            if not (m and m.Parent) then goto cont end
-            ensurePrimary(m)
-            local size = modelSize(m)
-            local stepX = math.max(3, size.X + 0.5)
-            local stepY = math.max(2.5, size.Y + 0.25)
-            local col = i % colCount
-            local row = math.floor(i / colCount)
-            local offsetX = (col - (colCount-1)/2) * stepX
-            local pos = basePos + Vector3.new(offsetX, row * stepY, 0)
-            local cf = CFrame.new(pos, pos + root.CFrame.LookVector)
+            if m and m.Parent then
+                ensurePrimary(m)
+                local size = modelSize(m)
+                local stepX = math.max(3, size.X + 0.5)
+                local stepY = math.max(2.5, size.Y + 0.25)
+                local col = i % colCount
+                local row = math.floor(i / colCount)
+                local offsetX = (col - (colCount-1)/2) * stepX
+                local pos = basePos + Vector3.new(offsetX, row * stepY, 0)
+                local cf = CFrame.new(pos, pos + root.CFrame.LookVector)
 
-            stopDrag(m)
-            if m:IsA("Model") and m.PrimaryPart then
-                pcall(function() m:PivotTo(cf) end)
-            else
+                stopDrag(m)
                 local mp = mainPart(m)
-                if mp then pcall(function() mp.CFrame = cf end) end
-            end
-            if m:IsA("Model") then
-                for _,d in ipairs(m:GetDescendants()) do
-                    if d:IsA("BasePart") then
-                        d.Anchored = true
-                        d.CanCollide = true
-                    end
+                if m:IsA("Model") and m.PrimaryPart then
+                    pcall(function() m:PivotTo(cf) end)
+                elseif mp then
+                    pcall(function() mp.CFrame = cf end)
                 end
-            else
-                local mp = mainPart(m)
-                if mp then mp.Anchored = true; mp.CanCollide = true end
+
+                if m:IsA("Model") then
+                    for _,d in ipairs(m:GetDescendants()) do
+                        if d:IsA("BasePart") then
+                            d.Anchored = true
+                            d.CanCollide = true
+                        end
+                    end
+                elseif mp then
+                    mp.Anchored = true
+                    mp.CanCollide = true
+                end
             end
             removeCarry(m)
-            ::cont::
             i = i + 1
         end
     end
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
         task.defer(function()
-            if enabled then
-                baselineY = groundBaselineY()
-            end
+            if enabled then baselineY = groundBaselineY() end
         end)
     end)
 
-    tab:Section({ Title = "Gather", Icon = "pickaxe" })
+    -- UI (match Bring tab style)
+    tab:Section({ Title = "Gather" })
 
     tab:Toggle({
         Title = "Carry Under Map",
@@ -277,21 +274,25 @@ return function(C, R, UI)
         Values = { "Logs", "Stone", "Berries" },
         Multi = false,
         AllowNone = false,
-        Callback = function(v)
-            resourceType = v and v[1] or resourceType
+        Callback = function(choice)
+            if choice and choice ~= "" then resourceType = choice end
         end
     })
 
     tab:Slider({
         Title = "Carry Radius",
         Value = { Min = 20, Max = 300, Default = DEFAULT_RADIUS },
-        Callback = function(v) carryRadius = math.clamp(tonumber(v) or DEFAULT_RADIUS, 10, 500) end
+        Callback = function(v)
+            carryRadius = math.clamp(tonumber(v) or DEFAULT_RADIUS, 10, 500)
+        end
     })
 
     tab:Slider({
         Title = "Depth Below Ground",
         Value = { Min = 10, Max = 100, Default = DEFAULT_DEPTH },
-        Callback = function(v) carryDepth = math.clamp(tonumber(v) or DEFAULT_DEPTH, 5, 200) end
+        Callback = function(v)
+            carryDepth = math.clamp(tonumber(v) or DEFAULT_DEPTH, 5, 200)
+        end
     })
 
     tab:Button({
@@ -301,5 +302,5 @@ return function(C, R, UI)
         end
     })
 
-    tab:Label({ Title = "Max Carry: "..tostring(MAX_CARRY) })
+    tab:Section({ Title = "Max Carry: "..tostring(MAX_CARRY) })
 end
