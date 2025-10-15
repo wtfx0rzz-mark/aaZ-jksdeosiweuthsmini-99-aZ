@@ -1,5 +1,5 @@
 return function(C, R, UI)
-    -- Services (defensive)
+    -- Services
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
@@ -16,7 +16,7 @@ return function(C, R, UI)
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
 
-    -- Safe clamp (avoid math.clamp edge cases)
+    -- Helpers
     local function clamp(v, lo, hi)
         v = tonumber(v) or lo
         if v < lo then return lo end
@@ -24,7 +24,7 @@ return function(C, R, UI)
         return v
     end
 
-    -- Remotes (optional)
+    -- Remotes
     local RemoteFolder = RS:FindFirstChild("RemoteEvents")
     local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem") or nil
     local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem") or nil
@@ -42,10 +42,9 @@ return function(C, R, UI)
     local rsConn = nil
     local scanRunning = false
 
-    -- Helpers
     local function toList(t)
         local out, n = {}, 0
-        for k in pairs(t) do n = n + 1; out[n] = k end
+        for k in pairs(t) do n += 1; out[n] = k end
         return out
     end
 
@@ -108,7 +107,7 @@ return function(C, R, UI)
     local function removeCarry(m)
         if not carried[m] then return end
         carried[m] = nil
-        carryCount = carryCount - 1
+        carryCount -= 1
         if carryCount < 0 then carryCount = 0 end
         carryList = toList(carried)
     end
@@ -135,13 +134,17 @@ return function(C, R, UI)
                 if d:IsA("BasePart") then
                     if on then d.CanCollide = false end
                     d.Anchored = false
-                    pcall(function() d:SetNetworkOwner(lp) end)
+                    if typeof(d.SetNetworkOwner) == "function" then
+                        pcall(function() d:SetNetworkOwner(lp) end)
+                    end
                 end
             end
         else
             if on then mp.CanCollide = false end
             mp.Anchored = false
-            pcall(function() mp:SetNetworkOwner(lp) end)
+            if typeof(mp.SetNetworkOwner) == "function" then
+                pcall(function() mp:SetNetworkOwner(lp) end)
+            end
         end
     end
 
@@ -210,55 +213,77 @@ return function(C, R, UI)
         carried, carryList, carryCount = {}, {}, 0
     end
 
-    local function modelSize(m)
+    local function dropPhysicsify(m, dropVelocity)
         if m:IsA("Model") then
-            local _, size = m:GetBoundingBox()
-            return size
+            for _,d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    d.Anchored = false
+                    d.CanCollide = true
+                    if typeof(d.SetNetworkOwner) == "function" then
+                        pcall(function() d:SetNetworkOwner(lp) end)
+                    end
+                    d.AssemblyAngularVelocity = Vector3.new(0, math.random() * 2, 0)
+                    d.AssemblyLinearVelocity  = dropVelocity
+                    d.Massless = false
+                end
+            end
         else
             local p = mainPart(m)
-            return p and p.Size or Vector3.new(2,2,2)
+            if p then
+                p.Anchored = false
+                p.CanCollide = true
+                if typeof(p.SetNetworkOwner) == "function" then
+                    pcall(function() p:SetNetworkOwner(lp) end)
+                end
+                p.AssemblyAngularVelocity = Vector3.new(0, math.random() * 2, 0)
+                p.AssemblyLinearVelocity  = dropVelocity
+                p.Massless = false
+            end
         end
     end
 
-    local function setItemsStack()
+    local function setItemsPileDrop()
         local root = hrp(); if not root then return end
-        local basePos = root.Position + Vector3.new(0, 10, 0)
-        local colCount = 5
-        local i = 0
-        for _, m in ipairs(carryList) do
+        -- stop the under-map tether for good measure while we place
+        if rsConn then rsConn:Disconnect(); rsConn = nil end
+
+        local forward = root.CFrame.LookVector
+        local pilePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
+
+        -- small jitter to avoid Z-fighting and promote natural pile
+        local function jitter()
+            return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8)
+        end
+
+        -- downward nudge so they definitely fall
+        local downVel = Vector3.new(0, -30, 0)
+
+        -- snapshot list to avoid mutation while iterating
+        local list = {}
+        for i = 1, #carryList do list[i] = carryList[i] end
+
+        for _, m in ipairs(list) do
             if m and m.Parent then
                 ensurePrimary(m)
-                local size = modelSize(m)
-                local stepX = (size and size.X or 2) + 0.5
-                if stepX < 3 then stepX = 3 end
-                local stepY = (size and size.Y or 2) + 0.25
-                if stepY < 2.5 then stepY = 2.5 end
-                local col = i % colCount
-                local row = math.floor(i / colCount)
-                local offsetX = (col - (colCount-1)/2) * stepX
-                local pos = basePos + Vector3.new(offsetX, row * stepY, 0)
-                local cf = CFrame.new(pos, pos + root.CFrame.LookVector)
-
                 stopDrag(m)
+
                 local mp = mainPart(m)
+                local targetCF = CFrame.new(pilePos + jitter(), pilePos + forward)
+
                 if m:IsA("Model") and m.PrimaryPart then
-                    pcall(function() m:PivotTo(cf) end)
+                    pcall(function() m:PivotTo(targetCF) end)
                 elseif mp then
-                    pcall(function() mp.CFrame = cf end)
+                    pcall(function() mp.CFrame = targetCF end)
                 end
 
-                if m:IsA("Model") then
-                    for _,d in ipairs(m:GetDescendants()) do
-                        if d:IsA("BasePart") then
-                            d.Anchored = true; d.CanCollide = true
-                        end
-                    end
-                elseif mp then
-                    mp.Anchored = true; mp.CanCollide = true
-                end
+                dropPhysicsify(m, downVel)
             end
             removeCarry(m)
-            i = i + 1
+        end
+
+        -- if user keeps the toggle on, restart tether for remaining future pickups
+        if enabled and not rsConn then
+            rsConn = Run.RenderStepped:Connect(repositionAll)
         end
     end
 
@@ -269,7 +294,7 @@ return function(C, R, UI)
         end)
     end)
 
-    -- UI (same style as Bring)
+    -- UI
     tab:Section({ Title = "Gather" })
 
     tab:Toggle({
@@ -304,7 +329,7 @@ return function(C, R, UI)
 
     tab:Button({
         Title = "Set Items",
-        Callback = setItemsStack
+        Callback = setItemsPileDrop
     })
 
     tab:Section({ Title = "Max Carry: "..tostring(MAX_CARRY) })
