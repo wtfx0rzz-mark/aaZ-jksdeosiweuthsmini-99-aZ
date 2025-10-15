@@ -10,28 +10,24 @@ return function(C, R, UI)
     local tab = UI.Tabs and UI.Tabs.Player
     assert(tab, "Player tab not found in UI")
 
-    -- State
     local flyEnabled       = false
     local mobileFlyEnabled = false
     local FLYING           = false
-    local flySpeed         = 3    -- default startup value
-    local walkSpeedValue   = 24   -- default startup value
+    local flySpeed         = 3
+    local walkSpeedValue   = 24
+    local speedEnabled     = false
 
-    -- Force Fly state (UI-free engine)
     local forceFlyEnabled  = false
     local forceFlyConn     = nil
     local forceDesiredPos  = nil
     local forceLastFaceDir = nil
 
-    -- Connections / instances for cleanup
     local keyDownConn, keyUpConn, jumpConn, noclipConn, renderConn
     local mobileAddedConn, mobileRenderConn
     local bodyGyro, bodyVelocity
 
-    -- Keep references to toggle controls so we can programmatically switch them
     local EnableFlyToggleCtrl, ForceFlyToggleCtrl
 
-    -- Utilities
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
@@ -44,7 +40,7 @@ return function(C, R, UI)
     local function disconnectConn(c) if c then pcall(function() c:Disconnect() end) end end
 
     --========================
-    -- Desktop Fly (WASD+QE)
+    -- Desktop Fly
     --========================
     local function startDesktopFly()
         if FLYING then return end
@@ -66,7 +62,6 @@ return function(C, R, UI)
         bodyVelocity.Parent = root
 
         local CONTROL = {F=0,B=0,L=0,R=0,Q=0,E=0}
-        local LAST    = {F=0,B=0,L=0,R=0}
 
         keyDownConn = UIS.InputBegan:Connect(function(input, gpe)
             if gpe or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
@@ -99,17 +94,17 @@ return function(C, R, UI)
 
             local moveVec = Vector3.new()
             if CONTROL.F ~= 0 or CONTROL.B ~= 0 then
-                moveVec += cam.CFrame.LookVector * (CONTROL.F + CONTROL.B)
+                moveVec = moveVec + cam.CFrame.LookVector * (CONTROL.F + CONTROL.B)
             end
             if CONTROL.L ~= 0 or CONTROL.R ~= 0 then
-                moveVec += cam.CFrame.RightVector * (CONTROL.R + CONTROL.L)
+                moveVec = moveVec + cam.CFrame.RightVector * (CONTROL.R + CONTROL.L)
             end
             if CONTROL.Q ~= 0 or CONTROL.E ~= 0 then
-                moveVec += cam.CFrame.UpVector * (CONTROL.Q + CONTROL.E)
+                moveVec = moveVec + cam.CFrame.UpVector * (CONTROL.Q + CONTROL.E)
             end
+
             if moveVec.Magnitude > 0 then
                 bodyVelocity.Velocity = moveVec.Unit * (flySpeed * 50)
-                LAST = {F=CONTROL.F,B=CONTROL.B,L=CONTROL.L,R=CONTROL.R}
             else
                 bodyVelocity.Velocity = Vector3.new()
             end
@@ -128,7 +123,7 @@ return function(C, R, UI)
     end
 
     --========================
-    -- Mobile Fly (thumbstick)
+    -- Mobile Fly
     --========================
     local function startMobileFly()
         if FLYING then return end
@@ -149,7 +144,6 @@ return function(C, R, UI)
         bodyVelocity.Velocity = Vector3.new()
         bodyVelocity.Parent = root
 
-        -- keep BG/BV across respawn
         mobileAddedConn = Players.LocalPlayer.CharacterAdded:Connect(function()
             root = hrp()
             if not root then return end
@@ -172,7 +166,6 @@ return function(C, R, UI)
             hum.PlatformStand = true
             bodyGyro.CFrame = cam.CFrame
 
-            -- Use Roblox PlayerModule move vector (safe fallback to UIS if absent)
             local move = Vector3.new()
             local ok, controlModule = pcall(function()
                 return require(lp.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
@@ -182,8 +175,8 @@ return function(C, R, UI)
             end
 
             local vel = Vector3.new()
-            vel += cam.CFrame.RightVector * (move.X * (flySpeed * 50))
-            vel += -cam.CFrame.LookVector * (move.Z * (flySpeed * 50))
+            vel = vel + cam.CFrame.RightVector * (move.X * (flySpeed * 50))
+            vel = vel - cam.CFrame.LookVector  * (move.Z * (flySpeed * 50))
             bodyVelocity.Velocity = vel
         end)
     end
@@ -212,7 +205,7 @@ return function(C, R, UI)
     end
 
     --========================
-    -- Force Fly (UI-free, camera + MoveDirection)
+    -- Force Fly
     --========================
     local PITCH_DEADZONE = 0.22
     local function startForceFly()
@@ -233,13 +226,11 @@ return function(C, R, UI)
 
             h.PlatformStand = true
 
-            -- planar based on Humanoid.MoveDirection (normalized)
             local move = h.MoveDirection
             local planar = Vector3.new(move.X,0,move.Z)
             local mag = planar.Magnitude
             if mag > 1e-3 then planar = planar / mag else planar = Vector3.zero end
 
-            -- vertical from camera pitch when moving
             local lookY = cam.CFrame.LookVector.Y
             local vert = 0
             if mag > 1e-3 then
@@ -251,12 +242,11 @@ return function(C, R, UI)
             end
 
             local delta = Vector3.zero
-            if mag > 1e-3 then delta += planar * (flySpeed * 50 * dt) end
-            if vert ~= 0 then delta += Vector3.new(0, vert * dt, 0) end
+            if mag > 1e-3 then delta = delta + planar * (flySpeed * 50 * dt) end
+            if vert ~= 0 then delta = delta + Vector3.new(0, vert * dt, 0) end
 
             forceDesiredPos = (forceDesiredPos or r.Position) + delta
 
-            -- zero physics and set CFrame to desired
             r.AssemblyLinearVelocity  = Vector3.new()
             r.AssemblyAngularVelocity = Vector3.new()
 
@@ -331,21 +321,18 @@ return function(C, R, UI)
     --========================
     tab:Section({ Title = "Player • Movement", Icon = "activity" })
 
-    -- Apply A: set slider defaults to desired startup values (3 and 24)
     tab:Slider({
         Title = "Fly Speed",
-        Value = { Min = 1, Max = 20, Default = 3 }, -- was 1
+        Value = { Min = 1, Max = 20, Default = 3 },
         Callback = function(v)
             flySpeed = tonumber(v) or flySpeed
         end
     })
 
-    -- Keep a handle so we can programmatically flip it off
     EnableFlyToggleCtrl = tab:Toggle({
         Title = "Enable Fly",
         Value = false,
         Callback = function(state)
-            -- mutual exclusion with Force Fly
             if state and forceFlyEnabled then
                 stopForceFly()
                 if ForceFlyToggleCtrl and ForceFlyToggleCtrl.Set then
@@ -360,11 +347,13 @@ return function(C, R, UI)
     tab:Divider()
     tab:Section({ Title = "Walk Speed", Icon = "walk" })
 
+    -- Order-independent speed: slider applies live when toggle is on
     tab:Slider({
         Title = "Speed",
-        Value = { Min = 16, Max = 150, Default = 24 }, -- was 16
+        Value = { Min = 16, Max = 150, Default = 24 },
         Callback = function(v)
             walkSpeedValue = tonumber(v) or walkSpeedValue
+            if speedEnabled then setWalkSpeed(walkSpeedValue) end
         end
     })
 
@@ -372,6 +361,7 @@ return function(C, R, UI)
         Title = "Enable Speed",
         Value = false,
         Callback = function(state)
+            speedEnabled = state
             if state then setWalkSpeed(walkSpeedValue) else setWalkSpeed(16) end
         end
     })
@@ -395,12 +385,10 @@ return function(C, R, UI)
         end
     })
 
-    -- New toggle at the very bottom: Force Fly
     ForceFlyToggleCtrl = tab:Toggle({
         Title = "Force Fly",
         Value = false,
         Callback = function(state)
-            -- mutual exclusion with normal Fly
             if state and flyEnabled then
                 flyEnabled = false
                 stopFly()
@@ -408,15 +396,10 @@ return function(C, R, UI)
                     EnableFlyToggleCtrl:Set(false)
                 end
             end
-            if state then
-                startForceFly()
-            else
-                stopForceFly()
-            end
+            if state then startForceFly() else stopForceFly() end
         end
     })
 
-    -- Optional: safety cleanup if character resets while flying
     lp.CharacterAdded:Connect(function()
         if flyEnabled then
             task.defer(function()
@@ -428,6 +411,11 @@ return function(C, R, UI)
             task.defer(function()
                 stopForceFly()
                 startForceFly()
+            end)
+        end
+        if speedEnabled then
+            task.defer(function()
+                setWalkSpeed(walkSpeedValue)
             end)
         end
     end)
