@@ -1,11 +1,12 @@
 --=====================================================
--- 1337 Nights | Gather Module (Bring-style UI + Morsel drop fix)
+-- 1337 Nights | Gather Module (Bring-style UI + Place edge button)
 --  • Top [Bring] drops all gathered items
---  • Bring tab dropdowns replicated with per-category [Gather ...] buttons
---  • One active target = last Gather button clicked
---  • Hover-carry items 5u above HRP while gathering
---  • Grounded placement via raycast; spread, restore physics
---  • Morsel-specific: return net ownership to server on drop so fire/drag work
+--  • Per-category dropdowns + "Gather <Category>" buttons
+--  • Last Gather button clicked = active target
+--  • Hover-carry 5u above HRP; grounded placement via raycast
+--  • Morsel: return net ownership to server on drop so fire/drag work
+--  • NEW: "Place" on-screen edge button appears when Gather starts,
+--         disappears after any drop (edge or tab "Bring")
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -17,7 +18,7 @@ return function(C, R, UI)
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
 
-    -- Bring taxonomy (copy)
+    -- Bring taxonomy
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
@@ -32,7 +33,7 @@ return function(C, R, UI)
         Medical = medicalItems[1], WA = weaponsArmor[1], Misc = ammoMisc[1], Pelts = pelts[1],
     }
 
-    -- Active gather target (set by last Gather button)
+    -- Active target (set by last Gather button)
     local sel = { name=nil, special=nil }  -- special ∈ {"mossy","cultist","sapling"} or nil
 
     -- Tunables
@@ -44,9 +45,9 @@ return function(C, R, UI)
     local scanConn, hoverConn = nil, nil
     local gathered, list = {}, {}
 
-    --========================
+    ----------------------------------------------------------------------
     -- Helpers
-    --========================
+    ----------------------------------------------------------------------
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -104,9 +105,9 @@ return function(C, R, UI)
     end
     local function clearAll() for m,_ in pairs(gathered) do gathered[m]=nil end; table.clear(list) end
 
-    --========================
+    ----------------------------------------------------------------------
     -- Matching
-    --========================
+    ----------------------------------------------------------------------
     local function isSelectedModel(m)
         if not sel.name and not sel.special then return false end
         if sel.special == "mossy" then
@@ -120,16 +121,16 @@ return function(C, R, UI)
         end
     end
 
-    --========================
+    ----------------------------------------------------------------------
     -- Capture + Hover
-    --========================
+    ----------------------------------------------------------------------
     local lastScan = 0
     local function captureIfNear()
         local now = os.clock()
         if now - lastScan < scanInterval then return end
         lastScan = now
-
         if not gatherOn then return end
+
         local root = hrp(); if not root then return end
         local origin = root.Position
         local rad = auraRadius()
@@ -174,6 +175,8 @@ return function(C, R, UI)
         gatherOn = true
         scanConn  = Run.Heartbeat:Connect(captureIfNear)
         hoverConn = Run.RenderStepped:Connect(hoverFollow)
+        -- edge button: show when gathering starts
+        if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = true end
     end
     local function stopGather()
         gatherOn = false
@@ -181,9 +184,9 @@ return function(C, R, UI)
         if hoverConn then pcall(function() hoverConn:Disconnect() end) end; hoverConn=nil
     end
 
-    --========================
+    ----------------------------------------------------------------------
     -- Placement
-    --========================
+    ----------------------------------------------------------------------
     local function groundAheadCF()
         local root = hrp(); if not root then return nil end
         local forward = root.CFrame.LookVector
@@ -205,7 +208,10 @@ return function(C, R, UI)
 
     local function placeDown()
         local baseCF = groundAheadCF(); if not baseCF then return end
-        stopGather() -- avoid immediate re-capture during drop
+
+        -- hide edge button immediately; also stop gather to avoid re-capture
+        if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
+        stopGather()
 
         for i,m in ipairs(list) do
             if m and m.Parent then
@@ -216,12 +222,10 @@ return function(C, R, UI)
         end
 
         task.wait(0.05)
-
         for _,m in ipairs(list) do
             if m and m.Parent then
                 setAnchoredModel(m, false)
                 setNoCollideModel(m, false)
-
                 if m.Name == "Morsel" then
                     local mp = mainPart(m)
                     if mp then
@@ -231,9 +235,7 @@ return function(C, R, UI)
                     for _,p in ipairs(m:GetDescendants()) do
                         if p:IsA("BasePart") then
                             p.CollisionGroupId = 0
-                            p.CanCollide = true
-                            p.CanTouch   = true
-                            p.CanQuery   = true
+                            p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
                             p.Massless   = false
                             p.AssemblyLinearVelocity = Vector3.new(0, -30, 0)
                         end
@@ -247,15 +249,19 @@ return function(C, R, UI)
                 end
             end
         end
-
         clearAll()
     end
 
-    --========================
+    -- Export small API for other modules (optional)
+    C.Gather = C.Gather or {}
+    C.Gather.IsOn     = function() return gatherOn end
+    C.Gather.PlaceDown= placeDown
+
+    ----------------------------------------------------------------------
     -- UI
-    --========================
+    ----------------------------------------------------------------------
     tab:Section({ Title = "Bring", Icon = "box" })
-    tab:Button({ Title = "Bring", Callback = placeDown })
+    tab:Button({ Title = "Bring", Callback = function() placeDown() end })
     tab:Divider()
 
     local function dropdownSingle(args)
@@ -313,8 +319,52 @@ return function(C, R, UI)
     dropdownSingle({ title="Select Pelt", values=pelts, key="Pelts" })
     gatherButton("Gather Pelts", function() return pick.Pelts, nil end)
 
-    -- Respawn safety
+    ----------------------------------------------------------------------
+    -- Edge "Place" button (shared screen GUI)
+    ----------------------------------------------------------------------
+    local function ensurePlaceEdge()
+        local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
+        local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
+        if not edgeGui then
+            edgeGui = Instance.new("ScreenGui")
+            edgeGui.Name = "EdgeButtons"
+            edgeGui.ResetOnSpawn = false
+            edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+            edgeGui.Parent = playerGui
+        end
+        local btn = edgeGui:FindFirstChild("PlaceEdge")
+        if not btn then
+            btn = Instance.new("TextButton")
+            btn.Name = "PlaceEdge"
+            btn.AnchorPoint = Vector2.new(1, 0)
+            -- Same baseline position as other edge buttons; Auto tab will re-layout if present
+            btn.Position    = UDim2.new(1, -6, 0, 6)
+            btn.Size        = UDim2.new(0, 120, 0, 30)
+            btn.Text        = "Place"
+            btn.TextSize    = 12
+            btn.Font        = Enum.Font.GothamBold
+            btn.BackgroundColor3 = Color3.fromRGB(30,30,35)
+            btn.TextColor3  = Color3.new(1,1,1)
+            btn.BorderSizePixel = 0
+            btn.Visible     = false
+            btn.Parent      = edgeGui
+            local corner  = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = btn
+        end
+        return btn
+    end
+
+    _G._PlaceEdgeBtn = ensurePlaceEdge()
+    _G._PlaceEdgeBtn.MouseButton1Click:Connect(function()
+        -- acts like secondary Bring; hide then drop
+        _G._PlaceEdgeBtn.Visible = false
+        placeDown()
+    end)
+
+    -- Hide edge button on respawn
     lp.CharacterAdded:Connect(function()
+        if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
         if gatherOn then task.defer(function() stopGather(); startGather() end) end
     end)
 end
