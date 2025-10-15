@@ -1,378 +1,246 @@
+--=====================================================
+-- 1337 Nights | Gather Module
+--  • Captures targets within AuraRadius
+--  • Hover carry: 5 studs above HRP, tight stack
+--  • Place Down: moves 5 forward + 5 up, spreads, re-enables physics
+--  • Auto-turn-off gather before drop
+--=====================================================
 return function(C, R, UI)
-    -- Services
-    local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
-    local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
-    local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
-    local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
+    local Players = C.Services.Players
+    local RS      = C.Services.RS
+    local WS      = C.Services.WS
+    local Run     = C.Services.Run
 
-    -- UI tab
-    local Tabs = (UI and UI.Tabs) or {}
-    local tab  = Tabs.Gather
-    if not tab then return end
-
-    ----------------------------------------------------------------
-    -- Tunables
-    ----------------------------------------------------------------
-    local MAX_CARRY      = 100
-    local DEFAULT_RADIUS = 80
-    local DEFAULT_DEPTH  = 35
-    local SCAN_INTERVAL  = 0.25
-
-    ----------------------------------------------------------------
-    -- Helpers
-    ----------------------------------------------------------------
-    local function clamp(v, lo, hi)
-        v = tonumber(v) or lo
-        if v < lo then return lo end
-        if v > hi then return hi end
-        return v
-    end
-
-    local function setToggleCompat(handle, state)
-        if not handle then return end
-        local ok = false
-        ok = ok or pcall(function() if handle.SetValue then handle:SetValue(state) end end)
-        ok = ok or pcall(function() if handle.SetState then handle:SetState(state) end end)
-        ok = ok or pcall(function() if handle.Set then handle:Set(state) end end)
-        ok = ok or pcall(function() if handle.Update then handle:Update(state) end end)
-        ok = ok or pcall(function() if handle.Value ~= nil then handle.Value = state end end)
-        return ok
-    end
-
-    ----------------------------------------------------------------
-    -- Remotes
-    ----------------------------------------------------------------
-    local RemoteFolder = RS:FindFirstChild("RemoteEvents")
-    local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem") or nil
-    local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem") or nil
-
-    ----------------------------------------------------------------
-    -- State
-    ----------------------------------------------------------------
     local lp  = Players.LocalPlayer
-    local carried   = {}   -- [Model]=true
-    local carryList = {}
-    local carryCount = 0
+    local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
+    assert(tab, "Gather tab not found (use UI.Tabs.Gather or UI.Tabs.Auto)")
 
-    local gatherEnabled = false     -- user toggle state
-    local scanningOn    = false     -- background scanner running
-    local tetherOn      = false     -- under-map repositioner running
+    local SELECT_VALUES = {"Log"}
+    local selectedName  = SELECT_VALUES[1]
 
-    local resourceType = "Logs"
-    local carryRadius = DEFAULT_RADIUS
-    local carryDepth  = DEFAULT_DEPTH
-    local baselineY = nil
-    local rsConn = nil
-    local scanThreadRunning = false
-    local gatherToggleHandle = nil
+    local gatherOn      = false
+    local hoverHeight   = 5
+    local forwardDrop   = 5
+    local upDrop        = 5
 
-    ----------------------------------------------------------------
-    -- Common fns
-    ----------------------------------------------------------------
-    local function toList(t)
-        local out = {}
-        for k in pairs(t) do out[#out+1] = k end
-        return out
-    end
+    local scanConn, hoverConn
+    local gathered = {}      -- { [model]=true }
+    local gatheredList = {}  -- array of models for ordering
+    local GatherToggleCtrl
 
     local function hrp()
-        local ch = lp and (lp.Character or lp.CharacterAdded:Wait())
+        local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
-
-    local function groundBaselineY()
-        local root = hrp(); if not root then return nil end
-        local origin = root.Position + Vector3.new(0, 500, 0)
-        local rc = WS:Raycast(origin, Vector3.new(0, -2000, 0))
-        return rc and rc.Position.Y or (root.Position.Y - 10)
+    local function humanoid()
+        local ch = lp.Character
+        return ch and ch:FindFirstChildOfClass("Humanoid")
     end
-
-    local function belowMapCFrame()
-        local root = hrp(); if not (root and baselineY) then return nil end
-        local pos = Vector3.new(root.Position.X, baselineY - carryDepth, root.Position.Z)
-        return CFrame.new(pos, pos + root.CFrame.LookVector)
+    local function auraRadius()
+        return math.clamp(tonumber(C.State and C.State.AuraRadius) or 150, 0, 500)
     end
-
-    local function mainPart(m)
-        if not m then return nil end
-        if m:IsA("Model") then
-            return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
-        elseif m:IsA("BasePart") then
-            return m
+    local function mainPart(obj)
+        if not obj then return nil end
+        if obj:IsA("BasePart") then return obj end
+        if obj:IsA("Model") then
+            if obj.PrimaryPart then return obj.PrimaryPart end
+            return obj:FindFirstChildWhichIsA("BasePart")
         end
         return nil
     end
-
-    local function ensurePrimary(m)
-        if m and m:IsA("Model") and not m.PrimaryPart then
-            local p = m:FindFirstChildWhichIsA("BasePart")
-            if p then m.PrimaryPart = p end
-        end
+    local function getRemote(n)
+        local f = RS:FindFirstChild("RemoteEvents")
+        return f and f:FindFirstChild(n) or nil
     end
-
-    local function matchesResource(name)
-        local n = string.lower(name or "")
-        if resourceType == "Logs"    then return n:find("log",   1, true) ~= nil end
-        if resourceType == "Stone"   then return n:find("stone", 1, true) or n:find("rock", 1, true) end
-        if resourceType == "Berries" then return n:find("berry", 1, true) ~= nil end
-        return false
-    end
-
-    local function blacklist(m)
-        local n = string.lower(m.Name or "")
-        return n:find("trader", 1, true) or n:find("shopkeeper", 1, true) or n:find("campfire", 1, true)
-    end
-
-    local function addCarry(m)
-        if carried[m] or carryCount >= MAX_CARRY then return false end
-        carried[m] = true
-        carryCount = carryCount + 1
-        carryList = toList(carried)
-        return true
-    end
-
-    local function removeCarry(m)
-        if not carried[m] then return end
-        carried[m] = nil
-        carryCount = carryCount - 1
-        if carryCount < 0 then carryCount = 0 end
-        carryList = toList(carried)
-    end
-
     local function startDrag(m)
-        if StartDrag and m then pcall(function() StartDrag:FireServer(m) end) end
+        local re = getRemote("RequestStartDraggingItem")
+        if re then pcall(function() re:FireServer(m) end) end
     end
-
     local function stopDrag(m)
-        if StopDrag and m then pcall(function() StopDrag:FireServer(m) end) end
+        local re = getRemote("StopDraggingItem")
+        if re then pcall(function() re:FireServer(m) end) end
     end
-
-    local function setNoCollide(m, on)
-        local mp = mainPart(m); if not mp then return end
-        if m:IsA("Model") then
-            for _,d in ipairs(m:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    if on then d.CanCollide = false else d.CanCollide = true end
-                    d.Anchored = false
-                    if typeof(d.SetNetworkOwner) == "function" then
-                        pcall(function() d:SetNetworkOwner(lp) end)
-                    end
-                end
-            end
-        else
-            if on then mp.CanCollide = false else mp.CanCollide = true end
-            mp.Anchored = false
-            if typeof(mp.SetNetworkOwner) == "function" then
-                pcall(function() mp:SetNetworkOwner(lp) end)
+    local function setNoCollideModel(m, on)
+        for _,d in ipairs(m:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.CanCollide = not on and true or false
+                d.CanQuery   = not on and true or false
+                d.CanTouch   = not on and true or false
+                d.Massless   = on and true or d.Massless
+                d.AssemblyLinearVelocity = Vector3.new()
+                d.AssemblyAngularVelocity = Vector3.new()
             end
         end
     end
-
-    ----------------------------------------------------------------
-    -- Tether + Scanner
-    ----------------------------------------------------------------
-    local function startTether()
-        if tetherOn then return end
-        tetherOn = true
-        if rsConn then rsConn:Disconnect(); rsConn = nil end
-        rsConn = Run.RenderStepped:Connect(function()
-            if not tetherOn then return end
-            local cf = belowMapCFrame(); if not cf then return end
-            for i = 1, #carryList do
-                local m = carryList[i]
-                if m and m.Parent then
-                    local mp = mainPart(m)
-                    if mp then
-                        if m:IsA("Model") and m.PrimaryPart then
-                            pcall(function() m:PivotTo(cf) end)
-                        else
-                            pcall(function() mp.CFrame = cf end)
-                        end
-                    end
-                end
+    local function setAnchoredModel(m, on)
+        for _,d in ipairs(m:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.Anchored = on and true or false
             end
-        end)
-    end
-
-    local function stopTether()
-        tetherOn = false
-        if rsConn then rsConn:Disconnect(); rsConn = nil end
-    end
-
-    local function startScanner()
-        if scanThreadRunning then return end
-        scanThreadRunning = true
-        scanningOn = true
-        task.spawn(function()
-            while scanningOn do
-                local items = WS:FindFirstChild("Items")
-                local root = hrp()
-                if not scanningOn then break end
-                if items and root then
-                    local origin = root.Position
-                    for _,m in ipairs(items:GetChildren()) do
-                        if not scanningOn then break end
-                        if carryCount >= MAX_CARRY then break end
-                        if m:IsA("Model") and not carried[m] and not blacklist(m) and matchesResource(m.Name) then
-                            local mp = mainPart(m)
-                            if mp and (mp.Position - origin).Magnitude <= carryRadius then
-                                startDrag(m)
-                                addCarry(m)
-                                setNoCollide(m, true)
-                            end
-                        end
-                    end
-                end
-                task.wait(SCAN_INTERVAL)
-            end
-            scanThreadRunning = false
-        end)
-    end
-
-    local function stopScanner()
-        scanningOn = false
-    end
-
-    -- Enable without clearing items
-    local function setEnabled(on)
-        gatherEnabled = on
-        if on then
-            baselineY = groundBaselineY()
-            startTether()
-            startScanner()
-        else
-            stopScanner()
-            stopTether()
         end
     end
-
-    -- Full clear (not used by Set Items)
-    local function fullDisableAndClear()
-        setEnabled(false)
-        for m in pairs(carried) do
-            stopDrag(m)
-            setNoCollide(m, false)
+    local function addGather(m)
+        if gathered[m] then return end
+        gathered[m] = true
+        table.insert(gatheredList, m)
+    end
+    local function removeGather(m)
+        if not gathered[m] then return end
+        gathered[m] = nil
+        for i=#gatheredList,1,-1 do
+            if gatheredList[i] == m then table.remove(gatheredList, i) break end
         end
-        carried, carryList, carryCount = {}, {}, 0
+    end
+    local function clearAll()
+        for m,_ in pairs(gathered) do removeGather(m) end
     end
 
-    ----------------------------------------------------------------
-    -- Placement: visible pile 5 up + 5 forward, physics on
-    ----------------------------------------------------------------
-    local function dropPhysicsify(m, dropVelocity)
-        if m:IsA("Model") then
-            for _,d in ipairs(m:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    d.Anchored = false
-                    d.CanCollide = true
-                    if typeof(d.SetNetworkOwner) == "function" then
-                        pcall(function() d:SetNetworkOwner(lp) end)
-                    end
-                    d.AssemblyAngularVelocity = Vector3.new(0, math.random() * 2, 0)
-                    d.AssemblyLinearVelocity  = dropVelocity
-                    d.Massless = false
-                end
-            end
+    local function nearAndNamed(m, name, origin, rad)
+        if not (m and m:IsA("Model") and m.Parent) then return false end
+        if m.Name ~= name then return false end
+        local mp = mainPart(m)
+        if not mp then return false end
+        local d = (mp.Position - origin).Magnitude
+        return d <= rad
+    end
+
+    local function pivotModel(m, cf)
+        if m:IsA("Model") then m:PivotTo(cf)
         else
             local p = mainPart(m)
-            if p then
-                p.Anchored = false
-                p.CanCollide = true
-                if typeof(p.SetNetworkOwner) == "function" then
-                    pcall(function() p:SetNetworkOwner(lp) end)
+            if p then p.CFrame = cf end
+        end
+    end
+
+    local function computeHoverCF(i, baseCF)
+        return baseCF
+    end
+
+    local function computeSpreadCF(i, baseCF)
+        local r = 2 + math.floor((i-1)/8)
+        local idx = (i-1)%8
+        local angle = (idx/8) * math.pi*2
+        local offset = Vector3.new(math.cos(angle)*r, 0, math.sin(angle)*r)
+        return baseCF + offset
+    end
+
+    local function captureIfNear()
+        local root = hrp()
+        if not root then return end
+        local origin = root.Position
+        local rad = auraRadius()
+
+        local folders = {}
+        local items = WS:FindFirstChild("Items")
+        if items then table.insert(folders, items) else table.insert(folders, WS) end
+
+        for _,rootNode in ipairs(folders) do
+            for _,m in ipairs(rootNode:GetChildren()) do
+                if nearAndNamed(m, selectedName, origin, rad) and not gathered[m] then
+                    local mp = mainPart(m)
+                    if mp and not mp.Anchored then
+                        startDrag(m)
+                        task.wait(0.02)
+                        pcall(function() mp:SetNetworkOwner(lp) end)
+                        setNoCollideModel(m, true)
+                        setAnchoredModel(m, true)
+                        addGather(m)
+                        stopDrag(m)
+                    end
                 end
-                p.AssemblyAngularVelocity = Vector3.new(0, math.random() * 2, 0)
-                p.AssemblyLinearVelocity  = dropVelocity
-                p.Massless = false
             end
         end
     end
 
-    local function setItemsVisiblePile()
-        -- 1) Turn OFF toggle visually and logically, but KEEP carried list
-        setToggleCompat(gatherToggleHandle, false)
-        setEnabled(false)
-
-        -- 2) Place items visibly
-        local root = hrp(); if not root then return end
+    local function hoverFollow()
+        local root = hrp()
+        if not root then return end
         local forward = root.CFrame.LookVector
-        local pilePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
-        local function jitter() return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8) end
-        local downVel = Vector3.new(0, -30, 0)
-
-        local list = {}
-        for i = 1, #carryList do list[i] = carryList[i] end
-
-        for _, m in ipairs(list) do
+        local above = root.Position + Vector3.new(0, hoverHeight, 0)
+        local cfBase = CFrame.lookAt(above, above + forward)
+        for i,m in ipairs(gatheredList) do
             if m and m.Parent then
-                ensurePrimary(m)
-                stopDrag(m)
-                setNoCollide(m, false) -- restore collisions before placing
-
-                local mp = mainPart(m)
-                local targetCF = CFrame.new(pilePos + jitter(), pilePos + forward)
-
-                if m:IsA("Model") and m.PrimaryPart then
-                    pcall(function() m:PivotTo(targetCF) end)
-                elseif mp then
-                    pcall(function() mp.CFrame = targetCF end)
-                end
-
-                dropPhysicsify(m, downVel)
+                local cf = computeHoverCF(i, cfBase)
+                pivotModel(m, cf)
+            else
+                removeGather(m)
             end
-            removeCarry(m)
         end
-        -- leave toggle OFF; user can re-enable manually
     end
 
-    ----------------------------------------------------------------
-    -- Respawn baseline refresh
-    ----------------------------------------------------------------
-    Players.LocalPlayer.CharacterAdded:Connect(function()
-        task.defer(function()
-            if gatherEnabled then baselineY = groundBaselineY() end
-        end)
-    end)
+    local function startGather()
+        if scanConn then return end
+        gatherOn = true
+        scanConn = Run.Heartbeat:Connect(captureIfNear)
+        hoverConn = Run.RenderStepped:Connect(hoverFollow)
+    end
+    local function stopGather()
+        gatherOn = false
+        if scanConn then pcall(function() scanConn:Disconnect() end) end
+        if hoverConn then pcall(function() hoverConn:Disconnect() end) end
+        scanConn, hoverConn = nil, nil
+    end
 
-    ----------------------------------------------------------------
-    -- UI
-    ----------------------------------------------------------------
-    tab:Section({ Title = "Gather" })
+    local function placeDown()
+        local root = hrp()
+        if not root then return end
 
-    gatherToggleHandle = tab:Toggle({
-        Title = "Gather Items",
-        Value = false,
-        Callback = function(state)
-            setEnabled(state)
+        if GatherToggleCtrl and GatherToggleCtrl.Set then
+            GatherToggleCtrl:Set(false)
         end
-    })
+        stopGather()
 
+        local forward = root.CFrame.LookVector
+        local dropPos = root.Position + forward * forwardDrop + Vector3.new(0, upDrop, 0)
+        local baseCF = CFrame.lookAt(dropPos, dropPos + forward)
+
+        for i,m in ipairs(gatheredList) do
+            if m and m.Parent then
+                local cf = computeSpreadCF(i, baseCF)
+                pivotModel(m, cf)
+            end
+        end
+
+        task.wait(0.05)
+
+        for _,m in ipairs(gatheredList) do
+            if m and m.Parent then
+                setAnchoredModel(m, false)
+                setNoCollideModel(m, false)
+            end
+        end
+
+        clearAll()
+    end
+
+    tab:Section({ Title = "Gather", Icon = "layers" })
     tab:Dropdown({
-        Title = "Resource Type",
-        Values = { "Logs", "Stone", "Berries" },
+        Title = "Item",
+        Values = SELECT_VALUES,
         Multi = false,
         AllowNone = false,
-        Callback = function(choice)
-            if choice and choice ~= "" then resourceType = choice end
+        Callback = function(v) if v and v ~= "" then selectedName = v end end
+    })
+
+    GatherToggleCtrl = tab:Toggle({
+        Title = "Enable Gather",
+        Value = false,
+        Callback = function(state)
+            if state then startGather() else stopGather() end
         end
-    })
-
-    tab:Slider({
-        Title = "Carry Radius",
-        Value = { Min = 20, Max = 300, Default = DEFAULT_RADIUS },
-        Callback = function(v) carryRadius = clamp(v, 10, 500) end
-    })
-
-    tab:Slider({
-        Title = "Depth Below Ground",
-        Value = { Min = 10, Max = 100, Default = DEFAULT_DEPTH },
-        Callback = function(v) carryDepth = clamp(v, 5, 200) end
     })
 
     tab:Button({
-        Title = "Set Items",
-        Callback = setItemsVisiblePile
+        Title = "Place Down",
+        Callback = placeDown
     })
 
-    tab:Section({ Title = "Max Carry: "..tostring(MAX_CARRY) })
+    Players.LocalPlayer.CharacterAdded:Connect(function()
+        if gatherOn then
+            task.defer(function()
+                stopGather()
+                startGather()
+            end)
+        end
+    end)
 end
