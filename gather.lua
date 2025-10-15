@@ -10,13 +10,17 @@ return function(C, R, UI)
     local tab  = Tabs.Gather
     if not tab then return end
 
+    ----------------------------------------------------------------
     -- Tunables
+    ----------------------------------------------------------------
     local MAX_CARRY      = 50
     local DEFAULT_RADIUS = 80
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
 
+    ----------------------------------------------------------------
     -- Helpers
+    ----------------------------------------------------------------
     local function clamp(v, lo, hi)
         v = tonumber(v) or lo
         if v < lo then return lo end
@@ -24,28 +28,50 @@ return function(C, R, UI)
         return v
     end
 
+    local function setToggleCompat(handle, state)
+        if not handle then return end
+        local ok = false
+        ok = ok or pcall(function() if handle.SetValue then handle:SetValue(state) end end)
+        ok = ok or pcall(function() if handle.SetState then handle:SetState(state) end end)
+        ok = ok or pcall(function() if handle.Set then handle:Set(state) end end)
+        ok = ok or pcall(function() if handle.Update then handle:Update(state) end end)
+        ok = ok or pcall(function() if handle.Value ~= nil then handle.Value = state end end)
+        return ok
+    end
+
+    ----------------------------------------------------------------
     -- Remotes
+    ----------------------------------------------------------------
     local RemoteFolder = RS:FindFirstChild("RemoteEvents")
     local StartDrag    = RemoteFolder and RemoteFolder:FindFirstChild("RequestStartDraggingItem") or nil
     local StopDrag     = RemoteFolder and RemoteFolder:FindFirstChild("StopDraggingItem") or nil
 
+    ----------------------------------------------------------------
     -- State
+    ----------------------------------------------------------------
     local lp  = Players.LocalPlayer
     local carried   = {}   -- [Model]=true
     local carryList = {}
     local carryCount = 0
-    local enabled = false
+
+    local gatherEnabled = false     -- user toggle state
+    local scanningOn    = false     -- background scanner running
+    local tetherOn      = false     -- under-map repositioner running
+
     local resourceType = "Logs"
     local carryRadius = DEFAULT_RADIUS
     local carryDepth  = DEFAULT_DEPTH
     local baselineY = nil
     local rsConn = nil
-    local scanRunning = false
-    local gatherToggle = nil -- UI handle
+    local scanThreadRunning = false
+    local gatherToggleHandle = nil
 
+    ----------------------------------------------------------------
+    -- Common fns
+    ----------------------------------------------------------------
     local function toList(t)
-        local out, n = {}, 0
-        for k in pairs(t) do n = n + 1; out[n] = k end
+        local out = {}
+        for k in pairs(t) do out[#out+1] = k end
         return out
     end
 
@@ -121,19 +147,12 @@ return function(C, R, UI)
         if StopDrag and m then pcall(function() StopDrag:FireServer(m) end) end
     end
 
-    local function clearRemoved()
-        for i = #carryList, 1, -1 do
-            local m = carryList[i]
-            if not (m and m.Parent) then removeCarry(m) end
-        end
-    end
-
     local function setNoCollide(m, on)
         local mp = mainPart(m); if not mp then return end
         if m:IsA("Model") then
             for _,d in ipairs(m:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    if on then d.CanCollide = false end
+                    if on then d.CanCollide = false else d.CanCollide = true end
                     d.Anchored = false
                     if typeof(d.SetNetworkOwner) == "function" then
                         pcall(function() d:SetNetworkOwner(lp) end)
@@ -141,7 +160,7 @@ return function(C, R, UI)
                 end
             end
         else
-            if on then mp.CanCollide = false end
+            if on then mp.CanCollide = false else mp.CanCollide = true end
             mp.Anchored = false
             if typeof(mp.SetNetworkOwner) == "function" then
                 pcall(function() mp:SetNetworkOwner(lp) end)
@@ -149,35 +168,51 @@ return function(C, R, UI)
         end
     end
 
-    local function repositionAll()
-        local cf = belowMapCFrame(); if not cf then return end
-        for i = 1, #carryList do
-            local m = carryList[i]
-            if m and m.Parent then
-                local mp = mainPart(m)
-                if mp then
-                    if m:IsA("Model") and m.PrimaryPart then
-                        pcall(function() m:PivotTo(cf) end)
-                    else
-                        pcall(function() mp.CFrame = cf end)
+    ----------------------------------------------------------------
+    -- Tether + Scanner
+    ----------------------------------------------------------------
+    local function startTether()
+        if tetherOn then return end
+        tetherOn = true
+        if rsConn then rsConn:Disconnect(); rsConn = nil end
+        rsConn = Run.RenderStepped:Connect(function()
+            if not tetherOn then return end
+            local cf = belowMapCFrame(); if not cf then return end
+            for i = 1, #carryList do
+                local m = carryList[i]
+                if m and m.Parent then
+                    local mp = mainPart(m)
+                    if mp then
+                        if m:IsA("Model") and m.PrimaryPart then
+                            pcall(function() m:PivotTo(cf) end)
+                        else
+                            pcall(function() mp.CFrame = cf end)
+                        end
                     end
                 end
             end
-        end
+        end)
     end
 
-    local function scanAndPickup()
-        if scanRunning then return end
-        scanRunning = true
+    local function stopTether()
+        tetherOn = false
+        if rsConn then rsConn:Disconnect(); rsConn = nil end
+    end
+
+    local function startScanner()
+        if scanThreadRunning then return end
+        scanThreadRunning = true
+        scanningOn = true
         task.spawn(function()
-            while enabled do
-                clearRemoved()
+            while scanningOn do
                 local items = WS:FindFirstChild("Items")
                 local root = hrp()
+                if not scanningOn then break end
                 if items and root then
                     local origin = root.Position
                     for _,m in ipairs(items:GetChildren()) do
-                        if not enabled or carryCount >= MAX_CARRY then break end
+                        if not scanningOn then break end
+                        if carryCount >= MAX_CARRY then break end
                         if m:IsA("Model") and not carried[m] and not blacklist(m) and matchesResource(m.Name) then
                             local mp = mainPart(m)
                             if mp and (mp.Position - origin).Magnitude <= carryRadius then
@@ -190,23 +225,30 @@ return function(C, R, UI)
                 end
                 task.wait(SCAN_INTERVAL)
             end
-            scanRunning = false
+            scanThreadRunning = false
         end)
     end
 
-    local function enable()
-        if enabled then return end
-        enabled = true
-        baselineY = groundBaselineY()
-        if rsConn then rsConn:Disconnect(); rsConn = nil end
-        rsConn = Run.RenderStepped:Connect(repositionAll)
-        scanAndPickup()
+    local function stopScanner()
+        scanningOn = false
     end
 
-    local function disable()
-        if not enabled then return end
-        enabled = false
-        if rsConn then rsConn:Disconnect(); rsConn = nil end
+    -- Enable without clearing items
+    local function setEnabled(on)
+        gatherEnabled = on
+        if on then
+            baselineY = groundBaselineY()
+            startTether()
+            startScanner()
+        else
+            stopScanner()
+            stopTether()
+        end
+    end
+
+    -- Full clear (not used by Set Items)
+    local function fullDisableAndClear()
+        setEnabled(false)
         for m in pairs(carried) do
             stopDrag(m)
             setNoCollide(m, false)
@@ -214,6 +256,9 @@ return function(C, R, UI)
         carried, carryList, carryCount = {}, {}, 0
     end
 
+    ----------------------------------------------------------------
+    -- Placement: visible pile 5 up + 5 forward, physics on
+    ----------------------------------------------------------------
     local function dropPhysicsify(m, dropVelocity)
         if m:IsA("Model") then
             for _,d in ipairs(m:GetDescendants()) do
@@ -243,18 +288,16 @@ return function(C, R, UI)
         end
     end
 
-    local function setItemsPileDrop()
-        -- Flip the gather toggle OFF to prevent re-tethering under map
-        if gatherToggle and gatherToggle.SetValue then pcall(function() gatherToggle:SetValue(false) end) end
-        disable()
+    local function setItemsVisiblePile()
+        -- 1) Turn OFF toggle visually and logically, but KEEP carried list
+        setToggleCompat(gatherToggleHandle, false)
+        setEnabled(false)
 
+        -- 2) Place items visibly
         local root = hrp(); if not root then return end
         local forward = root.CFrame.LookVector
         local pilePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
-
-        local function jitter()
-            return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8)
-        end
+        local function jitter() return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8) end
         local downVel = Vector3.new(0, -30, 0)
 
         local list = {}
@@ -264,6 +307,7 @@ return function(C, R, UI)
             if m and m.Parent then
                 ensurePrimary(m)
                 stopDrag(m)
+                setNoCollide(m, false) -- restore collisions before placing
 
                 local mp = mainPart(m)
                 local targetCF = CFrame.new(pilePos + jitter(), pilePos + forward)
@@ -278,23 +322,28 @@ return function(C, R, UI)
             end
             removeCarry(m)
         end
+        -- leave toggle OFF; user can re-enable manually
     end
 
+    ----------------------------------------------------------------
     -- Respawn baseline refresh
+    ----------------------------------------------------------------
     Players.LocalPlayer.CharacterAdded:Connect(function()
         task.defer(function()
-            if enabled then baselineY = groundBaselineY() end
+            if gatherEnabled then baselineY = groundBaselineY() end
         end)
     end)
 
+    ----------------------------------------------------------------
     -- UI
+    ----------------------------------------------------------------
     tab:Section({ Title = "Gather" })
 
-    gatherToggle = tab:Toggle({
-        Title = "Carry Under Map",
+    gatherToggleHandle = tab:Toggle({
+        Title = "Gather Items",
         Value = false,
         Callback = function(state)
-            if state then enable() else disable() end
+            setEnabled(state)
         end
     })
 
@@ -322,7 +371,7 @@ return function(C, R, UI)
 
     tab:Button({
         Title = "Set Items",
-        Callback = setItemsPileDrop
+        Callback = setItemsVisiblePile
     })
 
     tab:Section({ Title = "Max Carry: "..tostring(MAX_CARRY) })
