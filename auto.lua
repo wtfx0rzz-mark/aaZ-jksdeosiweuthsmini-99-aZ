@@ -390,8 +390,8 @@ return function(C, R, UI)
     end
 
     tab:Toggle({
-        Title = "Instant Interact (no hold)",
-        Value = false,
+        Title = "Instant Interact",
+        Value = true,
         Callback = function(state)
             if state then
                 enableInstantInteract()
