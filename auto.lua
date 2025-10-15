@@ -1,17 +1,21 @@
 --=====================================================
--- 1337 Nights | Auto Tab • Edge Buttons (Phase 10 / Teleport / Plant Saplings / Instant Open / Bring Lost Child w/ temp noclip)
+-- 1337 Nights | Auto Tab • Edge Buttons (Phase 10 / Teleport / Plant Saplings / Instant Open / Bring Lost Child via Drag-Hop)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local RS      = C.Services.RS or game:GetService("ReplicatedStorage")
     local WS      = C.Services.WS or game:GetService("Workspace")
     local PPS     = game:GetService("ProximityPromptService")
+    local Run     = C.Services.Run or game:GetService("RunService")
     local lp      = Players.LocalPlayer
 
     local Tabs    = UI and UI.Tabs or {}
     local tab     = Tabs.Auto
     assert(tab, "Auto tab not found in UI")
 
+    --========================
+    -- Utilities
+    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
@@ -26,11 +30,17 @@ return function(C, R, UI)
         return model:FindFirstChildWhichIsA("BasePart")
     end
     local function getRemote(name)
-        local remotesFolder = RS:WaitForChild("RemoteEvents", 5)
+        local remotesFolder = RS:FindFirstChild("RemoteEvents")
         return remotesFolder and remotesFolder:FindFirstChild(name) or nil
     end
+    local function waitHeartbeats(n)
+        for _=1,(n or 1) do Run.Heartbeat:Wait() end
+    end
 
-    local PHASE_DIST = 10
+    --========================
+    -- Edge buttons (no Rayfield)
+    --========================
+    local PHASE_DIST = 10 -- Phase 10 distance forward
 
     local edgeGui = lp:WaitForChild("PlayerGui"):FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -47,7 +57,7 @@ return function(C, R, UI)
             b = Instance.new("TextButton")
             b.Name = name
             b.AnchorPoint = Vector2.new(1, 0)
-            b.Position    = UDim2.new(1, -6, 0, 6 + (row-1)*36)
+            b.Position    = UDim2.new(1, -6, 0, 6 + (row-1)*36) -- rows: 1=top, 2=middle, 3=bottom, 4=below
             b.Size        = UDim2.new(0, 120, 0, 30)
             b.Text        = label
             b.TextSize    = 12
@@ -67,10 +77,14 @@ return function(C, R, UI)
         return b
     end
 
-    local phaseBtn = makeEdgeBtn("Phase10Edge", 1, "Phase 10")
-    local tpBtn    = makeEdgeBtn("TpEdge",      2, "Teleport")
-    local plantBtn = makeEdgeBtn("PlantEdge",   3, "Plant")
+    -- Buttons (fixed row indices to lock absolute placement)
+    local phaseBtn   = makeEdgeBtn("Phase10Edge", 1, "Phase 10")
+    local tpBtn      = makeEdgeBtn("TpEdge",      2, "Teleport")
+    local plantBtn   = makeEdgeBtn("PlantEdge",   3, "Plant")
 
+    --========================
+    -- Phase 10 behavior
+    --========================
     phaseBtn.MouseButton1Click:Connect(function()
         local root = hrp()
         if not root then return end
@@ -82,6 +96,9 @@ return function(C, R, UI)
         root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end)
 
+    --========================
+    -- Teleport behavior (hold to mark, tap to go)
+    --========================
     local markedCF = nil
     local HOLD_THRESHOLD = 0.5
     local downAt, suppressClick = 0, false
@@ -118,6 +135,9 @@ return function(C, R, UI)
         root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end)
 
+    --========================
+    -- Plant Saplings behavior
+    --========================
     local AHEAD_DIST  = 3
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
@@ -196,8 +216,12 @@ return function(C, R, UI)
         plantNearestSaplingInFront()
     end)
 
+    --========================
+    -- Instant Open (ProximityPrompt) behavior
+    --========================
     local instantOpen = false
     local promptShownConn
+
     local KEYWORDS_NAME   = {"chest","crate","locker","cabinet","cupboard","safe","case","stash","cache","box"}
     local KEYWORDS_ACTION = {"open","unlock","search","loot"}
 
@@ -249,127 +273,98 @@ return function(C, R, UI)
         if promptShownConn then promptShownConn:Disconnect() promptShownConn = nil end
     end
 
-    local DROP_FORWARD = 5
-    local DROP_UP      = 5
+    --========================
+    -- Bring Lost Child (drag-hop)
+    --========================
+    local APPROACH_DIST = 2.0
+    local RETURN_HB     = 3
+    local DRAG_HB       = 3
 
-    local function computeDropCF()
+    local function hopPlayer(toCF)
         local root = hrp()
-        if not root then return nil, nil end
-        local forward = root.CFrame.LookVector
-        local ahead   = root.Position + forward * DROP_FORWARD
-        local start   = ahead + Vector3.new(0, 500, 0)
-        local rc      = WS:Raycast(start, Vector3.new(0, -2000, 0))
-        local basePos = rc and rc.Position or ahead
-        local dropPos = basePos + Vector3.new(0, DROP_UP, 0)
-        return CFrame.lookAt(dropPos, dropPos + forward), forward
+        if not (root and toCF) then return end
+        root.AssemblyLinearVelocity  = Vector3.new()
+        root.AssemblyAngularVelocity = Vector3.new()
+        root.CFrame = toCF
     end
 
-    local function getAllParts(target)
-        local t = {}
-        if target:IsA("BasePart") then
-            t[1] = target
-        elseif target:IsA("Model") then
-            for _,d in ipairs(target:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    t[#t+1] = d
-                end
-            end
-        end
-        return t
+    local function groundAt(pos)
+        local start = pos + Vector3.new(0, 500, 0)
+        local rc = WS:Raycast(start, Vector3.new(0, -2000, 0))
+        return rc and rc.Position or pos
     end
 
-    local function quickDrag(model)
-        local startRE = getRemote("RequestStartDraggingItem")
-        local stopRE  = getRemote("StopDraggingItem")
-        if not (startRE and stopRE) then return end
-        pcall(function() startRE:FireServer(model) end)
-        task.wait(0.04)
-        pcall(function() stopRE:FireServer(model) end)
+    local function approachCFForPart(part, homePos)
+        local p = part.Position
+        local dir = (homePos and (homePos - p).Unit) or Vector3.new(1,0,0)
+        if dir.Magnitude == 0 then dir = Vector3.new(1,0,0) end
+        local flatDir = Vector3.new(dir.X, 0, dir.Z)
+        if flatDir.Magnitude == 0 then flatDir = Vector3.new(1,0,0) end
+        flatDir = flatDir.Unit
+        local target = p + flatDir * APPROACH_DIST
+        local gp = groundAt(target) + Vector3.new(0, 3, 0)
+        return CFrame.lookAt(gp, Vector3.new(p.X, gp.Y, p.Z))
     end
 
-    local function dropAndNudgeAsync(entry, dropCF, forward)
-        task.defer(function()
-            if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            quickDrag(entry.model)
-            task.wait(0.08)
-            local v = forward * 6 + Vector3.new(0, -30, 0)
-            for _,p in ipairs(getAllParts(entry.model)) do
-                p.AssemblyLinearVelocity = v
-            end
-        end)
+    local function startDrag(model)
+        local re = getRemote("RequestStartDraggingItem")
+        if re then pcall(function() re:FireServer(model) end) end
+    end
+    local function stopDrag(model)
+        local re = getRemote("StopDraggingItem")
+        if re then pcall(function() re:FireServer(model) end) end
     end
 
-    local function teleportOne(entry)
-        local root = hrp()
-        if not (root and entry and entry.model and entry.part) then return false end
-        if not entry.model.Parent or entry.part.Anchored then return false end
-        local dropCF, forward = computeDropCF()
-        if not dropCF then return false end
-        pcall(function() entry.part:SetNetworkOwner(lp) end)
-        if entry.model:IsA("Model") then
-            entry.model:PivotTo(dropCF)
-        else
-            entry.part.CFrame = dropCF
-        end
-        dropAndNudgeAsync(entry, dropCF, forward)
-        return true
-    end
-
-    local function sortedNear(list)
-        local root = hrp()
-        if not root then return list end
-        table.sort(list, function(a,b)
-            return (a.part.Position - root.Position).Magnitude < (b.part.Position - root.Position).Magnitude
-        end)
-        return list
-    end
-
-    local function collectLostChildren()
-        local out = {}
+    local function findNearestLostChild()
         local chars = WS:FindFirstChild("Characters")
-        if not chars then return out end
+        if not chars then return nil end
+        local root = hrp()
+        if not root then return nil end
+        local nearest, best = nil, math.huge
         for _,m in ipairs(chars:GetChildren()) do
             if m:IsA("Model") then
-                local raw = (m.Name or "")
-                local nm  = raw:lower():gsub("%s+", "")
-                if nm == "lostchild" or nm:match("^lostchild%d+$") then
+                local n = m.Name or ""
+                -- Match: "Lostchild" or "Lostchild <digits>"
+                if n == "Lostchild" or n:match("^Lostchild%s*%d+$") then
                     local mp = mainPart(m)
-                    if mp and not mp.Anchored then
-                        out[#out+1] = {model=m, part=mp}
+                    if mp then
+                        local d = (mp.Position - root.Position).Magnitude
+                        if d < best then
+                            best = d
+                            nearest = m
+                        end
                     end
                 end
             end
         end
-        return sortedNear(out)
+        return nearest
     end
 
-    local function withTemporaryNoClip(model, duration)
-        local parts = getAllParts(model)
-        local orig = {}
-        for _,p in ipairs(parts) do
-            orig[p] = p.CanCollide
-            p.CanCollide = false
-        end
-        task.delay(duration or 1, function()
-            for p,cc in pairs(orig) do
-                if p and p.Parent then
-                    p.CanCollide = cc
-                end
-            end
-        end)
+    local function dragHopBringChild(childModel)
+        local root = hrp()
+        if not (root and childModel) then return end
+        local mp = mainPart(childModel)
+        if not mp then return end
+
+        local homeCF = root.CFrame
+        local approachCF = approachCFForPart(mp, homeCF.Position)
+
+        -- hop to child, start drag, hop back, stop drag
+        hopPlayer(approachCF)
+        waitHeartbeats(RETURN_HB)
+
+        startDrag(childModel)
+        waitHeartbeats(DRAG_HB)
+
+        hopPlayer(homeCF)
+        waitHeartbeats(RETURN_HB)
+
+        stopDrag(childModel)
     end
 
-    local function bringLostChildren()
-        local list = collectLostChildren()
-        if #list == 0 then return end
-        for _,entry in ipairs(list) do
-            withTemporaryNoClip(entry.model, 1.2)
-            if teleportOne(entry) then
-                task.wait(0.12)
-            end
-        end
-    end
-
+    --========================
+    -- Wind UI switches
+    --========================
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
 
     tab:Toggle({
@@ -404,14 +399,19 @@ return function(C, R, UI)
         end
     })
 
-    tab:Section({ Title = "Rescue" })
+    -- Button: Bring Lost Child (drag-hop)
     tab:Button({
         Title = "Bring Lost Child",
         Callback = function()
-            bringLostChildren()
+            local child = findNearestLostChild()
+            if child then
+                dragHopBringChild(child)
+            end
         end
     })
 
+    -- Buttons persist across respawn (ResetOnSpawn=false); no further action required
     lp.CharacterAdded:Connect(function()
+        -- If PlayerGui ever gets rebuilt externally, re-parent edgeGui here.
     end)
 end
