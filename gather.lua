@@ -1,3 +1,6 @@
+--=====================================================
+-- 1337 Nights | Gather Module (Multi-select, Bring-parity, physics-fix)
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local RS      = C.Services.RS
@@ -8,30 +11,35 @@ return function(C, R, UI)
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
 
+    -- Bring taxonomy
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
-    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
+    private_pelts      = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
+    -- Selection
     local sel = { simple = {}, pelts = {}, wantMossyCoin=false, wantCultist=false, wantSapling=false }
     local simpleCache = {}
-
-    local function clearTable(t) for k in pairs(t) do t[k]=nil end end
+    local function _clear(t) for k in pairs(t) do t[k]=nil end end
     local function rebuildSimpleCache()
-        clearTable(simpleCache)
+        _clear(simpleCache)
         for k,v in pairs(sel.simple) do if v then simpleCache[k]=true end end
         for k,v in pairs(sel.pelts)  do if v then simpleCache[k]=true end end
     end
 
+    -- Tunables
     local hoverHeight, forwardDrop, upDrop = 5, 5, 5
-    local gatherOn = false
-    local scanConn, hoverConn
-    local gathered, list = {}, {}
+    local scanInterval = 0.1
+
+    -- Runtime
+    local gatherOn, scanConn, hoverConn = false, nil, nil
+    local gathered, list = {}, {}    -- set + ordered list
     local GatherToggleCtrl
 
+    -- Helpers
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -52,33 +60,31 @@ return function(C, R, UI)
         end
         return nil
     end
+    local function modelOf(x)
+        if not x then return nil end
+        return x:IsA("Model") and x or x:FindFirstAncestorOfClass("Model")
+    end
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return true end
         local n = (m.Name or ""):lower()
         return n == "pelt trader" or n:find("trader",1,true) or n:find("shopkeeper",1,true)
     end
-    local function hasHumanoid(m)
-        return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
-    end
+    local function hasHumanoid(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
+
     local function getRemote(n)
         local f = RS:FindFirstChild("RemoteEvents")
         return f and f:FindFirstChild(n) or nil
     end
-    local function startDrag(m)
-        local re = getRemote("RequestStartDraggingItem")
-        if re then pcall(function() re:FireServer(m) end) end
-    end
-    local function stopDrag(m)
-        local re = getRemote("StopDraggingItem")
-        if re then pcall(function() re:FireServer(m) end) end
-    end
+    local function startDrag(m) local re=getRemote("RequestStartDraggingItem"); if re then pcall(function() re:FireServer(m) end) end end
+    local function stopDrag(m)  local re=getRemote("StopDraggingItem");        if re then pcall(function() re:FireServer(m) end) end end
+
     local function setNoCollideModel(m, on)
         for _,d in ipairs(m:GetDescendants()) do
             if d:IsA("BasePart") then
-                d.CanCollide = not on and true or false
-                d.CanQuery   = not on and true or false
-                d.CanTouch   = not on and true or false
-                if on then d.Massless = true end
+                d.CanCollide = not on
+                d.CanQuery   = not on
+                d.CanTouch   = not on
+                d.Massless   = on and true or false
                 d.AssemblyLinearVelocity  = Vector3.new()
                 d.AssemblyAngularVelocity = Vector3.new()
             end
@@ -86,7 +92,7 @@ return function(C, R, UI)
     end
     local function setAnchoredModel(m, on)
         for _,d in ipairs(m:GetDescendants()) do
-            if d:IsA("BasePart") then d.Anchored = on and true or false end
+            if d:IsA("BasePart") then d.Anchored = on end
         end
     end
     local function addGather(m)
@@ -102,39 +108,35 @@ return function(C, R, UI)
         end
     end
     local function clearAll()
-        for m,_ in pairs(gathered) do gathered[m] = nil end
+        for m,_ in pairs(gathered) do gathered[m]=nil end
         table.clear(list)
     end
 
-    local function matchesSpecial(model)
-        local name = model.Name
+    -- Matching
+    local function matchesSpecial(m)
+        local name = m.Name
         if sel.wantMossyCoin and (name == "Mossy Coin" or name:match("^Mossy Coin%d+$")) then return true end
         if sel.wantCultist then
-            local nl = (name or ""):lower()
-            if nl:find("cultist",1,true) and hasHumanoid(model) then return true end
+            local nl=(name or ""):lower()
+            if nl:find("cultist",1,true) and hasHumanoid(m) then return true end
         end
         if sel.wantSapling and name == "Sapling" then return true end
         return false
     end
-
-    local function matchesSimple(instance, model)
-        if simpleCache[model.Name] then return true end
-        if instance:IsA("BasePart") and simpleCache[instance.Name] then return true end
+    local function isSelectedInstance(inst)
+        local m = modelOf(inst); if not m or isExcludedModel(m) then return false end
+        if matchesSpecial(m) then return true end
+        -- exact name on model OR the instance itself (for loose parts)
+        if simpleCache[m.Name] then return true end
+        if inst:IsA("BasePart") and simpleCache[inst.Name] then return true end
         return false
     end
 
-    local function isSelected(instance)
-        local model = instance:IsA("Model") and instance or instance.Parent
-        if not (model and model:IsA("Model")) then return false end
-        if isExcludedModel(model) then return false end
-        if matchesSpecial(model) then return true end
-        return matchesSimple(instance, model)
-    end
-
+    -- Capture + hover
     local lastScan = 0
     local function captureIfNear()
         local now = os.clock()
-        if now - lastScan < 0.2 then return end
+        if now - lastScan < scanInterval then return end
         lastScan = now
 
         local root = hrp(); if not root then return end
@@ -149,20 +151,20 @@ return function(C, R, UI)
             for _,d in ipairs(pool:GetDescendants()) do
                 repeat
                     if not (d:IsA("Model") or d:IsA("BasePart")) then break end
-                    if d:IsA("Model") and isExcludedModel(d) then break end
-                    local model = d:IsA("Model") and d or d.Parent
-                    if not model or gathered[model] then break end
-                    if not isSelected(d) then break end
-                    local mp = mainPart(model); if not mp then break end
+                    local m = modelOf(d); if not m then break end
+                    if gathered[m] then break end
+                    if not isSelectedInstance(d) then break end
+                    local mp = mainPart(m); if not mp then break end
                     if (mp.Position - origin).Magnitude > rad then break end
 
-                    startDrag(model)
+                    -- Capture: ensure server allows relocation, equal for all items
+                    startDrag(m)
                     task.wait(0.02)
                     pcall(function() mp:SetNetworkOwner(lp) end)
-                    setNoCollideModel(model, true)
-                    setAnchoredModel(model, true)
-                    addGather(model)
-                    stopDrag(model)
+                    setNoCollideModel(m, true)
+                    setAnchoredModel(m, true)
+                    addGather(m)
+                    stopDrag(m)
                 until true
             end
         end
@@ -183,7 +185,7 @@ return function(C, R, UI)
         local baseCF  = CFrame.lookAt(above, above + forward)
         for i,m in ipairs(list) do
             if m and m.Parent then
-                pivotModel(m, baseCF)
+                pivotModel(m, baseCF) -- tight stack
             else
                 removeGather(m)
             end
@@ -202,16 +204,18 @@ return function(C, R, UI)
         if hoverConn then pcall(function() hoverConn:Disconnect() end) end; hoverConn = nil
     end
 
-    local function computeSpreadCF(i, baseCF)
+    -- Place Down
+    local function spreadCF(i, baseCF)
         local r   = 2 + math.floor((i-1)/8)
         local idx = (i-1) % 8
         local ang = (idx/8) * math.pi*2
-        local off = Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
-        return baseCF + off
+        return baseCF + Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
     end
 
     local function placeDown()
         local root = hrp(); if not root then return end
+
+        -- Turn OFF gather before drop to avoid re-capture
         if GatherToggleCtrl and GatherToggleCtrl.Set then GatherToggleCtrl:Set(false) end
         stopGather()
 
@@ -219,29 +223,42 @@ return function(C, R, UI)
         local dropPos = root.Position + forward * forwardDrop + Vector3.new(0, upDrop, 0)
         local baseCF  = CFrame.lookAt(dropPos, dropPos + forward)
 
+        -- Use drag while relocating to guarantee server authority for ALL items
         for i,m in ipairs(list) do
             if m and m.Parent then
-                pivotModel(m, computeSpreadCF(i, baseCF))
+                startDrag(m)
+                pivotModel(m, spreadCF(i, baseCF))
+                stopDrag(m)
             end
         end
 
         task.wait(0.05)
 
+        -- Restore physics uniformly, nudge downward so nothing hangs
         for _,m in ipairs(list) do
             if m and m.Parent then
                 setAnchoredModel(m, false)
-                setNoCollideModel(m, false)
+                setNoCollideModel(m, false) -- also Massless=false
+                for _,p in ipairs(m:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.AssemblyLinearVelocity = Vector3.new(0, -25, 0)
+                    end
+                end
             end
         end
+
         clearAll()
     end
 
-    local function onMultiSelect(values, specialsMap, intoSet)
-        clearTable(intoSet)
-        for flag,_ in pairs(specialsMap or {}) do sel[flag] = false end
+    -- UI
+    tab:Section({ Title = "Gather • Select Items (multi)", Icon = "layers" })
+
+    local function onMulti(values, specials, intoSet)
+        _clear(intoSet)
+        for flag,_ in pairs(specials or {}) do sel[flag] = false end
         local mark = {}
         for _,v in ipairs(values or {}) do mark[v]=true end
-        if specialsMap then
+        if specials then
             if mark["Mossy Coin"] then sel.wantMossyCoin = true end
             if mark["Cultist"]   then sel.wantCultist   = true end
             if mark["Sapling"]   then sel.wantSapling   = true end
@@ -254,21 +271,20 @@ return function(C, R, UI)
         rebuildSimpleCache()
     end
 
-    tab:Section({ Title = "Gather • Select Items (multi)", Icon = "layers" })
     tab:Dropdown({ Title="Junk", Values=junkItems, Multi=true, AllowNone=true,
-        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+        Callback=function(v) onMulti(v, nil, sel.simple) end })
     tab:Dropdown({ Title="Fuel", Values=fuelItems, Multi=true, AllowNone=true,
-        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+        Callback=function(v) onMulti(v, nil, sel.simple) end })
     tab:Dropdown({ Title="Food", Values=foodItems, Multi=true, AllowNone=true,
-        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+        Callback=function(v) onMulti(v, nil, sel.simple) end })
     tab:Dropdown({ Title="Medical", Values=medicalItems, Multi=true, AllowNone=true,
-        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+        Callback=function(v) onMulti(v, nil, sel.simple) end })
     tab:Dropdown({ Title="Weapons & Armor", Values=weaponsArmor, Multi=true, AllowNone=true,
-        Callback=function(vals) onMultiSelect(vals, nil, sel.simple) end })
+        Callback=function(v) onMulti(v, nil, sel.simple) end })
     tab:Dropdown({ Title="Ammo & Misc", Values=ammoMisc, Multi=true, AllowNone=true,
-        Callback=function(vals) onMultiSelect(vals, {wantMossyCoin=true,wantCultist=true,wantSapling=true}, sel.simple) end })
-    tab:Dropdown({ Title="Pelts", Values=pelts, Multi=true, AllowNone=true,
-        Callback=function(vals) onMultiSelect(vals, nil, sel.pelts) end })
+        Callback=function(v) onMulti(v, {wantMossyCoin=true,wantCultist=true,wantSapling=true}, sel.simple) end })
+    tab:Dropdown({ Title="Pelts", Values=private_pelts, Multi=true, AllowNone=true,
+        Callback=function(v) onMulti(v, nil, sel.pelts) end })
 
     tab:Divider()
     GatherToggleCtrl = tab:Toggle({ Title="Enable Gather", Value=false,
@@ -276,8 +292,6 @@ return function(C, R, UI)
     tab:Button({ Title="Place Down", Callback=placeDown })
 
     lp.CharacterAdded:Connect(function()
-        if gatherOn then
-            task.defer(function() stopGather(); startGather() end)
-        end
+        if gatherOn then task.defer(function() stopGather(); startGather() end) end
     end)
 end
