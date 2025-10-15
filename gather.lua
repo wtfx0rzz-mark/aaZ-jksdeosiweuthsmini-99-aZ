@@ -214,13 +214,6 @@ return function(C, R, UI)
     end
 
     tab:Section({ Title = "Gather", Icon = "layers" })
-    tab:Dropdown({
-        Title = "Item",
-        Values = SELECT_VALUES,
-        Multi = false,
-        AllowNone = false,
-        Callback = function(v) if v and v ~= "" then selectedName = v end end
-    })
 
     GatherToggleCtrl = tab:Toggle({
         Title = "Enable Gather",
@@ -243,4 +236,12 @@ return function(C, R, UI)
             end)
         end
     end)
+
+        tab:Dropdown({
+        Title = "Item",
+        Values = SELECT_VALUES,
+        Multi = false,
+        AllowNone = false,
+        Callback = function(v) if v and v ~= "" then selectedName = v end end
+    })
 end
