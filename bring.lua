@@ -1,23 +1,14 @@
---=====================================================
--- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Sapling)
---  • Farthest-first
---  • Drag BEFORE move (fresh-cut constraints)
---  • Fuzzy item matching (logs and others)
---  • Prefers Workspace.Items, falls back to whole WS
---=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
     local RS      = C.Services.RS
     local lp      = Players.LocalPlayer
 
-    local Tabs = UI and UI.Tabs or {}
-    local tab  = Tabs.Bring
-    assert(tab, "Bring tab not found in UI")
+    local tab = (UI and UI.Tabs and UI.Tabs.Bring) or error("Bring tab not found")
 
     local AMOUNT_TO_BRING = 50
     local DROP_FORWARD = 5
-    local DROP_UP      = 15
+    local DROP_UP      = 5
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
@@ -30,9 +21,6 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    --========================
-    -- Utility
-    --========================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -73,21 +61,27 @@ return function(C, R, UI)
         return t
     end
 
-    -- Safe pattern escape for Lua patterns
+    local function setPhysics(model, collide)
+        for _,p in ipairs(getAllParts(model)) do
+            p.Anchored = false
+            p.CanCollide = collide
+            p.Massless = false
+            p.AssemblyLinearVelocity = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+        end
+    end
+
     local function pattEscape(s)
         return (s:gsub("([^%w])","%%%1"))
     end
 
-    --========================
-    -- Drop positioning
-    --========================
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
         local forward = root.CFrame.LookVector
         local ahead   = root.Position + forward * DROP_FORWARD
-        local start   = ahead + Vector3.new(0, 500, 0)
-        local rc      = WS:Raycast(start, Vector3.new(0, -2000, 0))
+        local start   = ahead + Vector3.new(0, 300, 0)
+        local rc      = WS:Raycast(start, Vector3.new(0, -1000, 0))
         local basePos = rc and rc.Position or ahead
         local dropPos = basePos + Vector3.new(0, DROP_UP, 0)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
@@ -98,37 +92,33 @@ return function(C, R, UI)
         return f and f:FindFirstChild(n) or nil
     end
 
-    --========================
-    -- Nudge after teleport
-    --========================
     local function nudgeAsync(entry, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            local v = forward * 6 + Vector3.new(0, -30, 0)
+            local v = forward * 4 + Vector3.new(0, -12, 0)
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
             end
         end)
     end
 
-    --========================
-    -- Teleport one (drag-first fix)
-    --========================
     local function teleportOne(entry)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
-        if not entry.model.Parent or entry.part.Anchored then return false end
+        if not entry.model.Parent then return false end
+        if entry.part.Anchored then entry.part.Anchored = false end
         if isExcludedModel(entry.model) then return false end
 
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
 
-        -- Start dragging BEFORE we move so server-side constraints allow relocation
         local startRE = getRemote("RequestStartDraggingItem")
         local stopRE  = getRemote("StopDraggingItem")
-        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
-        task.wait(0.03)
 
+        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
+        task.wait(0.05)
+
+        setPhysics(entry.model, true)
         pcall(function() entry.part:SetNetworkOwner(lp) end)
 
         if entry.model:IsA("Model") then
@@ -139,17 +129,21 @@ return function(C, R, UI)
 
         nudgeAsync(entry, forward)
 
-        -- Stop drag shortly after to release server authority
-        task.delay(0.08, function()
+        task.wait(0.08)
+        pcall(function() entry.part:SetNetworkOwner(nil) end)
+        task.delay(0.35, function()
+            if not (entry.model and entry.model.Parent) then return end
             if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
+            setPhysics(entry.model, true)
+        end)
+
+        task.delay(0.45, function()
+            if entry and entry.model then setPhysics(entry.model, true) end
         end)
 
         return true
     end
 
-    --========================
-    -- Sort farthest-first
-    --========================
     local function sortedFarthest(list)
         local root = hrp()
         if not root then return list end
@@ -159,9 +153,6 @@ return function(C, R, UI)
         return list
     end
 
-    --========================
-    -- Fuzzy collectors
-    --========================
     local function modelFrom(candidate)
         if not candidate then return nil end
         if candidate:IsA("Model") then return candidate end
@@ -170,16 +161,13 @@ return function(C, R, UI)
     end
 
     local function matchesFuzzy(modelNameLower, targetLower)
-        -- exact
         if modelNameLower == targetLower then return true end
-        -- contains token
         if modelNameLower:find(targetLower, 1, true) then return true end
-        -- numbered variants: "Log1", "Log 2"
         local base = pattEscape(targetLower)
         if modelNameLower:match("^"..base.." ?%d+$") then return true end
-        -- special handling for logs
         if targetLower == "log" then
-            if modelNameLower:match("fallen%s*log") or modelNameLower:match("cut%s*log") then return true end
+            if modelNameLower:match("fallen%s*log") then return true end
+            if modelNameLower:match("cut%s*log") then return true end
             if modelNameLower:match("wood%s*log") then return true end
             if modelNameLower:match("^log[s]?$") then return true end
         end
@@ -196,43 +184,40 @@ return function(C, R, UI)
         return false
     end
 
-    local function scanContainer(container, targetLower, limit, stopOnMatch)
+    local function scanContainer(container, targetLower, limit)
         local out, n = {}, {count = 0}
         if not container then return out end
         for _,d in ipairs(container:GetDescendants()) do
-            if n.count == (limit or math.huge) then break end
+            if limit and n.count >= limit then break end
             if d:IsA("Model") or d:IsA("BasePart") then
                 local m = modelFrom(d)
                 if m and m.Parent and not hasHumanoid(m) then
                     local nm = m.Name:lower()
                     if matchesFuzzy(nm, targetLower) then
-                        if tryAdd(out, m, limit, n) and stopOnMatch then break end
+                        if tryAdd(out, m, limit, n) and limit and n.count >= limit then break end
                     end
                 end
             end
         end
-        return out, n.count
+        return out
     end
 
     local function collectByNameFuzzy(name, limit)
         local targetLower = name:lower()
         local itemsFolder = WS:FindFirstChild("Items")
+        local list = {}
 
-        -- Prefer Items folder
-        local list, c = {}, 0
         if itemsFolder then
-            list, c = scanContainer(itemsFolder, targetLower, limit, false)
-        end
-
-        -- If not enough, scan whole Workspace
-        if not limit or c < limit then
-            local remain = limit and (limit - c) or nil
-            local more = scanContainer(WS, targetLower, remain, false)
-            for _,e in ipairs(more) do
+            for _,e in ipairs(scanContainer(itemsFolder, targetLower, limit)) do
                 list[#list+1] = e
             end
         end
-
+        if (not limit) or (#list < limit) then
+            local remain = limit and (limit - #list) or nil
+            for _,e in ipairs(scanContainer(WS, targetLower, remain)) do
+                list[#list+1] = e
+            end
+        end
         return sortedFarthest(list)
     end
 
@@ -289,7 +274,6 @@ return function(C, R, UI)
         if limit and n >= limit then
             return sortedFarthest(out)
         end
-        -- fallback
         for _,m in ipairs(WS:GetDescendants()) do
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
@@ -329,9 +313,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    --========================
-    -- Dispatcher
-    --========================
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -346,7 +327,6 @@ return function(C, R, UI)
         elseif table.find(pelts, name) then
             list = collectPelts(name, want)
         else
-            -- fuzzy for everything, including logs
             list = collectByNameFuzzy(name, want)
         end
 
@@ -356,14 +336,11 @@ return function(C, R, UI)
             if brought >= want then break end
             if teleportOne(entry) then
                 brought = brought + 1
-                task.wait(0.12)
+                task.wait(0.14)
             end
         end
     end
 
-    --========================
-    -- UI
-    --========================
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
