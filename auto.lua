@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Auto Tab • Edge Buttons + Lost Child Toggle
+-- 1337 Nights | Auto Tab • Edge Buttons + Lost Child Toggle + Instant Interact
 --=====================================================
 return function(C, R, UI)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
@@ -348,6 +348,55 @@ return function(C, R, UI)
             autoLostEnabled = state
             if not state then
                 lostBtn.Visible = false
+            end
+        end
+    })
+
+    local promptDurations = setmetatable({}, { __mode = "k" })
+    local promptsConn, addedConn
+
+    local function setPromptInstant(p)
+        if not p or not p:IsA("ProximityPrompt") then return end
+        if promptDurations[p] == nil then
+            promptDurations[p] = p.HoldDuration
+        end
+        p.HoldDuration = 0
+    end
+
+    local function enableInstantInteract()
+        if promptsConn then return end
+        for _,d in ipairs(WS:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                setPromptInstant(d)
+            end
+        end
+        promptsConn = WS.DescendantAdded:Connect(function(d)
+            if d:IsA("ProximityPrompt") then
+                setPromptInstant(d)
+            end
+        end)
+    end
+
+    local function disableInstantInteract()
+        if promptsConn then
+            promptsConn:Disconnect()
+            promptsConn = nil
+        end
+        for p,orig in pairs(promptDurations) do
+            if p and p.Parent then
+                p.HoldDuration = typeof(orig) == "number" and orig or p.HoldDuration
+            end
+        end
+    end
+
+    tab:Toggle({
+        Title = "Instant Interact (no hold)",
+        Value = false,
+        Callback = function(state)
+            if state then
+                enableInstantInteract()
+            else
+                disableInstantInteract()
             end
         end
     })
