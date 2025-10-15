@@ -1,5 +1,5 @@
 --=====================================================
--- 1337 Nights | Gather Module (Stable Grounded Stack)
+-- 1337 Nights | Gather Module (Below-map carry + grounded stack)
 --=====================================================
 return function(C, R, UI)
     -----------------------------------------------------
@@ -33,11 +33,9 @@ return function(C, R, UI)
     local DEFAULT_RADIUS = 80
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
-
     local STACK_COLS     = 10
     local STACK_H_GAP    = 0.35
     local STACK_V_GAP    = 0.15
-    local TETHER_SPREAD  = 0.25     -- prevent overlapping below map
 
     -----------------------------------------------------
     -- Remotes
@@ -92,10 +90,10 @@ return function(C, R, UI)
         local rc = WS:Raycast(root.Position + Vector3.new(0, 500, 0), Vector3.new(0, -2000, 0))
         return rc and rc.Position.Y or (root.Position.Y - 10)
     end
-    local function belowMapCFrame(offset)
-        local root = hrp(); if not (root and baselineY) then return nil end
-        local spread = offset or Vector3.new()
-        local pos = Vector3.new(root.Position.X, baselineY - carryDepth, root.Position.Z) + spread
+    local function belowMapCFrame()
+        local root = hrp()
+        if not (root and baselineY) then return nil end
+        local pos = Vector3.new(root.Position.X, baselineY - carryDepth, root.Position.Z)
         return CFrame.new(pos, pos + root.CFrame.LookVector)
     end
     local function matchesResource(name)
@@ -151,28 +149,48 @@ return function(C, R, UI)
     end
 
     -----------------------------------------------------
-    -- Tether + Scanner
+    -- Tether + Scanner (restored below-map behavior)
     -----------------------------------------------------
+    local function tetherMove()
+        if not tetherOn then return end
+        local cf = belowMapCFrame()
+        if not cf then return end
+        for _,m in ipairs(carryList) do
+            local mp = mainPart(m)
+            if m and mp then
+                if m:IsA("Model") and m.PrimaryPart then
+                    pcall(function() m:PivotTo(cf) end)
+                else
+                    pcall(function() mp.CFrame = cf end)
+                end
+            end
+        end
+    end
+
     local function startTether()
         if tetherOn then return end
         tetherOn = true
+        if not baselineY then baselineY = groundBaselineY() end
         if rsConn then rsConn:Disconnect() end
-        rsConn = Run.RenderStepped:Connect(function()
-            if not tetherOn then return end
-            for i, m in ipairs(carryList) do
-                local cf = belowMapCFrame(Vector3.new((i%5)*TETHER_SPREAD, 0, math.floor(i/5)*TETHER_SPREAD))
-                local mp = mainPart(m)
-                if cf and mp then
-                    if m:IsA("Model") and m.PrimaryPart then
-                        pcall(function() m:PivotTo(cf) end)
-                    else
-                        pcall(function() mp.CFrame = cf end)
-                    end
-                end
-            end
-        end)
+        rsConn = Run.RenderStepped:Connect(tetherMove)
     end
-    local function stopTether() tetherOn=false if rsConn then rsConn:Disconnect() rsConn=nil end end
+
+    local function stopTether()
+        tetherOn = false
+        if rsConn then rsConn:Disconnect() rsConn = nil end
+    end
+
+    local function moveBelowMap(m)
+        local cf = belowMapCFrame()
+        if not cf then return end
+        local mp = mainPart(m)
+        if m:IsA("Model") and m.PrimaryPart then
+            pcall(function() m:PivotTo(cf) end)
+        elseif mp then
+            pcall(function() mp.CFrame = cf end)
+        end
+    end
+
     local function startScanner()
         if scanThreadRunning then return end
         scanThreadRunning, scanningOn = true, true
@@ -189,8 +207,10 @@ return function(C, R, UI)
                             local mp = mainPart(m)
                             if mp and (mp.Position - origin).Magnitude <= carryRadius then
                                 startDrag(m)
-                                addCarry(m)
-                                setNoCollide(m, true)
+                                if addCarry(m) then
+                                    setNoCollide(m,true)
+                                    moveBelowMap(m)
+                                end
                             end
                         end
                     end
@@ -200,7 +220,9 @@ return function(C, R, UI)
             scanThreadRunning = false
         end)
     end
-    local function stopScanner() scanningOn=false end
+
+    local function stopScanner() scanningOn = false end
+
     local function setEnabled(on)
         gatherEnabled = on
         if on then
@@ -244,7 +266,7 @@ return function(C, R, UI)
         local basePos = root.Position + forward*5
 
         local s = avgSize(list)
-        local logLength, logHeight = s.Z, s.Y  -- assuming cylindrical axis along Z
+        local logLength, logHeight = s.Z, s.Y
         local stepF = logLength + STACK_H_GAP
         local stepY = logHeight + STACK_V_GAP
         local halfCols = (STACK_COLS - 1) / 2
@@ -258,7 +280,7 @@ return function(C, R, UI)
             local pos = basePos + forward * lateral + Vector3.new(0,height,0)
             local groundY = groundYAt(pos)
             pos = Vector3.new(pos.X, groundY + logHeight/2, pos.Z)
-            local cf = CFrame.new(pos, pos + right) -- rotate sideways
+            local cf = CFrame.new(pos, pos + right)
             local mp = mainPart(m)
             if m:IsA("Model") and m.PrimaryPart then
                 pcall(function() m:PivotTo(cf) end)
