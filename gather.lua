@@ -18,6 +18,12 @@ return function(C, R, UI)
     local DEFAULT_DEPTH  = 35
     local SCAN_INTERVAL  = 0.25
 
+    -- neat log stack config
+    local STACK_COLS             = 10
+    local STACK_H_GAP            = 0.4   -- horizontal spacing buffer
+    local STACK_V_GAP            = 0.2   -- vertical spacing buffer
+    local ANCHOR_STACKED_LOGS    = true  -- anchor after stacking for a clean stack
+
     ----------------------------------------------------------------
     -- Helpers
     ----------------------------------------------------------------
@@ -30,13 +36,11 @@ return function(C, R, UI)
 
     local function setToggleCompat(handle, state)
         if not handle then return end
-        local ok = false
-        ok = ok or pcall(function() if handle.SetValue then handle:SetValue(state) end end)
-        ok = ok or pcall(function() if handle.SetState then handle:SetState(state) end end)
-        ok = ok or pcall(function() if handle.Set then handle:Set(state) end end)
-        ok = ok or pcall(function() if handle.Update then handle:Update(state) end end)
-        ok = ok or pcall(function() if handle.Value ~= nil then handle.Value = state end end)
-        return ok
+        pcall(function() if handle.SetValue then handle:SetValue(state) end end)
+        pcall(function() if handle.SetState then handle:SetState(state) end end)
+        pcall(function() if handle.Set      then handle:Set(state)      end end)
+        pcall(function() if handle.Update   then handle:Update(state)   end end)
+        pcall(function() if handle.Value ~= nil then handle.Value = state end end)
     end
 
     ----------------------------------------------------------------
@@ -54,9 +58,9 @@ return function(C, R, UI)
     local carryList = {}
     local carryCount = 0
 
-    local gatherEnabled = false     -- user toggle state
-    local scanningOn    = false     -- background scanner running
-    local tetherOn      = false     -- under-map repositioner running
+    local gatherEnabled = false
+    local scanningOn    = false
+    local tetherOn      = false
 
     local resourceType = "Logs"
     local carryRadius = DEFAULT_RADIUS
@@ -152,7 +156,7 @@ return function(C, R, UI)
         if m:IsA("Model") then
             for _,d in ipairs(m:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    if on then d.CanCollide = false else d.CanCollide = true end
+                    d.CanCollide = not on
                     d.Anchored = false
                     if typeof(d.SetNetworkOwner) == "function" then
                         pcall(function() d:SetNetworkOwner(lp) end)
@@ -160,7 +164,7 @@ return function(C, R, UI)
                 end
             end
         else
-            if on then mp.CanCollide = false else mp.CanCollide = true end
+            mp.CanCollide = not on
             mp.Anchored = false
             if typeof(mp.SetNetworkOwner) == "function" then
                 pcall(function() mp:SetNetworkOwner(lp) end)
@@ -233,7 +237,6 @@ return function(C, R, UI)
         scanningOn = false
     end
 
-    -- Enable without clearing items
     local function setEnabled(on)
         gatherEnabled = on
         if on then
@@ -246,68 +249,115 @@ return function(C, R, UI)
         end
     end
 
-    -- Full clear (not used by Set Items)
-    local function fullDisableAndClear()
-        setEnabled(false)
-        for m in pairs(carried) do
-            stopDrag(m)
-            setNoCollide(m, false)
-        end
-        carried, carryList, carryCount = {}, {}, 0
-    end
-
     ----------------------------------------------------------------
-    -- Placement: visible pile 5 up + 5 forward, physics on
+    -- Placement
     ----------------------------------------------------------------
-    local function dropPhysicsify(m, dropVelocity)
+    local function dropPhysicsify(m, dropVelocity, anchorAfter)
         if m:IsA("Model") then
             for _,d in ipairs(m:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    d.Anchored = false
+                    d.Anchored = anchorAfter or false
                     d.CanCollide = true
                     if typeof(d.SetNetworkOwner) == "function" then
                         pcall(function() d:SetNetworkOwner(lp) end)
                     end
-                    d.AssemblyAngularVelocity = Vector3.new(0, math.random() * 2, 0)
-                    d.AssemblyLinearVelocity  = dropVelocity
+                    d.AssemblyAngularVelocity = anchorAfter and Vector3.new() or Vector3.new(0, math.random()*2, 0)
+                    d.AssemblyLinearVelocity  = anchorAfter and Vector3.new() or dropVelocity
                     d.Massless = false
                 end
             end
         else
             local p = mainPart(m)
             if p then
-                p.Anchored = false
+                p.Anchored = anchorAfter or false
                 p.CanCollide = true
                 if typeof(p.SetNetworkOwner) == "function" then
                     pcall(function() p:SetNetworkOwner(lp) end)
                 end
-                p.AssemblyAngularVelocity = Vector3.new(0, math.random() * 2, 0)
-                p.AssemblyLinearVelocity  = dropVelocity
+                p.AssemblyAngularVelocity = anchorAfter and Vector3.new() or Vector3.new(0, math.random()*2, 0)
+                p.AssemblyLinearVelocity  = anchorAfter and Vector3.new() or dropVelocity
                 p.Massless = false
             end
         end
     end
 
-    local function setItemsVisiblePile()
-        -- 1) Turn OFF toggle visually and logically, but KEEP carried list
-        setToggleCompat(gatherToggleHandle, false)
-        setEnabled(false)
+    local function avgSize(objs)
+        local sum = Vector3.new()
+        local n = 0
+        for _, m in ipairs(objs) do
+            if m and m.Parent then
+                if m:IsA("Model") then
+                    local _, s = m:GetBoundingBox()
+                    sum += s; n += 1
+                else
+                    local p = mainPart(m)
+                    if p then sum += p.Size; n += 1 end
+                end
+            end
+        end
+        if n == 0 then return Vector3.new(3,2.5,3) end
+        return sum / n
+    end
 
-        -- 2) Place items visibly
+    local function placeLogStack(list)
+        local root = hrp(); if not root then return end
+        local forward = root.CFrame.LookVector
+        local right   = root.CFrame.RightVector
+        -- base position: 5 up + 5 forward
+        local basePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
+
+        -- compute consistent step from average size
+        local s = avgSize(list)
+        local stepX = s.X + STACK_H_GAP
+        local stepY = s.Y + STACK_V_GAP
+
+        -- center the row around player: columns -((cols-1)/2) .. ((cols-1)/2)
+        local halfCols = (STACK_COLS - 1) / 2
+
+        local i = 0
+        for _, m in ipairs(list) do
+            if not (m and m.Parent) then goto cont end
+            ensurePrimary(m)
+            stopDrag(m)
+            setNoCollide(m, false)
+
+            local col = i % STACK_COLS
+            local row = math.floor(i / STACK_COLS)
+
+            local lateral = (col - halfCols) * stepX
+            local height  = row * stepY
+
+            local pos = basePos + right * lateral + Vector3.new(0, height, 0)
+            local cf  = CFrame.new(pos, pos + forward)
+
+            local mp = mainPart(m)
+            if m:IsA("Model") and m.PrimaryPart then
+                pcall(function() m:PivotTo(cf) end)
+            elseif mp then
+                pcall(function() mp.CFrame = cf end)
+            end
+
+            dropPhysicsify(m, Vector3.new(0,-25,0), ANCHOR_STACKED_LOGS)
+            ::cont::
+            i += 1
+        end
+
+        -- remove from carried after placing
+        for _, m in ipairs(list) do removeCarry(m) end
+    end
+
+    local function placeLoosePile(list)
         local root = hrp(); if not root then return end
         local forward = root.CFrame.LookVector
         local pilePos = root.Position + Vector3.new(0, 5, 0) + forward * 5
         local function jitter() return Vector3.new((math.random()-0.5)*0.8, 0, (math.random()-0.5)*0.8) end
         local downVel = Vector3.new(0, -30, 0)
 
-        local list = {}
-        for i = 1, #carryList do list[i] = carryList[i] end
-
         for _, m in ipairs(list) do
             if m and m.Parent then
                 ensurePrimary(m)
                 stopDrag(m)
-                setNoCollide(m, false) -- restore collisions before placing
+                setNoCollide(m, false)
 
                 local mp = mainPart(m)
                 local targetCF = CFrame.new(pilePos + jitter(), pilePos + forward)
@@ -318,11 +368,35 @@ return function(C, R, UI)
                     pcall(function() mp.CFrame = targetCF end)
                 end
 
-                dropPhysicsify(m, downVel)
+                dropPhysicsify(m, downVel, false)
             end
             removeCarry(m)
         end
-        -- leave toggle OFF; user can re-enable manually
+    end
+
+    local function setItemsVisible()
+        -- hard-off before placing
+        setToggleCompat(gatherToggleHandle, false)
+        setEnabled(false)
+
+        -- copy snapshot
+        local list = {}
+        for i = 1, #carryList do list[i] = carryList[i] end
+        if #list == 0 then return end
+
+        -- split logs vs others
+        local logs, others = {}, {}
+        for _, m in ipairs(list) do
+            local n = (m and m.Name) and m.Name:lower() or ""
+            if n:find("log", 1, true) then
+                logs[#logs+1] = m
+            else
+                others[#others+1] = m
+            end
+        end
+
+        if #logs > 0 then placeLogStack(logs) end
+        if #others > 0 then placeLoosePile(others) end
     end
 
     ----------------------------------------------------------------
@@ -371,7 +445,7 @@ return function(C, R, UI)
 
     tab:Button({
         Title = "Set Items",
-        Callback = setItemsVisiblePile
+        Callback = setItemsVisible
     })
 
     tab:Section({ Title = "Max Carry: "..tostring(MAX_CARRY) })
