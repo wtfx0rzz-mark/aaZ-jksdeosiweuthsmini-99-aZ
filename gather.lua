@@ -1,10 +1,9 @@
 --=====================================================
--- 1337 Nights | Gather Module (global single-select)
---  • One active selection across ALL dropdowns
---  • Click selected item again -> deselect
+-- 1337 Nights | Gather Module (button-driven single select)
+--  • Top: Enable/Place controls
+--  • Each dropdown has a "Select" button; last button clicked = active target
 --  • Capture within AuraRadius, hover 5u above HRP
---  • Place Down: raycast ground ahead, spread, restore physics
---  • Toggle OFF fully stops and clears
+--  • Place Down raycasts ground ahead, spreads, restores physics
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -16,7 +15,7 @@ return function(C, R, UI)
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
 
-    -- Bring taxonomy
+    -- Taxonomy (mirrors Bring)
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
@@ -25,8 +24,11 @@ return function(C, R, UI)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
-    -- Selection state (exactly one across all)
-    local sel = { name=nil, special=nil }
+    -- Active target (global, single)
+    local sel = { name=nil, special=nil }  -- special ∈ {"mossy","cultist","sapling"} or nil
+
+    -- Per-dropdown current value (what user picked in the dropdown UI)
+    local cur = { Junk=nil, Fuel=nil, Food=nil, Medical=nil, WA=nil, Misc=nil, Pelts=nil }
 
     -- Tunables
     local hoverHeight = 5
@@ -237,11 +239,9 @@ return function(C, R, UI)
     local function placeDown()
         local baseCF = groundAheadCF(); if not baseCF then return end
 
-        -- Prevent immediate re-capture
         if GatherToggleCtrl and GatherToggleCtrl.Set then GatherToggleCtrl:Set(false) end
         stopGather()
 
-        -- Move items to target, spread to avoid interpenetration
         for i,m in ipairs(list) do
             if m and m.Parent then
                 startDrag(m)
@@ -252,7 +252,6 @@ return function(C, R, UI)
 
         task.wait(0.05)
 
-        -- Restore physics uniformly and nudge down
         for _,m in ipairs(list) do
             if m and m.Parent then
                 setAnchoredModel(m, false)
@@ -269,138 +268,65 @@ return function(C, R, UI)
     end
 
     --========================
-    -- UI: Global single-selection with deselect-on-click
+    -- UI
     --========================
-    local sets, current = {}, { Junk=nil, Fuel=nil, Food=nil, Medical=nil, WA=nil, Misc=nil, Pelts=nil }
 
-    local function clearOthers(skipKey)
-        for k,setter in pairs(sets) do
-            if k ~= skipKey then
-                setter(nil)   -- clear visual selection
-                current[k] = nil
-            end
-        end
-    end
-
-    local function choose(dropKey, value, special)
-        -- Click-again to deselect
-        if current[dropKey] == value and ((sel.name == value) or (sel.special == special)) then
-            current[dropKey] = nil
-            sel.name, sel.special = nil, nil
-            clearAll()
-            sets[dropKey](nil)
-            return
-        end
-        -- New selection: set and clear all others
-        current[dropKey] = value
-        sel.name, sel.special = value, special
-        clearAll()
-        clearOthers(dropKey)
-    end
-
-    tab:Section({ Title = "Gather • Single selection (global)", Icon = "layers" })
-
-    sets.Junk = tab:Dropdown({
-        Title = "Junk",
-        Values = junkItems,
-        Multi = false,
-        AllowNone = true,
-        Callback = function(v)
-            v = (v ~= "" and v) or nil
-            choose("Junk", v, nil)
-        end
-    }).Set
-
-    sets.Fuel = tab:Dropdown({
-        Title = "Fuel",
-        Values = fuelItems,
-        Multi = false,
-        AllowNone = true,
-        Callback = function(v)
-            v = (v ~= "" and v) or nil
-            choose("Fuel", v, nil)
-        end
-    }).Set
-
-    sets.Food = tab:Dropdown({
-        Title = "Food",
-        Values = foodItems,
-        Multi = false,
-        AllowNone = true,
-        Callback = function(v)
-            v = (v ~= "" and v) or nil
-            choose("Food", v, nil)
-        end
-    }).Set
-
-    sets.Medical = tab:Dropdown({
-        Title = "Medical",
-        Values = medicalItems,
-        Multi = false,
-        AllowNone = true,
-        Callback = function(v)
-            v = (v ~= "" and v) or nil
-            choose("Medical", v, nil)
-        end
-    }).Set
-
-    sets.WA = tab:Dropdown({
-        Title = "Weapons & Armor",
-        Values = weaponsArmor,
-        Multi = false,
-        AllowNone = true,
-        Callback = function(v)
-            v = (v ~= "" and v) or nil
-            choose("WA", v, nil)
-        end
-    }).Set
-
-    sets.Misc = tab:Dropdown({
-        Title = "Ammo & Misc",
-        Values = ammoMisc,
-        Multi = false,
-        AllowNone = true,
-        Callback = function(v)
-            v = (v ~= "" and v) or nil
-            if v == "Mossy Coin" then
-                choose("Misc", nil, "mossy")
-            elseif v == "Cultist" then
-                choose("Misc", nil, "cultist")
-            elseif v == "Sapling" then
-                choose("Misc", nil, "sapling")
-            else
-                choose("Misc", v, nil)
-            end
-        end
-    }).Set
-
-    sets.Pelts = tab:Dropdown({
-        Title = "Pelts",
-        Values = pelts,
-        Multi = false,
-        AllowNone = true,
-        Callback = function(v)
-            v = (v ~= "" and v) or nil
-            choose("Pelts", v, nil)
-        end
-    }).Set
-
-    tab:Divider()
-
+    -- Top controls first
+    tab:Section({ Title = "Gather Controls", Icon = "toggle-left" })
     GatherToggleCtrl = tab:Toggle({
         Title = "Enable Gather",
         Value = false,
         Callback = function(state)
-            if state then
-                startGather()
-            else
-                stopGather()
-                clearAll()
-            end
+            if state then startGather() else stopGather(); clearAll() end
         end
     })
-
     tab:Button({ Title = "Place Down", Callback = placeDown })
+    tab:Divider()
+
+    -- Helper: build dropdown + select button pair
+    local function buildPicker(title, values, key, specialMap)
+        tab:Section({ Title = title })
+        local setter = tab:Dropdown({
+            Title = title .. " Items",
+            Values = values,
+            Multi = false,
+            AllowNone = true,
+            Callback = function(v)
+                -- store current chosen value for this dropdown
+                if v == "" then v = nil end
+                cur[key] = v
+            end
+        }).Set
+
+        tab:Button({
+            Title = "Select from " .. title,
+            Callback = function()
+                local v = cur[key]
+                -- Resolve specials if this is the Misc dropdown
+                local s = nil
+                if specialMap and v then
+                    if v == "Mossy Coin" then s = "mossy"; v = nil
+                    elseif v == "Cultist" then s = "cultist"; v = nil
+                    elseif v == "Sapling" then s = "sapling"; v = nil
+                    end
+                end
+                -- Last button clicked wins
+                sel.name, sel.special = v, s
+                clearAll()
+            end
+        })
+
+        return setter
+    end
+
+    -- Build all pickers
+    buildPicker("Junk",             junkItems,    "Junk",   nil)
+    buildPicker("Fuel",             fuelItems,    "Fuel",   nil)
+    buildPicker("Food",             foodItems,    "Food",   nil)
+    buildPicker("Medical",          medicalItems, "Medical",nil)
+    buildPicker("Weapons & Armor",  weaponsArmor, "WA",     nil)
+    buildPicker("Ammo & Misc",      ammoMisc,     "Misc",   {specials=true})
+    buildPicker("Pelts",            pelts,        "Pelts",  nil)
 
     -- Safety: restart on respawn if still enabled
     lp.CharacterAdded:Connect(function()
