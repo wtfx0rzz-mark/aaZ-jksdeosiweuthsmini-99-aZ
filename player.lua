@@ -24,7 +24,6 @@ return function(C, R, UI)
 
     local keyDownConn, keyUpConn, jumpConn, noclipConn, renderConn
     local mobileAddedConn, mobileRenderConn
-    local speedPropConn, speedTickConn
     local bodyGyro, bodyVelocity
 
     local EnableFlyToggleCtrl, ForceFlyToggleCtrl
@@ -50,7 +49,6 @@ return function(C, R, UI)
         if not root or not hum then return end
 
         FLYING = true
-        hum.PlatformStand = true
 
         bodyGyro     = Instance.new("BodyGyro")
         bodyVelocity = Instance.new("BodyVelocity")
@@ -89,17 +87,25 @@ return function(C, R, UI)
         end)
 
         renderConn = RunService.RenderStepped:Connect(function()
-            local r = hrp()
-            if not r then return end
-            bodyGyro.CFrame = workspace.CurrentCamera.CFrame
+            local cam = workspace.CurrentCamera
+            if not cam or not root then return end
+            hum.PlatformStand = true
+            bodyGyro.CFrame = cam.CFrame
 
-            local vel = Vector3.new()
-            vel = vel + workspace.CurrentCamera.CFrame.LookVector * (CONTROL.F + CONTROL.B)
-            vel = vel + workspace.CurrentCamera.CFrame.RightVector * (CONTROL.R + CONTROL.L)
-            vel = vel + Vector3.new(0, CONTROL.Q + CONTROL.E, 0)
+            local moveVec = Vector3.new()
+            if CONTROL.F ~= 0 or CONTROL.B ~= 0 then
+                moveVec = moveVec + cam.CFrame.LookVector * (CONTROL.F + CONTROL.B)
+            end
+            if CONTROL.L ~= 0 or CONTROL.R ~= 0 then
+                moveVec = moveVec + cam.CFrame.RightVector * (CONTROL.R + CONTROL.L)
+            end
+            if CONTROL.Q ~= 0 or CONTROL.E ~= 0 then
+                moveVec = moveVec + cam.CFrame.UpVector * (CONTROL.Q + CONTROL.E)
+            end
 
-            bodyVelocity.Velocity = vel * 50
-            if vel.Magnitude < 1e-3 then
+            if moveVec.Magnitude > 0 then
+                bodyVelocity.Velocity = moveVec.Unit * (flySpeed * 50)
+            else
                 bodyVelocity.Velocity = Vector3.new()
             end
         end)
@@ -130,39 +136,47 @@ return function(C, R, UI)
         bodyGyro     = Instance.new("BodyGyro")
         bodyVelocity = Instance.new("BodyVelocity")
         bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-        bodyGyro.P = 9e4
-        bodyGyro.CFrame = root.CFrame
+        bodyGyro.P = 1000
+        bodyGyro.D = 50
         bodyGyro.Parent = root
 
         bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bodyVelocity.Velocity = Vector3.new()
         bodyVelocity.Parent = root
 
-        local StarterGui = game:GetService("StarterGui")
-        StarterGui:SetCore("ResetButtonCallback", true)
-
-        local controlModule = nil
-        mobileAddedConn = lp.CharacterAdded:Connect(function(char)
-            local plrScripts = char:FindFirstChildOfClass("LocalScript")
-            if plrScripts and plrScripts.Name == "PlayerScripts" then
-                local p = plrScripts:FindFirstChild("ControlScript", true)
-                if p then controlModule = require(p) end
-            end
+        mobileAddedConn = Players.LocalPlayer.CharacterAdded:Connect(function()
+            root = hrp()
+            if not root then return end
+            clearInstance(bodyGyro); clearInstance(bodyVelocity)
+            bodyGyro = Instance.new("BodyGyro")
+            bodyVelocity = Instance.new("BodyVelocity")
+            bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+            bodyGyro.P = 1000
+            bodyGyro.D = 50
+            bodyGyro.Parent = root
+            bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+            bodyVelocity.Velocity = Vector3.new()
+            bodyVelocity.Parent = root
         end)
 
         mobileRenderConn = RunService.RenderStepped:Connect(function()
-            local r = hrp()
-            local hum = humanoid()
-            if not r or not hum then return end
-            bodyGyro.CFrame = workspace.CurrentCamera.CFrame
+            root = hrp()
+            local cam = workspace.CurrentCamera
+            if not root or not cam then return end
+            hum.PlatformStand = true
+            bodyGyro.CFrame = cam.CFrame
 
             local move = Vector3.new()
-            if controlModule and controlModule.GetMoveVector then
+            local ok, controlModule = pcall(function()
+                return require(lp.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
+            end)
+            if ok and controlModule and controlModule.GetMoveVector then
                 move = controlModule:GetMoveVector()
             end
 
             local vel = Vector3.new()
-            vel = vel + workspace.CurrentCamera.CFrame.RightVector * (move.X * (flySpeed * 50))
-            vel = vel - workspace.CurrentCamera.CFrame.LookVector  * (move.Z * (flySpeed * 50))
+            vel = vel + cam.CFrame.RightVector * (move.X * (flySpeed * 50))
+            vel = vel - cam.CFrame.LookVector  * (move.Z * (flySpeed * 50))
             bodyVelocity.Velocity = vel
         end)
     end
@@ -191,34 +205,41 @@ return function(C, R, UI)
     end
 
     --========================
-    -- Force Fly (Position Hold)
+    -- Force Fly
     --========================
+    local PITCH_DEADZONE = 0.22
     local function startForceFly()
         if forceFlyConn then return end
-        forceFlyEnabled = true
-        local r = hrp()
-        if not r then return end
-        forceDesiredPos = r.Position
-        forceLastFaceDir = r.CFrame.LookVector
+        local root = hrp()
+        local hum  = humanoid()
+        if not root or not hum then return end
+
+        forceFlyEnabled  = true
+        forceDesiredPos  = root.Position
+        forceLastFaceDir = root.CFrame.LookVector
 
         forceFlyConn = RunService.RenderStepped:Connect(function(dt)
             local r = hrp()
-            if not r then return end
+            local h = humanoid()
             local cam = workspace.CurrentCamera
-            local look = cam.CFrame.LookVector
-            local right = cam.CFrame.RightVector
+            if not r or not h or not cam then return end
 
-            local planar = Vector3.new(0, 0, 0)
-            local vert = 0
-            if UIS:IsKeyDown(Enum.KeyCode.W) then planar = planar + Vector3.new(look.X, 0, look.Z) end
-            if UIS:IsKeyDown(Enum.KeyCode.S) then planar = planar - Vector3.new(look.X, 0, look.Z) end
-            if UIS:IsKeyDown(Enum.KeyCode.D) then planar = planar + Vector3.new(right.X, 0, right.Z) end
-            if UIS:IsKeyDown(Enum.KeyCode.A) then planar = planar - Vector3.new(right.X, 0, right.Z) end
-            if UIS:IsKeyDown(Enum.KeyCode.E) then vert =  flySpeed * 2 end
-            if UIS:IsKeyDown(Enum.KeyCode.Q) then vert = -flySpeed * 2 end
+            h.PlatformStand = true
 
+            local move = h.MoveDirection
+            local planar = Vector3.new(move.X,0,move.Z)
             local mag = planar.Magnitude
-            if mag > 1e-3 then planar = planar.Unit * (flySpeed * 50) end
+            if mag > 1e-3 then planar = planar / mag else planar = Vector3.zero end
+
+            local lookY = cam.CFrame.LookVector.Y
+            local vert = 0
+            if mag > 1e-3 then
+                local a = math.abs(lookY)
+                if a > PITCH_DEADZONE then
+                    local t = (a - PITCH_DEADZONE) / (1 - PITCH_DEADZONE)
+                    vert = (lookY > 0 and 1 or -1) * t * (flySpeed * 50)
+                end
+            end
 
             local delta = Vector3.zero
             if mag > 1e-3 then delta = delta + planar * (flySpeed * 50 * dt) end
@@ -262,33 +283,6 @@ return function(C, R, UI)
         if hum then hum.WalkSpeed = val end
     end
 
-    local function unbindSpeedWatchers()
-        disconnectConn(speedPropConn); speedPropConn = nil
-        disconnectConn(speedTickConn); speedTickConn = nil
-    end
-
-    local function bindSpeedWatchers()
-        unbindSpeedWatchers()
-        local hum = humanoid()
-        if not hum then return end
-        speedPropConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
-            if speedEnabled and hum and hum.WalkSpeed ~= walkSpeedValue then
-                hum.WalkSpeed = walkSpeedValue
-            end
-        end)
-        local acc = 0
-        speedTickConn = RunService.Heartbeat:Connect(function(dt)
-            acc = acc + dt
-            if acc < 0.25 then return end
-            acc = 0
-            if not speedEnabled then return end
-            local h = humanoid()
-            if h and h.WalkSpeed ~= walkSpeedValue then
-                h.WalkSpeed = walkSpeedValue
-            end
-        end)
-    end
-
     --========================
     -- Noclip
     --========================
@@ -306,37 +300,26 @@ return function(C, R, UI)
     end
     local function stopNoclip()
         disconnectConn(noclipConn); noclipConn = nil
-        local ch = lp.Character
-        if not ch then return end
-        for _, part in ipairs(ch:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = true
-            end
-        end
     end
 
     --========================
     -- Infinite Jump
     --========================
-    local infJumpEnabled = false
     local function startInfJump()
-        if jumpConn then jumpConn:Disconnect() end
-        infJumpEnabled = true
+        disconnectConn(jumpConn)
         jumpConn = UIS.JumpRequest:Connect(function()
-            if not infJumpEnabled then return end
             local hum = humanoid()
             if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
         end)
     end
     local function stopInfJump()
-        infJumpEnabled = false
         disconnectConn(jumpConn); jumpConn = nil
     end
 
     --========================
-    -- UI
+    -- UI Controls
     --========================
-    tab:Section({ Title = "Fly", Icon = "activity" })
+    tab:Section({ Title = "Player • Movement", Icon = "activity" })
 
     tab:Slider({
         Title = "Fly Speed",
@@ -364,6 +347,7 @@ return function(C, R, UI)
     tab:Divider()
     tab:Section({ Title = "Walk Speed", Icon = "walk" })
 
+    -- Order-independent speed: slider applies live when toggle is on
     tab:Slider({
         Title = "Speed",
         Value = { Min = 16, Max = 150, Default = 24 },
@@ -378,18 +362,12 @@ return function(C, R, UI)
         Value = false,
         Callback = function(state)
             speedEnabled = state
-            if state then
-                setWalkSpeed(walkSpeedValue)
-                bindSpeedWatchers()
-            else
-                unbindSpeedWatchers()
-                setWalkSpeed(16)
-            end
+            if state then setWalkSpeed(walkSpeedValue) else setWalkSpeed(16) end
         end
     })
 
     tab:Divider()
-    tab:Section({ Title = "Noclip / Jump", Icon = "zap" })
+    tab:Section({ Title = "Utilities", Icon = "tool" })
 
     tab:Toggle({
         Title = "Noclip",
@@ -412,6 +390,7 @@ return function(C, R, UI)
         Value = false,
         Callback = function(state)
             if state and flyEnabled then
+                flyEnabled = false
                 stopFly()
                 if EnableFlyToggleCtrl and EnableFlyToggleCtrl.Set then
                     EnableFlyToggleCtrl:Set(false)
@@ -437,7 +416,6 @@ return function(C, R, UI)
         if speedEnabled then
             task.defer(function()
                 setWalkSpeed(walkSpeedValue)
-                bindSpeedWatchers()
             end)
         end
     end)
