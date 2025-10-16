@@ -1,323 +1,158 @@
 --=====================================================
--- 1337 Nights | memory.lua  • Client-side memory guard + janitor
---  - Janitor: one-call cleanup for connections/instances
---  - Track(): tag temp instances, optional auto-remove via Debris
---  - Loop scheduler with safe cancel
---  - Periodic audit: remove orphaned Highlights/BillboardGuis,
---    dedupe EdgeButtons ScreenGui, trim runaway counts
---  - Optional tiny HUD for client memory (Stats service)
+-- 1337 Nights | memory.lua • Performance logger (no UI)
+--  • Toggle in tab → emits snapshots to your logger
+--  • Tracks FPS, memory tags, instance counts
+--  • Adds focused metrics for "Log" items in Workspace.Items
+--  • Near-zero overhead when off
 --=====================================================
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
-    assert(C and C.Services, "memory.lua: missing context")
+    assert(C and C.Services and UI and UI.Tabs, "memory.lua: missing context or UI")
 
     local Players = C.Services.Players or game:GetService("Players")
-    local Debris  = game:GetService("Debris")
     local Run     = C.Services.Run     or game:GetService("RunService")
     local Stats   = game:GetService("Stats")
     local WS      = C.Services.WS      or game:GetService("Workspace")
-    local RS      = C.Services.RS      or game:GetService("ReplicatedStorage")
 
-    local lp = Players.LocalPlayer
+    -- ---- host tab (prefer a Memory tab if present) ----
+    local hostTab = (UI.Tabs.Memory or UI.Tabs.Main or UI.Tabs.Auto or UI.Tabs.Player or UI.Tabs.Visuals)
+    assert(hostTab, "memory.lua: no suitable tab found")
 
-    ----------------------------------------------------------------------
-    -- Janitor utility
-    ----------------------------------------------------------------------
-    local Janitor = {}
-    Janitor.__index = Janitor
-
-    function Janitor.new()
-        return setmetatable({
-            _tasks = setmetatable({}, {__mode="v"}) -- weak values to allow GC
-        }, Janitor)
-    end
-
-    -- Add(obj [, methodNameOrFunc])
-    function Janitor:Add(obj, method)
-        local entry = {obj = obj, method = method}
-        table.insert(self._tasks, entry)
-        return obj
-    end
-
-    function Janitor:Cleanup()
-        local t = self._tasks
-        for i = #t, 1, -1 do
-            local e = t[i]
-            local o = e and e.obj
-            local m = e and e.method
-            if o then
-                pcall(function()
-                    if type(m) == "function" then
-                        m(o)
-                    elseif type(m) == "string" and o[m] then
-                        o[m](o)
-                    elseif typeof(o) == "RBXScriptConnection" then
-                        o:Disconnect()
-                    elseif typeof(o) == "Instance" and o.Destroy then
-                        o:Destroy()
-                    end
-                end)
-            end
-            t[i] = nil
+    -- ---- logger adapter: call your logger if present, else print ----
+    local function emit(line)
+        -- Common patterns: R.Logger.Append, R.Logger.Log, R.Log, C.Log, _G.Logger.Log, _G.Log
+        local ok =
+            (R and R.Logger and typeof(R.Logger.Append)=="function" and pcall(R.Logger.Append, line)) or
+            (R and R.Logger and typeof(R.Logger.Log)   =="function" and pcall(R.Logger.Log,    line)) or
+            (R and typeof(R.Log)=="function"                       and pcall(R.Log,             line)) or
+            (C and typeof(C.Log)=="function"                       and pcall(C.Log,             line)) or
+            (_G and _G.Logger and typeof(_G.Logger.Log)=="function"and pcall(_G.Logger.Log,    line)) or
+            (_G and typeof(_G.Log)=="function"                     and pcall(_G.Log,            line))
+        if not ok then
+            print(line)
         end
     end
 
-    ----------------------------------------------------------------------
-    -- MemoryGuard API
-    ----------------------------------------------------------------------
-    local MemoryGuard = {}
-    local _tracked = setmetatable({}, {__mode="kv"}) -- [instance] = expireAt or false
-    local _conns   = setmetatable({}, {__mode="v"})
-    local _loops   = {} -- name -> {running=true, thread=task}
+    -- ---- FPS sampler ring ----
+    local ring = table.create(240, 1/60) -- ~4s
+    local head, count = 0, 0
+    local function pushDt(dt)
+        head = (head % #ring) + 1
+        ring[head] = dt
+        if count < #ring then count += 1 end
+    end
+    local function avgFps()
+        if count == 0 then return 0 end
+        local s = 0; for i=1,count do s += ring[i] end
+        return 1 / (s / count)
+    end
+    local function fpsPercentile(pWorst) -- pWorst in [0..1], e.g. 0.01 for 1% low
+        if count == 0 then return 0 end
+        local t, n = table.create(count), 0
+        for i=1,count do n+=1; t[n]=ring[i] end
+        table.sort(t) -- ascending dt (worst at end)
+        local idx = math.clamp(math.max(1, math.floor((1 - pWorst) * n)), 1, n)
+        return 1 / t[idx]
+    end
 
-    -- Track an instance with optional lifetime (seconds). Uses Debris if ttl given.
-    function MemoryGuard.Track(inst, ttl)
-        if not inst or typeof(inst) ~= "Instance" then return end
-        if type(ttl) == "number" and ttl > 0 then
-            Debris:AddItem(inst, ttl)
-            _tracked[inst] = (os.clock() + ttl)
-        else
-            _tracked[inst] = false
+    -- ---- safe memory tag read ----
+    local function mem(tag)
+        local ok, v = pcall(function() return Stats:GetMemoryUsageMbForTag(tag) end)
+        return ok and v or 0
+    end
+
+    -- ---- counts ----
+    local function countFolderChildren(path)
+        local cur = WS
+        for _,n in ipairs(path) do
+            cur = cur and cur:FindFirstChild(n)
         end
-    end
-
-    -- Track a connection for bulk cleanup
-    function MemoryGuard.Connect(conn)
-        if typeof(conn) == "RBXScriptConnection" then
-            table.insert(_conns, conn)
+        if cur and cur.GetChildren then
+            local ok, kids = pcall(cur.GetChildren, cur)
+            return (ok and kids and #kids) or 0
         end
-        return conn
+        return 0
     end
 
-    -- Start a safe loop that can be cancelled via StopLoop(name)
-    function MemoryGuard.StartLoop(name, intervalSec, fn)
-        MemoryGuard.StopLoop(name)
-        local alive = true
-        _loops[name] = {running = true}
-        task.spawn(function()
-            while alive do
-                local ok, err = pcall(fn)
-                if not ok then warn("[MemoryGuard] Loop '"..tostring(name).."' error:", err) end
-                task.wait(intervalSec)
-                local slot = _loops[name]
-                alive = slot and slot.running == true
-            end
-        end)
-    end
-
-    function MemoryGuard.StopLoop(name)
-        local slot = _loops[name]
-        if slot then slot.running = false end
-        _loops[name] = nil
-    end
-
-    -- Bulk cleanup now
-    function MemoryGuard.CleanupAll()
-        -- connections
-        for i = #_conns, 1, -1 do
-            local c = _conns[i]
-            if c then pcall(function() c:Disconnect() end) end
-            _conns[i] = nil
-        end
-        -- tracked instances (destroy only if still valid and no Debris TTL)
-        for inst, expire in pairs(_tracked) do
-            if inst and inst.Parent and (not expire) then
-                pcall(function() inst:Destroy() end)
-            end
-            _tracked[inst] = nil
-        end
-    end
-
-    ----------------------------------------------------------------------
-    -- Orphan auditor (targets common leak-prone visuals/util GUIs)
-    ----------------------------------------------------------------------
-    local PLAYER_HL_NAME = "__PlayerTrackerHL__"
-    local TREE_HL_NAME   = "__TreeAuraHL__"
-    local CHAR_HL_NAME   = "__CharAuraHL__"
-    local ESP_BB_NAME    = "ESPText"
-    local EDGE_GUI_NAME  = "EdgeButtons"
-    local PLACE_BTN_NAME = "PlaceEdge"
-
-    local MAX_HIGHLIGHTS = 1000  -- hard cap to prevent runaway
-    local MAX_BILLBOARDS = 1000
-
-    local function isOrphanHighlight(h)
-        if not (h and h:IsA("Highlight")) then return false end
-        local adornee = h.Adornee
-        return (not adornee) or (not adornee.Parent)
-    end
-
-    local function isOrphanBillboard(bb)
-        if not (bb and bb:IsA("BillboardGui")) then return false end
-        local adornee = bb.Adornee
-        -- also consider if parent part is gone
-        return (not adornee) or (not adornee.Parent) or (not bb.Parent)
-    end
-
-    local function dedupeEdgeButtons()
-        local pg = lp:FindFirstChildOfClass("PlayerGui")
-        if not pg then return end
-        local list = {}
-        for _, gui in ipairs(pg:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Name == EDGE_GUI_NAME then
-                table.insert(list, gui)
-            end
-        end
-        if #list > 1 then
-            -- keep the earliest one; destroy others
-            for i = 2, #list do
-                pcall(function() list[i]:Destroy() end)
-            end
-        end
-        -- ensure only one PlaceEdge under it
-        local edge = pg:FindFirstChild(EDGE_GUI_NAME)
-        if edge then
-            local btns = {}
-            for _, ch in ipairs(edge:GetChildren()) do
-                if ch:IsA("TextButton") and ch.Name == PLACE_BTN_NAME then
-                    table.insert(btns, ch)
-                end
-            end
-            if #btns > 1 then
-                for i = 2, #btns do pcall(function() btns[i]:Destroy() end) end
-            end
-        end
-    end
-
-    local function auditOnce()
-        -- Highlights
-        local hlCount = 0
-        for _, inst in ipairs(WS:GetDescendants()) do
-            if inst:IsA("Highlight") then
-                local n = inst.Name
-                if n == PLAYER_HL_NAME or n == TREE_HL_NAME or n == CHAR_HL_NAME then
-                    if isOrphanHighlight(inst) then
-                        pcall(function() inst:Destroy() end)
-                    else
-                        hlCount += 1
+    local function countLogs()
+        local items = WS:FindFirstChild("Items")
+        if not items then return 0,0,0 end
+        local models, parts, anchored = 0, 0, 0
+        for _, m in ipairs(items:GetChildren()) do
+            if m:IsA("Model") and m.Name == "Log" then
+                models += 1
+                for _, d in ipairs(m:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        parts += 1
+                        if d.Anchored then anchored += 1 end
                     end
                 end
             end
         end
-        -- Cap highlights if somehow leaked
-        if hlCount > MAX_HIGHLIGHTS then
-            local trimmed = 0
-            for _, inst in ipairs(WS:GetDescendants()) do
-                if trimmed >= (hlCount - MAX_HIGHLIGHTS) then break end
-                if inst:IsA("Highlight") then
-                    local n = inst.Name
-                    if n == TREE_HL_NAME or n == CHAR_HL_NAME then
-                        pcall(function() inst:Destroy() end)
-                        trimmed += 1
-                    end
-                end
-            end
-        end
-
-        -- Billboard GUIs (ESP)
-        local bbCount = 0
-        for _, inst in ipairs(WS:GetDescendants()) do
-            if inst:IsA("BillboardGui") and inst.Name == ESP_BB_NAME then
-                if isOrphanBillboard(inst) then
-                    pcall(function() inst:Destroy() end)
-                else
-                    bbCount += 1
-                end
-            end
-        end
-        if bbCount > MAX_BILLBOARDS then
-            local trimmed = 0
-            for _, inst in ipairs(WS:GetDescendants()) do
-                if trimmed >= (bbCount - MAX_BILLBOARDS) then break end
-                if inst:IsA("BillboardGui") and inst.Name == ESP_BB_NAME then
-                    pcall(function() inst:Destroy() end)
-                    trimmed += 1
-                end
-            end
-        end
-
-        -- Dedupe shared UI
-        dedupeEdgeButtons()
-
-        -- Drop invalid tracked references
-        local now = os.clock()
-        for inst, expire in pairs(_tracked) do
-            if (not inst) or (typeof(inst) ~= "Instance") or (not inst.Parent) then
-                _tracked[inst] = nil
-            elseif expire and now >= expire then
-                -- Debris should remove it; clear our entry
-                _tracked[inst] = nil
-            end
-        end
+        return models, parts, anchored
     end
 
-    -- Run auditor at low cadence
-    MemoryGuard.StartLoop("__mem_audit__", 5.0, auditOnce)
+    local function fmt(n, d) return string.format("%."..(d or 1).."f", n) end
 
-    ----------------------------------------------------------------------
-    -- Optional HUD (toggle with C.Config.MemHUD = true)
-    ----------------------------------------------------------------------
-    local function makeHud()
-        local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
-        local gui = Instance.new("ScreenGui")
-        gui.Name = "__MemHUD__"
-        gui.ResetOnSpawn = false
-        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-        gui.Parent = pg
+    local updating, hbConn, tickConn = false, nil, nil
 
-        local label = Instance.new("TextLabel")
-        label.Name = "Stats"
-        label.Size = UDim2.new(0, 220, 0, 46)
-        label.Position = UDim2.new(0, 8, 0, 8)
-        label.BackgroundTransparency = 0.2
-        label.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-        label.TextColor3 = Color3.new(1,1,1)
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        label.TextYAlignment = Enum.TextYAlignment.Top
-        label.Font = Enum.Font.Code
-        label.TextSize = 14
-        label.BorderSizePixel = 0
-        label.Parent = gui
+    local function startLogger()
+        if updating then return end
+        updating = true
+        -- reset ring
+        for i=1,#ring do ring[i]=1/60 end
+        head, count = 0, 0
 
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = label
+        hbConn   = Run.Heartbeat:Connect(pushDt)
+        tickConn = task.spawn(function()
+            while updating do
+                local fps    = avgFps()
+                local fps1   = fpsPercentile(0.01)
+                local total  = Stats:GetTotalMemoryUsageMb()
+                local luaH   = mem(Enum.DeveloperMemoryTag.LuaHeap)
+                local inst   = mem(Enum.DeveloperMemoryTag.Instances)
+                local tex    = mem(Enum.DeveloperMemoryTag.Texture)
+                local gui    = mem(Enum.DeveloperMemoryTag.Gui)
+                local phys   = mem(Enum.DeveloperMemoryTag.Physics)
+                local net    = mem(Enum.DeveloperMemoryTag.Network)
 
-        MemoryGuard.StartLoop("__mem_hud__", 1.0, function()
-            local tm  = Stats:GetTotalMemoryUsageMb()
-            local lu  = Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.LuaHeap)
-            local ins = Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Instances)
-            local tex = Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Texture)
-            label.Text = string.format("Mem: %.1f MB\nLua: %.1f | Inst: %.1f | Tex: %.1f", tm, lu, ins, tex)
+                local itemsN = countFolderChildren({"Items"})
+                local charsN = countFolderChildren({"Characters"})
+                local logN, logParts, logAnch = countLogs()
+
+                local toggles = {}
+                local ts = (C.State and C.State.Toggles) or {}
+                for k,v in pairs(ts) do if v then toggles[#toggles+1]=k end end
+                table.sort(toggles)
+
+                local line = (
+                    "FPS %s | 1%% %s | Mem %.1fMB [Lua %.1f Inst %.1f Tex %.1f Gui %.1f Phys %.1f Net %.1f] | Items %d, Chars %d | Logs %d (parts %d, anchored %d) | Toggles [%s]"
+                ):format(
+                    fmt(fps,1), fmt(fps1,1), total, luaH, inst, tex, gui, phys, net,
+                    itemsN, charsN, logN, logParts, logAnch, table.concat(toggles, ", ")
+                )
+
+                emit(line)
+                task.wait(0.5)
+            end
         end)
-        return gui
     end
 
-    local function destroyHud()
-        MemoryGuard.StopLoop("__mem_hud__")
-        local pg = lp:FindFirstChildOfClass("PlayerGui")
-        local hud = pg and pg:FindFirstChild("__MemHUD__")
-        if hud then pcall(function() hud:Destroy() end) end
+    local function stopLogger()
+        updating = false
+        if hbConn   then pcall(function() hbConn:Disconnect() end)   end; hbConn   = nil
+        if tickConn then pcall(function() task.cancel(tickConn) end) end; tickConn = nil
     end
 
-    -- Expose API
-    C.Util          = C.Util or {}
-    C.Util.Janitor  = Janitor
-    C.Util.MemGuard = MemoryGuard
-    C.Util.ToggleMemHUD = function(on)
-        if on then makeHud() else destroyHud() end
-    end
+    hostTab:Section({ Title = "Diagnostics", Icon = "activity" })
+    local ToggleCtrl = hostTab:Toggle({
+        Title = "Performance Logger",
+        Value = false,
+        Callback = function(on) if on then startLogger() else stopLogger() end end
+    })
 
-    -- Honor config flag if present
-    if C.Config and C.Config.MemHUD then
-        makeHud()
-    end
-
-    -- Safety: clean per-respawn UI duplicates and stale visuals
-    MemoryGuard.Connect(lp.CharacterAdded:Connect(function()
-        task.delay(2.0, function()
-            auditOnce()
-        end)
-    end))
+    Players.LocalPlayer.CharacterAdded:Connect(function()
+        if updating then task.defer(function() stopLogger(); startLogger() end) end
+    end)
 end
