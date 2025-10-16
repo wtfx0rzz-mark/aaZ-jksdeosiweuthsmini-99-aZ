@@ -66,8 +66,8 @@ return function(C, R, UI)
         local total, off = 0, 0
         for _,d in ipairs(ch:GetDescendants()) do
             if d:IsA("BasePart") then
-                total += 1
-                if d.CanCollide == false then off += 1 end
+                total = total + 1
+                if d.CanCollide == false then off = off + 1 end
             end
         end
         return (total > 0) and ((off / total) >= 0.9) or false
@@ -292,7 +292,7 @@ return function(C, R, UI)
                         knownLost[d] = cur
                     elseif prev == true and cur == false then
                         if savedCount < MAX_TO_SAVE then
-                            savedCount += 1
+                            savedCount = savedCount + 1
                         end
                         knownLost[d] = cur
                     else
@@ -389,6 +389,8 @@ return function(C, R, UI)
         end
     end
 
+    enableInstantInteract()
+
     tab:Toggle({
         Title = "Instant Interact",
         Value = true,
@@ -407,3 +409,4 @@ return function(C, R, UI)
         end
     end)
 end
+
