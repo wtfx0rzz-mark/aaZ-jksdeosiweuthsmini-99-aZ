@@ -1,11 +1,10 @@
 --=====================================================
 -- 1337 Nights | Gather Module (Multi-select + One "Gather Items" button)
---  • Top [Bring] drops all gathered items
---  • Category dropdowns now support MULTI select
+--  • Top [Bring] and on-screen [Place] now drop items in a compact pile
+--  • Category dropdowns support MULTI select with tap-to-toggle entries
 --  • One global "Gather Items" button starts capture for the union of selections
 --  • Hover-carry 5u above HRP; grounded placement via raycast
 --  • Morsel: return net ownership to server on drop so fire/drag work
---  • Edge "Place" button appears when Gather starts and hides after drop
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -34,8 +33,18 @@ return function(C, R, UI)
     local wantMossy, wantCultist, wantSapling = false, false, false
 
     -- Tunables
-    local hoverHeight, forwardDrop, upDrop = 5, 10, 5
-    local scanInterval = 0.1
+    local hoverHeight    = 5
+    local forwardDrop    = 10
+    local upDrop         = 5
+    local scanInterval   = 0.1
+
+    -- Pile drop tuning
+    local PILE_RADIUS    = 1.25     -- studs, radial disk
+    local LAYER_SIZE     = 14       -- items per layer before adding height
+    local LAYER_HEIGHT   = 0.35     -- extra height per layer
+    local UNANCHOR_BATCH = 6        -- how many to release per tick
+    local UNANCHOR_STEP  = 0.03     -- seconds between batches
+    local NUDGE_DOWN     = 4        -- gentle downward nudge on release
 
     -- Runtime
     local gatherOn = false
@@ -211,11 +220,73 @@ return function(C, R, UI)
         local drop   = hitPos + Vector3.new(0, upDrop, 0)
         return CFrame.lookAt(drop, drop + forward)
     end
-    local function spreadCF(i, baseCF)
-        local r   = 2 + math.floor((i-1)/8)
-        local idx = (i-1) % 8
-        local ang = (idx/8) * math.pi*2
-        return baseCF + Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
+
+    -- Compact pile placement: small jitter on a disk + vertical layering
+    local function pileCF(i, baseCF)
+        local idx0   = i - 1
+        local layer  = math.floor(idx0 / LAYER_SIZE)
+        local inLayer= idx0 % LAYER_SIZE
+
+        local angle  = (inLayer / LAYER_SIZE) * math.pi * 2
+        local r      = (0.25 + (inLayer % 7) * 0.07) * PILE_RADIUS  -- varied ring inside radius
+        local x      = math.cos(angle) * r + (math.random() - 0.5) * 0.12
+        local z      = math.sin(angle) * r + (math.random() - 0.5) * 0.12
+        local y      = layer * LAYER_HEIGHT
+
+        return baseCF * CFrame.new(x, y, z)
+    end
+
+    local function finalizePileDrop(items)
+        -- Enable collisions but keep anchored before staged release
+        for _,m in ipairs(items) do
+            if m and m.Parent then
+                setNoCollideModel(m, false)
+                for _,p in ipairs(m:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.AssemblyLinearVelocity  = Vector3.new()
+                        p.AssemblyAngularVelocity = Vector3.new()
+                    end
+                end
+            end
+        end
+
+        -- Special fix for Morsel net ownership
+        for _,m in ipairs(items) do
+            if m and m.Parent and m.Name == "Morsel" then
+                local mp = mainPart(m)
+                if mp then
+                    pcall(function() mp:SetNetworkOwner(nil) end)
+                    pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+                end
+                for _,p in ipairs(m:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.CollisionGroupId = 0
+                        p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
+                        p.Massless   = false
+                    end
+                end
+            end
+        end
+
+        -- Staged unanchor to avoid explosion
+        local n = #items
+        local i = 1
+        while i <= n do
+            for j = i, math.min(i + UNANCHOR_BATCH - 1, n) do
+                local m = items[j]
+                if m and m.Parent then
+                    setAnchoredModel(m, false)
+                    for _,p in ipairs(m:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            p.AssemblyLinearVelocity  = Vector3.new(0, -NUDGE_DOWN, 0)
+                            p.AssemblyAngularVelocity = Vector3.new()
+                        end
+                    end
+                end
+            end
+            task.wait(UNANCHOR_STEP)
+            i = i + UNANCHOR_BATCH
+        end
     end
 
     local function placeDown()
@@ -224,42 +295,19 @@ return function(C, R, UI)
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
         stopGather()
 
+        -- Arrange tightly while still anchored and non-colliding
         for i,m in ipairs(list) do
             if m and m.Parent then
                 startDrag(m)
-                pivotModel(m, spreadCF(i, baseCF))
+                setAnchoredModel(m, true)
+                setNoCollideModel(m, true)
+                pivotModel(m, pileCF(i, baseCF))
                 stopDrag(m)
             end
         end
 
-        task.wait(0.05)
-        for _,m in ipairs(list) do
-            if m and m.Parent then
-                setAnchoredModel(m, false)
-                setNoCollideModel(m, false)
-                if m.Name == "Morsel" then
-                    local mp = mainPart(m)
-                    if mp then
-                        pcall(function() mp:SetNetworkOwner(nil) end)
-                        pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
-                    end
-                    for _,p in ipairs(m:GetDescendants()) do
-                        if p:IsA("BasePart") then
-                            p.CollisionGroupId = 0
-                            p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
-                            p.Massless   = false
-                            p.AssemblyLinearVelocity = Vector3.new(0, -30, 0)
-                        end
-                    end
-                else
-                    for _,p in ipairs(m:GetDescendants()) do
-                        if p:IsA("BasePart") then
-                            p.AssemblyLinearVelocity = Vector3.new(0, -25, 0)
-                        end
-                    end
-                end
-            end
-        end
+        task.wait(0.03)
+        finalizePileDrop(list)
         clearAll()
     end
 
@@ -297,9 +345,7 @@ return function(C, R, UI)
             AllowNone = true,
             Callback = function(options)
                 local set = args.set
-                -- reset set
                 for k,_ in pairs(set) do set[k] = nil end
-                -- specials handling for Misc
                 if args.kind == "Misc" then
                     wantMossy, wantCultist, wantSapling = false, false, false
                     for _,v in ipairs(options) do
