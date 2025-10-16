@@ -10,18 +10,28 @@ return function(C, R, UI)
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
+    -- Tunables (easy to adjust)
+-- Bind to shared config table for easy tuning from outside modules
+local TUNE = C.Config
+-- Seconds to wait between waves of swings/hits
+TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
+-- Default tree model name to target when unspecified
+TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
+-- Suffix appended to per-hit IDs and attributes for uniqueness
+TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
+-- Tool preference order used when auto-equipping
+TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
+-- Upper bound of tree targets processed per wave
+TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 10
+-- Upper bound of character targets processed per wave
+TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 16
+-- Minimum seconds between hits on the same character (anti-spam)
+TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.49
+-- Wait inserted between sequential character hits to reduce spikes
+TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.02
+-- If true (default), sort characters by distance; set false to skip sort
+TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
 
-    -- Tunables (character path optimized; trees unchanged/parallel)
-    local TUNE = C.Config
-    TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
-    TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
-    TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
-    TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
-    TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 5
-    TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 5
-    TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.49
-    TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.04
-    TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
 
     local running = { SmallTree = false, Character = false }
 
@@ -196,7 +206,6 @@ return function(C, R, UI)
         return out
     end
 
-    -- Character: sequential with debounce; Trees: parallel per target (original behavior)
     local lastHitAt = setmetatable({}, {__mode="k"})
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         local toolName
@@ -236,7 +245,6 @@ return function(C, R, UI)
             return
         end
 
-        -- Trees: parallel per target (no debounce, no stillness gating)
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
                 local hitPart = hitPartGetter(mdl)
