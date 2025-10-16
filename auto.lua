@@ -5,6 +5,7 @@ return function(C, R, UI)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
+    local PPS     = game:GetService("ProximityPromptService")
 
     local lp = Players.LocalPlayer
     local Tabs = (UI and UI.Tabs) or {}
@@ -352,40 +353,51 @@ return function(C, R, UI)
         end
     })
 
+    ----------------------------------------------------------------
+    -- Instant Interact (event-driven, race-safe)
+    ----------------------------------------------------------------
     local promptDurations = setmetatable({}, { __mode = "k" })
-    local promptsConn, addedConn
+    local shownConn, trigConn, hiddenConn
+    local INSTANT_HOLD = 0.05 -- near-instant without 0s race
 
-    local function setPromptInstant(p)
-        if not p or not p:IsA("ProximityPrompt") then return end
-        if promptDurations[p] == nil then
-            promptDurations[p] = p.HoldDuration
+    local function onPromptShown(prompt)
+        if not prompt or not prompt:IsA("ProximityPrompt") then return end
+        if promptDurations[prompt] == nil then
+            promptDurations[prompt] = prompt.HoldDuration
         end
-        p.HoldDuration = 0
-    end
-
-    local function enableInstantInteract()
-        if promptsConn then return end
-        for _,d in ipairs(WS:GetDescendants()) do
-            if d:IsA("ProximityPrompt") then
-                setPromptInstant(d)
-            end
-        end
-        promptsConn = WS.DescendantAdded:Connect(function(d)
-            if d:IsA("ProximityPrompt") then
-                setPromptInstant(d)
+        -- defer to ensure parent/adornee are fully set before modification
+        task.defer(function()
+            if prompt and prompt.Parent then
+                pcall(function() prompt.HoldDuration = INSTANT_HOLD end)
             end
         end)
     end
 
-    local function disableInstantInteract()
-        if promptsConn then
-            promptsConn:Disconnect()
-            promptsConn = nil
+    local function restorePrompt(prompt)
+        local orig = promptDurations[prompt]
+        if orig ~= nil and prompt and prompt.Parent then
+            pcall(function() prompt.HoldDuration = orig end)
         end
-        for p,orig in pairs(promptDurations) do
-            if p and p.Parent then
-                p.HoldDuration = typeof(orig) == "number" and orig or p.HoldDuration
-            end
+        promptDurations[prompt] = nil
+    end
+
+    local function enableInstantInteract()
+        if shownConn then return end
+        shownConn  = PPS.PromptShown:Connect(onPromptShown)
+        trigConn   = PPS.PromptTriggered:Connect(function(prompt, player)
+            if player == lp then restorePrompt(prompt) end
+        end)
+        hiddenConn = PPS.PromptHidden:Connect(function(prompt)
+            restorePrompt(prompt)
+        end)
+    end
+
+    local function disableInstantInteract()
+        if shownConn  then shownConn:Disconnect();  shownConn  = nil end
+        if trigConn   then trigConn:Disconnect();   trigConn   = nil end
+        if hiddenConn then hiddenConn:Disconnect(); hiddenConn = nil end
+        for p,_ in pairs(promptDurations) do
+            restorePrompt(p)
         end
     end
 
@@ -409,4 +421,3 @@ return function(C, R, UI)
         end
     end)
 end
-
