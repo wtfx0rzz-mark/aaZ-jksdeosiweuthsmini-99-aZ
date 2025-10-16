@@ -1,10 +1,10 @@
 --=====================================================
 -- 1337 Nights | Gather Module (Multi-select + One "Gather Items" button)
---  • Top [Bring] and on-screen [Place] now drop items in a compact pile
+--  • Top [Bring] and on-screen [Place] drop items in a compact pile
 --  • Category dropdowns support MULTI select with tap-to-toggle entries
---  • One global "Gather Items" button starts capture for the union of selections
---  • Hover-carry 5u above HRP; grounded placement via raycast
---  • Morsel: return net ownership to server on drop so fire/drag work
+--  • One global "Gather Items" button captures union of selections
+--  • Pattern matches in Misc: Blueprint, Forest Gem(+Fragment), Key variants,
+--    Flashlight (old|strong), Taming flute (old|good|strong)
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -17,20 +17,35 @@ return function(C, R, UI)
     assert(tab, "Gather tab not found")
 
     -- Bring taxonomy
-    local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
-    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
-    local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
+    local junkItems    = {
+        "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
+        "UFO Junk","UFO Component"
+    }
+    local fuelItems    = {
+        "Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel"
+    }
+    local foodItems    = {
+        "Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot",
+        "Chilli","Stew","Ribs","Pumpkin","Hearty Stew","Cooked Ribs","Corn","BBQ ribs","Apple","Mackerel"
+    }
     local medicalItems = {"Bandage","MedKit"}
-    local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
-    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
+    local weaponsArmor = {
+        "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe",
+        "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire"
+    }
+    local ammoMisc     = {
+        "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
+        "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute"
+    }
+    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
 
     -- Multi-select state per category (sets)
     local Selected = {
         Junk = {}, Fuel = {}, Food = {}, Medical = {}, WA = {}, Misc = {}, Pelts = {}
     }
-    -- Specials from Misc
+    -- Specials/patterns from Misc
     local wantMossy, wantCultist, wantSapling = false, false, false
+    local wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
 
     -- Tunables
     local hoverHeight    = 5
@@ -39,12 +54,12 @@ return function(C, R, UI)
     local scanInterval   = 0.1
 
     -- Pile drop tuning
-    local PILE_RADIUS    = 1.25     -- studs, radial disk
-    local LAYER_SIZE     = 14       -- items per layer before adding height
-    local LAYER_HEIGHT   = 0.35     -- extra height per layer
-    local UNANCHOR_BATCH = 6        -- how many to release per tick
-    local UNANCHOR_STEP  = 0.03     -- seconds between batches
-    local NUDGE_DOWN     = 4        -- gentle downward nudge on release
+    local PILE_RADIUS    = 1.25
+    local LAYER_SIZE     = 14
+    local LAYER_HEIGHT   = 0.35
+    local UNANCHOR_BATCH = 6
+    local UNANCHOR_STEP  = 0.03
+    local NUDGE_DOWN     = 4
 
     -- Runtime
     local gatherOn = false
@@ -112,7 +127,9 @@ return function(C, R, UI)
     local function clearAll() for m,_ in pairs(gathered) do gathered[m]=nil end; table.clear(list) end
 
     local function anySelection()
-        if wantMossy or wantCultist or wantSapling then return true end
+        if wantMossy or wantCultist or wantSapling or wantBlueprint or wantForestGem or wantKey or wantFlashlight or wantTamingFlute then
+            return true
+        end
         for _,set in pairs(Selected) do
             for _ in pairs(set) do return true end
         end
@@ -125,18 +142,32 @@ return function(C, R, UI)
     local function isSelectedModel(m)
         if not m or not m:IsA("Model") then return false end
         local name = m.Name or ""
+        local nl   = name:lower()
 
         -- specials
-        if wantMossy then
-            if name == "Mossy Coin" or name:match("^Mossy Coin%d+$") then return true end
-        end
-        if wantCultist then
-            local nl = name:lower()
-            if nl:find("cultist",1,true) and hasHumanoid(m) then return true end
-        end
+        if wantMossy and (name == "Mossy Coin" or name:match("^Mossy Coin%d+$")) then return true end
+        if wantCultist and nl:find("cultist",1,true) and hasHumanoid(m) then return true end
         if wantSapling and name == "Sapling" then return true end
 
-        -- regular category membership
+        -- pattern selections
+        if wantBlueprint and nl:find("blueprint", 1, true) then return true end
+        if wantForestGem and (name == "Forest Gem" or nl:find("forest gem fragment", 1, true)) then return true end
+        if wantKey then
+            if nl:find(" key", 1, true) then
+                if nl:find("blue key",1,true) or nl:find("yellow key",1,true) or nl:find("red key",1,true)
+                or nl:find("gray key",1,true) or nl:find("grey key",1,true) or nl:find("frog key",1,true) then
+                    return true
+                end
+            end
+        end
+        if wantFlashlight and nl:find("flashlight",1,true) and (nl:find("old",1,true) or nl:find("strong",1,true)) then
+            return true
+        end
+        if wantTamingFlute and nl:find("taming flute",1,true) and (nl:find("old",1,true) or nl:find("good",1,true) or nl:find("strong",1,true)) then
+            return true
+        end
+
+        -- regular category membership (exact)
         return Selected.Junk[name] or Selected.Fuel[name] or Selected.Food[name]
             or Selected.Medical[name] or Selected.WA[name] or Selected.Misc[name]
             or Selected.Pelts[name] or false
@@ -221,14 +252,13 @@ return function(C, R, UI)
         return CFrame.lookAt(drop, drop + forward)
     end
 
-    -- Compact pile placement: small jitter on a disk + vertical layering
     local function pileCF(i, baseCF)
         local idx0   = i - 1
         local layer  = math.floor(idx0 / LAYER_SIZE)
         local inLayer= idx0 % LAYER_SIZE
 
         local angle  = (inLayer / LAYER_SIZE) * math.pi * 2
-        local r      = (0.25 + (inLayer % 7) * 0.07) * PILE_RADIUS  -- varied ring inside radius
+        local r      = (0.25 + (inLayer % 7) * 0.07) * PILE_RADIUS
         local x      = math.cos(angle) * r + (math.random() - 0.5) * 0.12
         local z      = math.sin(angle) * r + (math.random() - 0.5) * 0.12
         local y      = layer * LAYER_HEIGHT
@@ -237,7 +267,6 @@ return function(C, R, UI)
     end
 
     local function finalizePileDrop(items)
-        -- Enable collisions but keep anchored before staged release
         for _,m in ipairs(items) do
             if m and m.Parent then
                 setNoCollideModel(m, false)
@@ -250,7 +279,6 @@ return function(C, R, UI)
             end
         end
 
-        -- Special fix for Morsel net ownership
         for _,m in ipairs(items) do
             if m and m.Parent and m.Name == "Morsel" then
                 local mp = mainPart(m)
@@ -268,7 +296,6 @@ return function(C, R, UI)
             end
         end
 
-        -- Staged unanchor to avoid explosion
         local n = #items
         local i = 1
         while i <= n do
@@ -295,7 +322,6 @@ return function(C, R, UI)
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
         stopGather()
 
-        -- Arrange tightly while still anchored and non-colliding
         for i,m in ipairs(list) do
             if m and m.Parent then
                 startDrag(m)
@@ -323,7 +349,6 @@ return function(C, R, UI)
     tab:Button({ Title = "Drop Items", Callback = function() placeDown() end })
     tab:Divider()
 
-    -- Global gather trigger
     tab:Section({ Title = "Selection", Icon = "check-square" })
     tab:Button({
         Title = "Gather Items",
@@ -336,7 +361,6 @@ return function(C, R, UI)
     })
     tab:Divider()
 
-    -- Multi-select dropdown helper
     local function dropdownMulti(args)
         return tab:Dropdown({
             Title = args.title,
@@ -348,6 +372,7 @@ return function(C, R, UI)
                 for k,_ in pairs(set) do set[k] = nil end
                 if args.kind == "Misc" then
                     wantMossy, wantCultist, wantSapling = false, false, false
+                    wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
                     for _,v in ipairs(options) do
                         if v == "Mossy Coin" then
                             wantMossy = true
@@ -355,6 +380,16 @@ return function(C, R, UI)
                             wantCultist = true
                         elseif v == "Sapling" then
                             wantSapling = true
+                        elseif v == "Blueprint" then
+                            wantBlueprint = true
+                        elseif v == "Forest Gem" then
+                            wantForestGem = true
+                        elseif v == "Key" then
+                            wantKey = true
+                        elseif v == "Flashlight" then
+                            wantFlashlight = true
+                        elseif v == "Taming flute" then
+                            wantTamingFlute = true
                         else
                             set[v] = true
                         end
@@ -428,7 +463,6 @@ return function(C, R, UI)
         placeDown()
     end)
 
-    -- Hide edge button on respawn
     lp.CharacterAdded:Connect(function()
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
         if gatherOn then task.defer(function() stopGather(); startGather() end) end
