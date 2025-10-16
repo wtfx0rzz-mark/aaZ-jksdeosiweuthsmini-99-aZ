@@ -320,7 +320,7 @@ return function(C, R, UI)
     -- UI
     ----------------------------------------------------------------------
     tab:Section({ Title = "Bring", Icon = "box" })
-    tab:Button({ Title = "Bring", Callback = function() placeDown() end })
+    tab:Button({ Title = "Drop Items", Callback = function() placeDown() end })
     tab:Divider()
 
     -- Global gather trigger
