@@ -10,28 +10,65 @@ return function(C, R, UI)
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
-    -- Tunables (easy to adjust)
- -- Bind to shared config table for easy tuning from outside modules
-local TUNE = C.Config
--- Seconds to wait between waves of swings/hits
-TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
--- Default tree model name to target when unspecified
-TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
--- Suffix appended to per-hit IDs and attributes for uniqueness
-TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
--- Tool preference order used when auto-equipping
-TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
--- Upper bound of tree targets processed per wave
-TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 5
--- Upper bound of character targets processed per wave
-TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 5
--- Minimum seconds between hits on the same character (anti-spam)
-TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.49
--- Wait inserted between sequential character hits to reduce spikes
-TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.04
--- If true (default), sort characters by distance; set false to skip sort
-TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
-    
+
+    -- =========================
+    -- Tunables (single source of truth)
+    -- Adjust these to trade accuracy vs throughput and CPU/network cost.
+    -- =========================
+    local TUNE = C.Config  -- shared config table so other modules can override at runtime
+
+    -- Time between waves of hits (seconds). Larger = fewer server calls, smoother frames.
+    TUNE.CHOP_SWING_DELAY         = TUNE.CHOP_SWING_DELAY         or 0.50
+
+    -- Default tree model to target when a specific name is not provided.
+    TUNE.TREE_NAME                = TUNE.TREE_NAME                or "Small Tree"
+
+    -- Suffix appended to hit IDs/attributes to keep them globally unique per client.
+    TUNE.UID_SUFFIX               = TUNE.UID_SUFFIX               or "0000000000"
+
+    -- Tool auto-equip priority. First present tool is used for all hits in a wave.
+    TUNE.ChopPrefer               = TUNE.ChopPrefer               or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
+
+    -- Max trees processed per wave. Lower to reduce spikes; raise to increase throughput.
+    TUNE.MAX_TARGETS_PER_WAVE     = TUNE.MAX_TARGETS_PER_WAVE     or 5
+
+    -- Max characters processed per wave. Same tradeoff as trees.
+    TUNE.CHAR_MAX_PER_WAVE        = TUNE.CHAR_MAX_PER_WAVE        or 5
+
+    -- Min time between hits on the same character (seconds). Prevents over-hitting one target.
+    TUNE.CHAR_DEBOUNCE_SEC        = TUNE.CHAR_DEBOUNCE_SEC        or 0.49
+
+    -- Small delay between sequential character hits inside a wave (seconds). Smooths scheduler load.
+    TUNE.CHAR_HIT_STEP_WAIT       = TUNE.CHAR_HIT_STEP_WAIT       or 0.04
+
+    -- Sort characters by distance each loop. Set false to skip sort and save CPU.
+    TUNE.CHAR_SORT                = (TUNE.CHAR_SORT ~= false)
+
+    -- Min time between hits on the same tree (seconds). Avoids unnecessary repeated invokes.
+    TUNE.TREE_DEBOUNCE_SEC        = TUNE.TREE_DEBOUNCE_SEC        or 0.15
+
+    -- Small delay between sequential tree hits inside a wave (seconds). Controls pacing.
+    TUNE.TREE_HIT_STEP_WAIT       = TUNE.TREE_HIT_STEP_WAIT       or 0.01
+
+    -- Max planar jitter added around the cached impact point (studs) to vary contact per hit.
+    TUNE.TREE_JITTER_POS_MAX      = TUNE.TREE_JITTER_POS_MAX      or 0.12
+
+    -- Max random rotation around the surface normal per hit (degrees). Adds variation.
+    TUNE.TREE_JITTER_ROT_MAX_DEG  = TUNE.TREE_JITTER_ROT_MAX_DEG  or 2
+
+    -- Small push along the surface normal (studs) to avoid z-fighting when reusing impact points.
+    TUNE.TREE_ALONG_NORMAL_EPS    = TUNE.TREE_ALONG_NORMAL_EPS    or 0.02
+
+    -- If true, skip raycasts for trees entirely and use hitPart.CFrame with jitter. Fastest path.
+    TUNE.TREE_SKIP_RAYCAST        = TUNE.TREE_SKIP_RAYCAST        or false
+
+    -- Require player to be stationary for at least this long (seconds) before chopping trees.
+    TUNE.TREE_REQUIRE_STILL_SEC   = TUNE.TREE_REQUIRE_STILL_SEC   or 0.50
+
+    -- Distance threshold (studs) that counts as "movement" for the stillness check.
+    TUNE.TREE_STILL_EPS_STUDS     = TUNE.TREE_STILL_EPS_STUDS     or 0.20
+    -- =========================
+
     local running = { SmallTree = false, Character = false }
 
     local TREE_NAMES     = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
@@ -96,7 +133,7 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
 
     local function computeImpactCFrame(model, hitPart)
         if not (model and hitPart and hitPart:IsA("BasePart")) then
-            return hitPart and CFrame.new(hitPart.Position) or CFrame.new()
+            return hitPart and CFrame.new(hitPart.Position) or CFrame.new(), Vector3.new(0,0,1)
         end
         local outward = hitPart.CFrame.LookVector
         if outward.Magnitude == 0 then outward = Vector3.new(0,0,-1) end
@@ -107,9 +144,15 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
         params.FilterType = Enum.RaycastFilterType.Include
         params.FilterDescendantsInstances = {model}
         local rc = WS:Raycast(origin, dir, params)
-        local pos = rc and (rc.Position + rc.Normal*0.02) or (origin + dir*0.6)
-        local rot = hitPart.CFrame - hitPart.CFrame.Position
-        return CFrame.new(pos) * rot
+        if rc then
+            local pos = rc.Position + rc.Normal * (TUNE.TREE_ALONG_NORMAL_EPS or 0.02)
+            local rot = hitPart.CFrame - hitPart.CFrame.Position
+            return CFrame.new(pos) * rot, rc.Normal
+        else
+            local pos = origin + dir * 0.6
+            local rot = hitPart.CFrame - hitPart.CFrame.Position
+            return CFrame.new(pos) * rot, outward
+        end
     end
 
     local function HitTarget(targetModel, tool, hitId, impactCF)
@@ -205,7 +248,62 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
         return out
     end
 
+    -- One-raycast-per-tree cache
+    local treeImpactCache = setmetatable({}, {__mode="k"})
+    local function getTreeImpactCF(treeModel, hitPart)
+        local entry = treeImpactCache[treeModel]
+        if entry and entry.part and entry.part.Parent then
+            return entry.cf, entry.n
+        end
+        local cf, n
+        if TUNE.TREE_SKIP_RAYCAST then
+            cf = hitPart.CFrame
+            n  = hitPart.CFrame.LookVector
+        else
+            cf, n = computeImpactCFrame(treeModel, hitPart)
+        end
+        treeImpactCache[treeModel] = { cf = cf, n = n, part = hitPart }
+        return cf, n
+    end
+
+    local function jitterImpactCF(baseCF, normal)
+        local posMax   = TUNE.TREE_JITTER_POS_MAX
+        local rotMax   = math.rad(TUNE.TREE_JITTER_ROT_MAX_DEG or 0)
+        local alongEps = TUNE.TREE_ALONG_NORMAL_EPS
+
+        local n = (normal.Magnitude > 0 and normal.Unit) or Vector3.new(0,0,1)
+        local a = math.abs(n:Dot(Vector3.new(0,1,0))) < 0.99 and Vector3.new(0,1,0) or Vector3.new(1,0,0)
+        local t1 = n:Cross(a).Unit
+        local t2 = n:Cross(t1).Unit
+
+        local r1 = (math.random()*2 - 1) * posMax
+        local r2 = (math.random()*2 - 1) * posMax
+        local dpos = t1 * r1 + t2 * r2 + n * alongEps
+
+        local drot = (math.random()*2 - 1) * rotMax
+        local rotCF = CFrame.fromAxisAngle(n, drot)
+
+        local basePos = baseCF.Position
+        local baseRot = baseCF - basePos
+        return CFrame.new(basePos + dpos) * (baseRot * rotCF)
+    end
+
+    local function HitTargetTree(treeModel, tool)
+        local hitPart = bestTreeHitPart(treeModel)
+        if not hitPart then return end
+        local baseCF, normal = getTreeImpactCF(treeModel, hitPart)
+        local impactCF = jitterImpactCF(baseCF, normal)
+        local hitId = nextPerTreeHitId(treeModel)
+        pcall(function()
+            local bucket = attrBucket(treeModel)
+            if bucket then bucket:SetAttribute(hitId, true) end
+        end)
+        HitTarget(treeModel, tool, hitId, impactCF)
+    end
+
     local lastHitAt = setmetatable({}, {__mode="k"})
+    local lastTreeHitAt = setmetatable({}, {__mode="k"})
+
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         local toolName
         if isTree and C.State.Toggles.BigTreeAura then
@@ -244,18 +342,15 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
             return
         end
 
-        for _, mdl in ipairs(targetModels) do
-            task.spawn(function()
-                local hitPart = hitPartGetter(mdl)
-                if not hitPart then return end
-                local impactCF = computeImpactCFrame(mdl, hitPart)
-                local hitId = nextPerTreeHitId(mdl)
-                pcall(function()
-                    local bucket = attrBucket(mdl)
-                    if bucket then bucket:SetAttribute(hitId, true) end
-                end)
-                HitTarget(mdl, tool, hitId, impactCF)
-            end)
+        local cap = math.min(#targetModels, TUNE.MAX_TARGETS_PER_WAVE)
+        for i = 1, cap do
+            local mdl = targetModels[i]
+            local t0 = lastTreeHitAt[mdl] or 0
+            if (tick() - t0) >= TUNE.TREE_DEBOUNCE_SEC then
+                HitTargetTree(mdl, tool)
+                lastTreeHitAt[mdl] = tick()
+                task.wait(TUNE.TREE_HIT_STEP_WAIT)
+            end
         end
         task.wait(swingDelay)
     end
@@ -286,31 +381,45 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
         if running.SmallTree then return end
         running.SmallTree = true
         task.spawn(function()
+            local lastPos
+            local lastMoveT = tick()
             while running.SmallTree do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then task.wait(0.2) break end
-                local origin = hrp.Position
-                local radius = tonumber(C.State.AuraRadius) or 150
-                local roots = {
-                    WS,
-                    RS:FindFirstChild("Assets"),
-                    RS:FindFirstChild("CutsceneSets"),
-                }
-                local allTrees = collectTreesInRadius(roots, origin, radius)
-                local total = #allTrees
-                if total > 0 then
-                    local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
-                    if C.State._treeCursor > total then C.State._treeCursor = 1 end
-                    local batch = table.create(batchSize)
-                    for i = 1, batchSize do
-                        local idx = ((C.State._treeCursor + i - 2) % total) + 1
-                        batch[i] = allTrees[idx]
-                    end
-                    C.State._treeCursor = C.State._treeCursor + batchSize
-                    chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+
+                local pos = hrp.Position
+                if not lastPos then lastPos = pos; lastMoveT = tick() end
+                local moved = (pos - lastPos).Magnitude > (TUNE.TREE_STILL_EPS_STUDS or 0.2)
+                if moved then lastMoveT = tick() end
+                lastPos = pos
+
+                local stationary = (tick() - lastMoveT) >= (TUNE.TREE_REQUIRE_STILL_SEC or 0.5)
+                if not stationary then
+                    task.wait(0.1)
                 else
-                    task.wait(0.3)
+                    local origin = pos
+                    local radius = tonumber(C.State.AuraRadius) or 150
+                    local roots = {
+                        WS,
+                        RS:FindFirstChild("Assets"),
+                        RS:FindFirstChild("CutsceneSets"),
+                    }
+                    local allTrees = collectTreesInRadius(roots, origin, radius)
+                    local total = #allTrees
+                    if total > 0 then
+                        local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
+                        if C.State._treeCursor > total then C.State._treeCursor = 1 end
+                        local batch = table.create(batchSize)
+                        for i = 1, batchSize do
+                            local idx = ((C.State._treeCursor + i - 2) % total) + 1
+                            batch[i] = allTrees[idx]
+                        end
+                        C.State._treeCursor = C.State._treeCursor + batchSize
+                        chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                    else
+                        task.wait(0.3)
+                    end
                 end
             end
         end)
