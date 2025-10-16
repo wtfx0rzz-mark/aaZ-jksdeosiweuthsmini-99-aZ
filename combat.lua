@@ -22,12 +22,14 @@ return function(C, R, UI)
     --------------------------------------------------------------------
     -- Helpers
     --------------------------------------------------------------------
-    local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
+    local TREE_NAMES     = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
+    local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
 
     local function findInInventory(name)
         local inv = lp and lp:FindFirstChild("Inventory")
         return inv and inv:FindFirstChild(name) or nil
     end
+    local function hasStrongAxe() return findInInventory("Strong Axe") ~= nil end
 
     local function equippedToolName()
         local ch = lp and lp.Character
@@ -109,13 +111,11 @@ return function(C, R, UI)
     end
 
     local function parseHitAttrKey(k)
-        -- matches "123_0000000000"
         local n = string.match(k or "", "^(%d+)_" .. C.Config.UID_SUFFIX .. "$")
         return n and tonumber(n) or nil
     end
 
     local function nextPerTreeHitId(treeModel)
-        -- Read attributes under HitRegisters; choose next N then return "N_SUFFIX"
         local bucket = attrBucket(treeModel)
         local maxN = 0
         local attrs = bucket and bucket:GetAttributes() or nil
@@ -133,10 +133,11 @@ return function(C, R, UI)
     -- Collectors (trees recursive, characters flat) + deterministic order
     --------------------------------------------------------------------
     local function collectTreesInRadius(roots, origin, radius)
+        local includeBig = C.State.Toggles.BigTreeAura == true -- only settable when Strong Axe exists
         local out, n = {}, 0
         local function walk(node)
             if not node then return end
-            if node:IsA("Model") and TREE_NAMES[node.Name] then
+            if node:IsA("Model") and (TREE_NAMES[node.Name] or (includeBig and BIG_TREE_NAMES[node.Name])) then
                 local trunk = bestTreeHitPart(node)
                 if trunk then
                     local d = (trunk.Position - origin).Magnitude
@@ -156,7 +157,6 @@ return function(C, R, UI)
         for _, root in ipairs(roots) do
             walk(root)
         end
-        -- Sort nearest-first; tie-break by name for determinism
         table.sort(out, function(a, b)
             local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
             local da = pa and (pa.Position - origin).Magnitude or math.huge
@@ -195,15 +195,25 @@ return function(C, R, UI)
     -- Wave executor (trees: per-tree IDs; chars: no tagging)
     --------------------------------------------------------------------
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
+        -- Tool selection:
         local toolName
-        for _, n in ipairs(C.Config.ChopPrefer) do
-            if findInInventory(n) then toolName = n break end
+        if isTree and C.State.Toggles.BigTreeAura then
+            if hasStrongAxe() then
+                toolName = "Strong Axe"         -- force Strong Axe when big trees enabled
+            else
+                -- silently disable the toggle if axe no longer present
+                C.State.Toggles.BigTreeAura = false
+            end
+        end
+        if not toolName then
+            for _, n in ipairs(C.Config.ChopPrefer) do
+                if findInInventory(n) then toolName = n break end
+            end
         end
         if not toolName then task.wait(0.35) return end
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
 
-        -- Fire all targets in parallel; each tree computes its own next ID
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
                 local hitPart = hitPartGetter(mdl)
@@ -213,13 +223,11 @@ return function(C, R, UI)
                 local hitId
                 if isTree then
                     hitId = nextPerTreeHitId(mdl)
-                    -- write attribute before invoking
                     pcall(function()
                         local bucket = attrBucket(mdl)
                         if bucket then bucket:SetAttribute(hitId, true) end
                     end)
                 else
-                    -- characters don't need attributes; still send a unique-ish id
                     hitId = tostring(tick()) .. "_" .. C.Config.UID_SUFFIX
                 end
 
@@ -227,7 +235,7 @@ return function(C, R, UI)
             end)
         end
 
-        task.wait(swingDelay) -- between waves
+        task.wait(swingDelay)
     end
 
     --------------------------------------------------------------------
@@ -247,7 +255,6 @@ return function(C, R, UI)
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
 
                 if #targets > 0 then
-                    -- We simply hit everyone we found (no round-robin needed usually)
                     local batch = targets
                     if C.Config.MAX_TARGETS_PER_WAVE and #batch > C.Config.MAX_TARGETS_PER_WAVE then
                         batch = {}
@@ -264,7 +271,6 @@ return function(C, R, UI)
     end
     local function stopCharacterAura() running.Character = false end
 
-    -- Cursor used for round-robin of trees across waves
     C.State._treeCursor = C.State._treeCursor or 1
 
     local function startSmallTreeAura()
@@ -280,15 +286,14 @@ return function(C, R, UI)
                 local radius = tonumber(C.State.AuraRadius) or 150
 
                 local roots = {
-                    WS,                                     -- Map, Foliage, Landmarks, FakeForest, etc.
-                    RS:FindFirstChild("Assets"),            -- ReplicatedStorage.Assets (CutsceneSets.*.Decor.*)
-                    RS:FindFirstChild("CutsceneSets"),      -- fallback if Assets nests differently
+                    WS,
+                    RS:FindFirstChild("Assets"),
+                    RS:FindFirstChild("CutsceneSets"),
                 }
 
                 local allTrees = collectTreesInRadius(roots, origin, radius)
                 local total = #allTrees
                 if total > 0 then
-                    -- round-robin slice
                     local batchSize = math.min(C.Config.MAX_TARGETS_PER_WAVE, total)
                     if C.State._treeCursor > total then C.State._treeCursor = 1 end
                     local batch = table.create(batchSize)
@@ -326,6 +331,42 @@ return function(C, R, UI)
             if on then startSmallTreeAura() else stopSmallTreeAura() end
         end
     })
+
+    -- Big Trees toggle: requires Strong Axe. Silent auto-off if missing.
+    local bigToggle
+    bigToggle = CombatTab:Toggle({
+        Title = "Big Trees (requires Strong Axe)",
+        Value = C.State.Toggles.BigTreeAura or false,
+        Callback = function(on)
+            if on then
+                if hasStrongAxe() then
+                    C.State.Toggles.BigTreeAura = true
+                else
+                    C.State.Toggles.BigTreeAura = false
+                    -- attempt to visually revert; ignore if UI object lacks setter
+                    pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
+                    pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
+                end
+            else
+                C.State.Toggles.BigTreeAura = false
+            end
+        end
+    })
+
+    -- Inventory watcher to auto-disable if Strong Axe is lost while toggle is on
+    task.spawn(function()
+        local inv = lp:WaitForChild("Inventory", 10)
+        if not inv then return end
+        local function check()
+            if C.State.Toggles.BigTreeAura and not hasStrongAxe() then
+                C.State.Toggles.BigTreeAura = false
+                pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
+                pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
+            end
+        end
+        inv.ChildRemoved:Connect(check)
+        while true do task.wait(2.0) check() end
+    end)
 
     CombatTab:Slider({
         Title = "Distance",
