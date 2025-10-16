@@ -8,6 +8,13 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
+    -- ===== Handoff config =====
+    local BENCH_HANDOFF_ENABLED = true
+    local HANDOFF_RADIUS = 4 -- studs around workstation intake
+    local function campground() return WS:FindFirstChild("Campground") end
+    local function craftingBench() local cg=campground(); return cg and cg:FindFirstChild("CraftingBench") end
+    local function mainFire() local cg=campground(); return cg and cg:FindFirstChild("MainFire") end
+
     local AMOUNT_TO_BRING = 100
     local DROP_FORWARD = 5
     local DROP_UP      = 5
@@ -18,10 +25,10 @@ return function(C, R, UI)
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
-    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
+    private_pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
-        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
+        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], private_pelts[1]
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -90,6 +97,27 @@ return function(C, R, UI)
         return f and f:FindFirstChild(n) or nil
     end
 
+    -- Determine if we're dropping right at a workstation intake and if the item should be handed off
+    local function classifyHandoff(dropPos, itemName)
+        if not BENCH_HANDOFF_ENABLED then return nil end
+        local bench = craftingBench()
+        local fire  = mainFire()
+
+        local function near(model)
+            if not model then return false end
+            local p = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+            local center = p and p.Position or model:GetPivot().Position
+            return (center - dropPos).Magnitude <= HANDOFF_RADIUS
+        end
+
+        local toBench = near(bench) and ((itemName == "Log") or table.find(junkItems, itemName) ~= nil)
+        local toFire  = near(fire)  and ((itemName == "Log") or table.find(fuelItems, itemName) ~= nil)
+
+        if toBench then return "bench" end
+        if toFire  then return "fire"  end
+        return nil
+    end
+
     local function nudgeAsync(entry, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
@@ -114,6 +142,36 @@ return function(C, R, UI)
         if startRE then pcall(function() startRE:FireServer(entry.model) end) end
         task.wait(0.03)
 
+        -- Decide if we should handoff to bench/campfire
+        local handoff = classifyHandoff(dropCF.Position, entry.model.Name)
+
+        if handoff then
+            -- Handoff: do NOT seize ownership; place gently and give control back to server
+            if entry.model:IsA("Model") then
+                entry.model:PivotTo(dropCF)
+            else
+                entry.part.CFrame = dropCF
+            end
+
+            for _,p in ipairs(getAllParts(entry.model)) do
+                p.Anchored = false
+                p.CanCollide = true
+                p.CanQuery   = true
+                p.CanTouch   = true
+                p.Massless   = false
+                p.AssemblyLinearVelocity = Vector3.new(0, -12, 0)
+                p:SetNetworkOwner(nil)
+            end
+
+            -- Let the server finish consumption without client fighting
+            task.delay(0.06, function()
+                if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
+            end)
+
+            return true
+        end
+
+        -- Normal bring
         pcall(function() entry.part:SetNetworkOwner(lp) end)
 
         if entry.model:IsA("Model") then
@@ -246,7 +304,7 @@ return function(C, R, UI)
             list = collectCultists(want)
         elseif name == "Sapling" then
             list = collectSaplings(want)
-        elseif table.find(pelts, name) then
+        elseif table.find(private_pelts, name) then
             list = collectPelts(name, want)
         else
             list = collectByNameLoose(name, want)
@@ -300,6 +358,6 @@ return function(C, R, UI)
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
 
     tab:Section({ Title = "Pelts" })
-    singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
+    singleSelectDropdown({ title = "Select Pelt", values = private_pelts, setter = function(v) selPelt = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
 end
