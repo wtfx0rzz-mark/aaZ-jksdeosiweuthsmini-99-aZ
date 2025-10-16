@@ -283,6 +283,15 @@ return function(C, R, UI)
         if hum then hum.WalkSpeed = val end
     end
 
+    -- Heartbeat reapply
+    RunService.Heartbeat:Connect(function()
+        if not speedEnabled then return end
+        local hum = humanoid()
+        if hum and hum.WalkSpeed ~= walkSpeedValue then
+            hum.WalkSpeed = walkSpeedValue
+        end
+    end)
+
     --========================
     -- Noclip
     --========================
