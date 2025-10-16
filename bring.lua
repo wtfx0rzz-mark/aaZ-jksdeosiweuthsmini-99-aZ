@@ -8,13 +8,83 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- ===== Handoff config =====
-    local BENCH_HANDOFF_ENABLED = true
-    local HANDOFF_RADIUS = 4 -- studs around workstation intake
-    local function campground() return WS:FindFirstChild("Campground") end
-    local function craftingBench() local cg=campground(); return cg and cg:FindFirstChild("CraftingBench") end
-    local function mainFire() local cg=campground(); return cg and cg:FindFirstChild("MainFire") end
+    ----------------------------------------------------------------
+    -- Natural workstation handoff (keeps gameplay feel)
+    ----------------------------------------------------------------
+    local NATURAL_HANDOFF_ENABLED = true
+    local HANDOFF_PLAYER_RADIUS   = 7      -- you stand close to station
+    local HANDOFF_ITEM_RADIUS     = 4      -- drop within this of station
+    local SLOW_SPEED_MAX          = 2      -- studs/sec threshold
+    local SLOW_TIME_MIN           = 0.30   -- must be slow for this long
 
+    -- cache + helpers
+    local campCache = nil
+    local function findCase(parent, name)
+        if not parent then return nil end
+        local want = string.lower(name)
+        for _,ch in ipairs(parent:GetChildren()) do
+            if string.lower(ch.Name) == want then return ch end
+        end
+        return nil
+    end
+    local function findContains(parent, needle)
+        if not parent then return nil end
+        local want = string.lower(needle)
+        for _,ch in ipairs(parent:GetChildren()) do
+            if string.find(string.lower(ch.Name), want, 1, true) then return ch end
+        end
+        return nil
+    end
+    local function campground()
+        if campCache and campCache.Parent then return campCache end
+        local map = WS:FindFirstChild("Map") or WS:FindFirstChild("map") or WS
+        campCache = findCase(map, "Campground") or findContains(map, "campground") or nil
+        return campCache
+    end
+    local function craftingBench()
+        local cg = campground()
+        -- support upgraded/variant benches
+        return findCase(cg, "CraftingBench") or findContains(cg, "craftingbench") or findContains(cg, "scrap")
+    end
+    local function mainFire()
+        local cg = campground()
+        return findCase(cg, "MainFire") or findContains(cg, "mainfire") or findContains(cg, "campfire")
+    end
+    local function pivotPos(model)
+        if not model then return nil end
+        local ok, cf = pcall(model.GetPivot, model)
+        if ok and typeof(cf) == "CFrame" then return cf.Position end
+        local p = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+        return p and p.Position or nil
+    end
+
+    -- player motion sampling (to detect “stance” at a station)
+    local lastPos, lastT, slowSince = nil, nil, nil
+    local function hrp()
+        local ch = lp.Character or lp.CharacterAdded:Wait()
+        return ch and ch:FindFirstChild("HumanoidRootPart")
+    end
+    local function sampleSpeed()
+        local root = hrp(); if not root then return math.huge end
+        local now, pos = os.clock(), root.Position
+        local spd = math.huge
+        if lastPos and lastT then
+            local dt = now - lastT
+            if dt > 0 then spd = (pos - lastPos).Magnitude / dt end
+        end
+        lastPos, lastT = pos, now
+        if spd <= SLOW_SPEED_MAX then
+            if not slowSince then slowSince = now end
+        else
+            slowSince = nil
+        end
+        local slowOk = slowSince and ((now - slowSince) >= SLOW_TIME_MIN) or false
+        return spd, slowOk
+    end
+
+    ----------------------------------------------------------------
+    -- UI lists (unchanged)
+    ----------------------------------------------------------------
     local AMOUNT_TO_BRING = 100
     local DROP_FORWARD = 5
     local DROP_UP      = 5
@@ -25,37 +95,30 @@ return function(C, R, UI)
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
-    private_pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
+    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
-        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], private_pelts[1]
+        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    local function hrp()
-        local ch = lp.Character or lp.CharacterAdded:Wait()
-        return ch and ch:FindFirstChild("HumanoidRootPart")
-    end
-
+    ----------------------------------------------------------------
+    -- Core helpers
+    ----------------------------------------------------------------
     local function auraRadius()
         return math.clamp(tonumber(C.State and C.State.AuraRadius) or 150, 0, 500)
     end
-
     local function withinRadius(pos)
         local root = hrp()
         if not root then return true end
         return (pos - root.Position).Magnitude <= auraRadius()
     end
-
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return false end
         local n = m.Name:lower()
-        return n == "pelt trader" or n:find("trader") or n:find("shopkeeper")
+        return n == "pelt trader" or n:find("trader",1,true) or n:find("shopkeeper",1,true)
     end
-
     local function hasHumanoid(model)
-        if not (model and model:IsA("Model")) then return false end
-        return model:FindFirstChildOfClass("Humanoid") ~= nil
+        return model and model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") ~= nil
     end
-
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -65,7 +128,6 @@ return function(C, R, UI)
         end
         return nil
     end
-
     local function getAllParts(target)
         local t = {}
         if target:IsA("BasePart") then
@@ -79,7 +141,6 @@ return function(C, R, UI)
         end
         return t
     end
-
     local function computeDropCF()
         local root = hrp()
         if not root then return nil, nil end
@@ -92,36 +153,75 @@ return function(C, R, UI)
         return CFrame.lookAt(dropPos, dropPos + forward), forward
     end
 
-    local function getRemote(n)
+    local function getRemoteEvent(n)
         local f = RS:FindFirstChild("RemoteEvents")
-        return f and f:FindFirstChild(n) or nil
+        local r = f and f:FindFirstChild(n)
+        return (r and r:IsA("RemoteEvent")) and r or nil
+    end
+    local function getRemoteFunction(n)
+        local f = RS:FindFirstChild("RemoteEvents")
+        local r = f and f:FindFirstChild(n)
+        return (r and r:IsA("RemoteFunction")) and r or nil
     end
 
-    -- Determine if we're dropping right at a workstation intake and if the item should be handed off
-    local function classifyHandoff(dropPos, itemName)
-        if not BENCH_HANDOFF_ENABLED then return nil end
-        local bench = craftingBench()
-        local fire  = mainFire()
+    ----------------------------------------------------------------
+    -- Station mapping + stance check
+    ----------------------------------------------------------------
+    local function itemGoesToBench(name)
+        return name == "Log" or (table.find(junkItems, name) ~= nil)
+    end
+    local function itemGoesToFire(name)
+        return name == "Log" or (table.find(fuelItems, name) ~= nil)
+    end
 
-        local function near(model)
-            if not model then return false end
-            local p = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
-            local center = p and p.Position or model:GetPivot().Position
-            return (center - dropPos).Magnitude <= HANDOFF_RADIUS
+    local function nearestStationToRoot()
+        local root = hrp(); if not root then return nil, nil end
+        local bench, fire = craftingBench(), mainFire()
+        local rp = root.Position
+        local bestModel, bestDist = nil, math.huge
+        for _,m in ipairs({bench, fire}) do
+            if m then
+                local mp = pivotPos(m)
+                if mp then
+                    local d = (mp - rp).Magnitude
+                    if d < bestDist then bestDist, bestModel = d, m end
+                end
+            end
         end
-
-        local toBench = near(bench) and ((itemName == "Log") or table.find(junkItems, itemName) ~= nil)
-        local toFire  = near(fire)  and ((itemName == "Log") or table.find(fuelItems, itemName) ~= nil)
-
-        if toBench then return "bench" end
-        if toFire  then return "fire"  end
-        return nil
+        return bestModel, bestDist
     end
 
+    local function inHandoffStance()
+        if not NATURAL_HANDOFF_ENABLED then return nil end
+        local station, playerDist = nearestStationToRoot()
+        if not station then return nil end
+        if playerDist > HANDOFF_PLAYER_RADIUS then return nil end
+        local _, slowOk = sampleSpeed()
+        if not slowOk then return nil end
+        return station
+    end
+
+    local function classifyDropForStation(dropPos, itemName)
+        local station = inHandoffStance()
+        if not station then return nil, nil end
+        local sp = pivotPos(station); if not sp then return nil, nil end
+        if (sp - dropPos).Magnitude > HANDOFF_ITEM_RADIUS then return nil, nil end
+        local targetKind
+        if itemGoesToBench(itemName) and station == craftingBench() then
+            targetKind = "bench"
+        elseif itemGoesToFire(itemName) and station == mainFire() then
+            targetKind = "fire"
+        end
+        return targetKind, station
+    end
+
+    ----------------------------------------------------------------
+    -- Bring core
+    ----------------------------------------------------------------
     local function nudgeAsync(entry, forward)
         task.defer(function()
             if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            local v = forward * 6 + Vector3.new(0, -30, 0)
+            local v = forward * 6 + Vector3.new(0, -24, 0)
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.AssemblyLinearVelocity = v
             end
@@ -137,41 +237,47 @@ return function(C, R, UI)
         local dropCF, forward = computeDropCF()
         if not dropCF then return false end
 
-        local startRE = getRemote("RequestStartDraggingItem")
-        local stopRE  = getRemote("StopDraggingItem")
-        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
-        task.wait(0.03)
+        -- Decide if we will handoff for server credit
+        local handoffKind, station = classifyDropForStation(dropCF.Position, entry.model.Name)
 
-        -- Decide if we should handoff to bench/campfire
-        local handoff = classifyHandoff(dropCF.Position, entry.model.Name)
+        if handoffKind then
+            -- local visual placement
+            if entry.model:IsA("Model") then entry.model:PivotTo(dropCF)
+            else entry.part.CFrame = dropCF end
 
-        if handoff then
-            -- Handoff: do NOT seize ownership; place gently and give control back to server
-            if entry.model:IsA("Model") then
-                entry.model:PivotTo(dropCF)
-            else
-                entry.part.CFrame = dropCF
-            end
-
+            -- make sure physics won’t block station consume
             for _,p in ipairs(getAllParts(entry.model)) do
                 p.Anchored = false
-                p.CanCollide = true
-                p.CanQuery   = true
-                p.CanTouch   = true
-                p.Massless   = false
-                p.AssemblyLinearVelocity = Vector3.new(0, -12, 0)
+                p.CanCollide, p.CanQuery, p.CanTouch = true, true, true
+                p.Massless = false
+                p.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
                 p:SetNetworkOwner(nil)
             end
 
-            -- Let the server finish consumption without client fighting
-            task.delay(0.06, function()
-                if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
-            end)
+            -- server credit via official remotes (dummy pattern)
+            local startDrag = getRemoteEvent("RequestStartDraggingItem")
+            local stopDrag  = getRemoteEvent("StopDraggingItem")
+            local burnEv    = getRemoteEvent("RequestBurnItem")
+            local scrapFn   = getRemoteFunction("RequestScrapItem")
+            local dummy = Instance.new("Model")
+
+            pcall(function() if startDrag then startDrag:FireServer(dummy) end end)
+            if handoffKind == "fire" then
+                pcall(function() if burnEv and station then burnEv:FireServer(station, dummy) end end)
+            else
+                pcall(function() if scrapFn and station then scrapFn:InvokeServer(station, dummy) end end)
+            end
+            pcall(function() if stopDrag then stopDrag:FireServer(dummy) end end)
 
             return true
         end
 
-        -- Normal bring
+        -- Normal bring path
+        local startRE = getRemoteEvent("RequestStartDraggingItem")
+        local stopRE  = getRemoteEvent("StopDraggingItem")
+        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
+        task.wait(0.03)
+
         pcall(function() entry.part:SetNetworkOwner(lp) end)
 
         if entry.model:IsA("Model") then
@@ -304,7 +410,7 @@ return function(C, R, UI)
             list = collectCultists(want)
         elseif name == "Sapling" then
             list = collectSaplings(want)
-        elseif table.find(private_pelts, name) then
+        elseif table.find(pelts, name) then
             list = collectPelts(name, want)
         else
             list = collectByNameLoose(name, want)
@@ -321,6 +427,9 @@ return function(C, R, UI)
         end
     end
 
+    ----------------------------------------------------------------
+    -- UI (unchanged)
+    ----------------------------------------------------------------
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
@@ -358,6 +467,6 @@ return function(C, R, UI)
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
 
     tab:Section({ Title = "Pelts" })
-    singleSelectDropdown({ title = "Select Pelt", values = private_pelts, setter = function(v) selPelt = v end })
+    singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
 end
