@@ -39,6 +39,7 @@ local Tabs = {
     Player   = Window:Tab({ Title = "Player",   Icon = "activity",   Desc = "Player options" }),
     Auto   = Window:Tab({ Title = "Auto",   Icon = "cpu",   Desc = "Automation" }),
     Visuals   = Window:Tab({ Title = "Visuals",   Icon = "eye",   Desc = "Visuals" }),
+    Memory   = Window:Tab({ Title = "Memory",   Icon = "brain",   Desc = "Memory" }),
 }
 
 return {
