@@ -1,12 +1,11 @@
 --=====================================================
--- 1337 Nights | Gather Module (Bring-style UI + Place edge button)
+-- 1337 Nights | Gather Module (Multi-select + One "Gather Items" button)
 --  • Top [Bring] drops all gathered items
---  • Per-category dropdowns + "Gather <Category>" buttons
---  • Last Gather button clicked = active target
+--  • Category dropdowns now support MULTI select
+--  • One global "Gather Items" button starts capture for the union of selections
 --  • Hover-carry 5u above HRP; grounded placement via raycast
 --  • Morsel: return net ownership to server on drop so fire/drag work
---  • NEW: "Place" on-screen edge button appears when Gather starts,
---         disappears after any drop (edge or tab "Bring")
+--  • Edge "Place" button appears when Gather starts and hides after drop
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -27,14 +26,12 @@ return function(C, R, UI)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
-    -- Per-category dropdown selections
-    local pick = {
-        Junk = junkItems[1], Fuel = fuelItems[1], Food = foodItems[1],
-        Medical = medicalItems[1], WA = weaponsArmor[1], Misc = ammoMisc[1], Pelts = pelts[1],
+    -- Multi-select state per category (sets)
+    local Selected = {
+        Junk = {}, Fuel = {}, Food = {}, Medical = {}, WA = {}, Misc = {}, Pelts = {}
     }
-
-    -- Active target (set by last Gather button)
-    local sel = { name=nil, special=nil }  -- special ∈ {"mossy","cultist","sapling"} or nil
+    -- Specials from Misc
+    local wantMossy, wantCultist, wantSapling = false, false, false
 
     -- Tunables
     local hoverHeight, forwardDrop, upDrop = 5, 10, 5
@@ -105,20 +102,35 @@ return function(C, R, UI)
     end
     local function clearAll() for m,_ in pairs(gathered) do gathered[m]=nil end; table.clear(list) end
 
+    local function anySelection()
+        if wantMossy or wantCultist or wantSapling then return true end
+        for _,set in pairs(Selected) do
+            for _ in pairs(set) do return true end
+        end
+        return false
+    end
+
     ----------------------------------------------------------------------
-    -- Matching
+    -- Matching (union of all selected sets + specials)
     ----------------------------------------------------------------------
     local function isSelectedModel(m)
-        if not sel.name and not sel.special then return false end
-        if sel.special == "mossy" then
-            return (m.Name == "Mossy Coin" or m.Name:match("^Mossy Coin%d+$"))
-        elseif sel.special == "cultist" then
-            local nl=(m.Name or ""):lower(); return nl:find("cultist",1,true) and hasHumanoid(m)
-        elseif sel.special == "sapling" then
-            return m.Name == "Sapling"
-        else
-            return m.Name == sel.name
+        if not m or not m:IsA("Model") then return false end
+        local name = m.Name or ""
+
+        -- specials
+        if wantMossy then
+            if name == "Mossy Coin" or name:match("^Mossy Coin%d+$") then return true end
         end
+        if wantCultist then
+            local nl = name:lower()
+            if nl:find("cultist",1,true) and hasHumanoid(m) then return true end
+        end
+        if wantSapling and name == "Sapling" then return true end
+
+        -- regular category membership
+        return Selected.Junk[name] or Selected.Fuel[name] or Selected.Food[name]
+            or Selected.Medical[name] or Selected.WA[name] or Selected.Misc[name]
+            or Selected.Pelts[name] or false
     end
 
     ----------------------------------------------------------------------
@@ -130,6 +142,7 @@ return function(C, R, UI)
         if now - lastScan < scanInterval then return end
         lastScan = now
         if not gatherOn then return end
+        if not anySelection() then return end
 
         local root = hrp(); if not root then return end
         local origin = root.Position
@@ -175,7 +188,6 @@ return function(C, R, UI)
         gatherOn = true
         scanConn  = Run.Heartbeat:Connect(captureIfNear)
         hoverConn = Run.RenderStepped:Connect(hoverFollow)
-        -- edge button: show when gathering starts
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = true end
     end
     local function stopGather()
@@ -209,7 +221,6 @@ return function(C, R, UI)
     local function placeDown()
         local baseCF = groundAheadCF(); if not baseCF then return end
 
-        -- hide edge button immediately; also stop gather to avoid re-capture
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
         stopGather()
 
@@ -252,10 +263,10 @@ return function(C, R, UI)
         clearAll()
     end
 
-    -- Export small API for other modules (optional)
+    -- Export small API
     C.Gather = C.Gather or {}
-    C.Gather.IsOn     = function() return gatherOn end
-    C.Gather.PlaceDown= placeDown
+    C.Gather.IsOn      = function() return gatherOn end
+    C.Gather.PlaceDown = placeDown
 
     ----------------------------------------------------------------------
     -- UI
@@ -264,60 +275,71 @@ return function(C, R, UI)
     tab:Button({ Title = "Bring", Callback = function() placeDown() end })
     tab:Divider()
 
-    local function dropdownSingle(args)
+    -- Global gather trigger
+    tab:Section({ Title = "Selection", Icon = "check-square" })
+    tab:Button({
+        Title = "Gather Items",
+        Callback = function()
+            if anySelection() then
+                clearAll()
+                startGather()
+            end
+        end
+    })
+    tab:Divider()
+
+    -- Multi-select dropdown helper
+    local function dropdownMulti(args)
         return tab:Dropdown({
             Title = args.title,
             Values = args.values,
-            Multi = false,
-            AllowNone = false,
-            Callback = function(v) if v and v ~= "" then pick[args.key] = v end end
-        })
-    end
-    local function gatherButton(label, resolver)
-        tab:Button({
-            Title = label,
-            Callback = function()
-                local name, special = resolver()
-                sel.name, sel.special = name, special
-                clearAll()
-                startGather()
+            Multi = true,
+            AllowNone = true,
+            Callback = function(options)
+                local set = args.set
+                -- reset set
+                for k,_ in pairs(set) do set[k] = nil end
+                -- specials handling for Misc
+                if args.kind == "Misc" then
+                    wantMossy, wantCultist, wantSapling = false, false, false
+                    for _,v in ipairs(options) do
+                        if v == "Mossy Coin" then
+                            wantMossy = true
+                        elseif v == "Cultist" then
+                            wantCultist = true
+                        elseif v == "Sapling" then
+                            wantSapling = true
+                        else
+                            set[v] = true
+                        end
+                    end
+                else
+                    for _,v in ipairs(options) do set[v] = true end
+                end
             end
         })
     end
 
     tab:Section({ Title = "Junk" })
-    dropdownSingle({ title="Select Junk Item", values=junkItems, key="Junk" })
-    gatherButton("Gather Junk", function() return pick.Junk, nil end)
+    dropdownMulti({ title="Select Junk Items", values=junkItems, set=Selected.Junk, kind="Junk" })
 
     tab:Section({ Title = "Fuel" })
-    dropdownSingle({ title="Select Fuel Item", values=fuelItems, key="Fuel" })
-    gatherButton("Gather Fuel", function() return pick.Fuel, nil end)
+    dropdownMulti({ title="Select Fuel Items", values=fuelItems, set=Selected.Fuel, kind="Fuel" })
 
     tab:Section({ Title = "Food" })
-    dropdownSingle({ title="Select Food Item", values=foodItems, key="Food" })
-    gatherButton("Gather Food", function() return pick.Food, nil end)
+    dropdownMulti({ title="Select Food Items", values=foodItems, set=Selected.Food, kind="Food" })
 
     tab:Section({ Title = "Medical" })
-    dropdownSingle({ title="Select Medical Item", values=medicalItems, key="Medical" })
-    gatherButton("Gather Medical", function() return pick.Medical, nil end)
+    dropdownMulti({ title="Select Medical Items", values=medicalItems, set=Selected.Medical, kind="Medical" })
 
     tab:Section({ Title = "Weapons & Armor" })
-    dropdownSingle({ title="Select Weapon/Armor", values=weaponsArmor, key="WA" })
-    gatherButton("Gather Weapons & Armor", function() return pick.WA, nil end)
+    dropdownMulti({ title="Select Weapon/Armor", values=weaponsArmor, set=Selected.WA, kind="WA" })
 
     tab:Section({ Title = "Ammo & Misc." })
-    dropdownSingle({ title="Select Ammo/Misc", values=ammoMisc, key="Misc" })
-    gatherButton("Gather Ammo & Misc", function()
-        local v = pick.Misc
-        if v == "Mossy Coin" then return nil, "mossy"
-        elseif v == "Cultist" then return nil, "cultist"
-        elseif v == "Sapling" then return nil, "sapling"
-        else return v, nil end
-    end)
+    dropdownMulti({ title="Select Ammo/Misc", values=ammoMisc, set=Selected.Misc, kind="Misc" })
 
     tab:Section({ Title = "Pelts" })
-    dropdownSingle({ title="Select Pelt", values=pelts, key="Pelts" })
-    gatherButton("Gather Pelts", function() return pick.Pelts, nil end)
+    dropdownMulti({ title="Select Pelts", values=pelts, set=Selected.Pelts, kind="Pelts" })
 
     ----------------------------------------------------------------------
     -- Edge "Place" button (shared screen GUI)
@@ -337,7 +359,6 @@ return function(C, R, UI)
             btn = Instance.new("TextButton")
             btn.Name = "PlaceEdge"
             btn.AnchorPoint = Vector2.new(1, 0)
-            -- Same baseline position as other edge buttons; Auto tab will re-layout if present
             btn.Position    = UDim2.new(1, -6, 0, 6)
             btn.Size        = UDim2.new(0, 120, 0, 30)
             btn.Text        = "Place"
@@ -357,7 +378,6 @@ return function(C, R, UI)
 
     _G._PlaceEdgeBtn = ensurePlaceEdge()
     _G._PlaceEdgeBtn.MouseButton1Click:Connect(function()
-        -- acts like secondary Bring; hide then drop
         _G._PlaceEdgeBtn.Visible = false
         placeDown()
     end)
