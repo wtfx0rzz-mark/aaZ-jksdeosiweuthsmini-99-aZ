@@ -10,18 +10,30 @@ return function(C, R, UI)
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
-    -- Tunables
-    C.Config.CHOP_SWING_DELAY     = C.Config.CHOP_SWING_DELAY     or 0.55
-    C.Config.TREE_NAME            = C.Config.TREE_NAME            or "Small Tree"
-    C.Config.UID_SUFFIX           = C.Config.UID_SUFFIX           or "0000000000"
-    C.Config.ChopPrefer           = C.Config.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
-    C.Config.MAX_TARGETS_PER_WAVE = C.Config.MAX_TARGETS_PER_WAVE or 80 -- how many we hit per wave
-
+    -- Tunables (easy to adjust)
+ -- Bind to shared config table for easy tuning from outside modules
+local TUNE = C.Config
+-- Seconds to wait between waves of swings/hits
+TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
+-- Default tree model name to target when unspecified
+TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
+-- Suffix appended to per-hit IDs and attributes for uniqueness
+TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
+-- Tool preference order used when auto-equipping
+TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
+-- Upper bound of tree targets processed per wave
+TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 5
+-- Upper bound of character targets processed per wave
+TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 5
+-- Minimum seconds between hits on the same character (anti-spam)
+TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.49
+-- Wait inserted between sequential character hits to reduce spikes
+TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.04
+-- If true (default), sort characters by distance; set false to skip sort
+TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
+    
     local running = { SmallTree = false, Character = false }
 
-    --------------------------------------------------------------------
-    -- Helpers
-    --------------------------------------------------------------------
     local TREE_NAMES     = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
     local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
 
@@ -69,12 +81,17 @@ return function(C, R, UI)
         return tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
     end
 
+    local hrpCache = setmetatable({}, {__mode="k"})
     local function bestCharacterHitPart(model)
         if not model or not model:IsA("Model") then return nil end
-        local hrp = model:FindFirstChild("HumanoidRootPart")
-        if hrp and hrp:IsA("BasePart") then return hrp end
+        local hrp = hrpCache[model]
+        if hrp and hrp.Parent then return hrp end
+        hrp = model:FindFirstChild("HumanoidRootPart")
+        if hrp and hrp:IsA("BasePart") then hrpCache[model] = hrp return hrp end
         if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then return model.PrimaryPart end
-        return model:FindFirstChildWhichIsA("BasePart")
+        hrp = model:FindFirstChildWhichIsA("BasePart")
+        if hrp then hrpCache[model] = hrp end
+        return hrp
     end
 
     local function computeImpactCFrame(model, hitPart)
@@ -102,16 +119,13 @@ return function(C, R, UI)
         dmg:InvokeServer(targetModel, tool, hitId, impactCF)
     end
 
-    --------------------------------------------------------------------
-    -- Attribute helpers (per-tree sequencing)
-    --------------------------------------------------------------------
     local function attrBucket(treeModel)
         local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
         return (hr and hr:IsA("Instance")) and hr or treeModel
     end
 
     local function parseHitAttrKey(k)
-        local n = string.match(k or "", "^(%d+)_" .. C.Config.UID_SUFFIX .. "$")
+        local n = string.match(k or "", "^(%d+)_" .. TUNE.UID_SUFFIX .. "$")
         return n and tonumber(n) or nil
     end
 
@@ -126,14 +140,11 @@ return function(C, R, UI)
             end
         end
         local nextN = maxN + 1
-        return tostring(nextN) .. "_" .. C.Config.UID_SUFFIX
+        return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
     end
 
-    --------------------------------------------------------------------
-    -- Collectors (trees recursive, characters flat) + deterministic order
-    --------------------------------------------------------------------
     local function collectTreesInRadius(roots, origin, radius)
-        local includeBig = C.State.Toggles.BigTreeAura == true -- only settable when Strong Axe exists
+        local includeBig = C.State.Toggles.BigTreeAura == true
         local out, n = {}, 0
         local function walk(node)
             if not node then return end
@@ -142,7 +153,7 @@ return function(C, R, UI)
                 if trunk then
                     local d = (trunk.Position - origin).Magnitude
                     if d <= radius then
-                        n += 1
+                        n = n + 1
                         out[n] = node
                     end
                 end
@@ -173,7 +184,8 @@ return function(C, R, UI)
         for _, mdl in ipairs(charsFolder:GetChildren()) do
             repeat
                 if not mdl:IsA("Model") then break end
-                local nameLower = string.lower(mdl.Name or "")
+                local n = mdl.Name or ""
+                local nameLower = n:lower()
                 if string.find(nameLower, "horse", 1, true) then break end
                 local hit = bestCharacterHitPart(mdl)
                 if not hit then break end
@@ -181,32 +193,30 @@ return function(C, R, UI)
                 out[#out+1] = mdl
             until true
         end
-        table.sort(out, function(a, b)
-            local pa, pb = bestCharacterHitPart(a), bestCharacterHitPart(b)
-            local da = pa and (pa.Position - origin).Magnitude or math.huge
-            local db = pb and (pb.Position - origin).Magnitude or math.huge
-            if da == db then return (a.Name or "") < (b.Name or "") end
-            return da < db
-        end)
+        if TUNE.CHAR_SORT then
+            table.sort(out, function(a, b)
+                local pa, pb = bestCharacterHitPart(a), bestCharacterHitPart(b)
+                local da = pa and (pa.Position - origin).Magnitude or math.huge
+                local db = pb and (pb.Position - origin).Magnitude or math.huge
+                if da == db then return (a.Name or "") < (b.Name or "") end
+                return da < db
+            end)
+        end
         return out
     end
 
-    --------------------------------------------------------------------
-    -- Wave executor (trees: per-tree IDs; chars: no tagging)
-    --------------------------------------------------------------------
+    local lastHitAt = setmetatable({}, {__mode="k"})
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
-        -- Tool selection:
         local toolName
         if isTree and C.State.Toggles.BigTreeAura then
             if hasStrongAxe() then
-                toolName = "Strong Axe"         -- force Strong Axe when big trees enabled
+                toolName = "Strong Axe"
             else
-                -- silently disable the toggle if axe no longer present
                 C.State.Toggles.BigTreeAura = false
             end
         end
         if not toolName then
-            for _, n in ipairs(C.Config.ChopPrefer) do
+            for _, n in ipairs(TUNE.ChopPrefer) do
                 if findInInventory(n) then toolName = n break end
             end
         end
@@ -214,33 +224,42 @@ return function(C, R, UI)
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
 
+        if not isTree then
+            local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
+            for i = 1, cap do
+                local mdl = targetModels[i]
+                local t0 = lastHitAt[mdl] or 0
+                if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
+                    local hitPart = hitPartGetter(mdl)
+                    if hitPart then
+                        local impactCF = hitPart.CFrame
+                        local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                        HitTarget(mdl, tool, hitId, impactCF)
+                        lastHitAt[mdl] = tick()
+                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                    end
+                end
+            end
+            task.wait(swingDelay)
+            return
+        end
+
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
                 local hitPart = hitPartGetter(mdl)
                 if not hitPart then return end
-
                 local impactCF = computeImpactCFrame(mdl, hitPart)
-                local hitId
-                if isTree then
-                    hitId = nextPerTreeHitId(mdl)
-                    pcall(function()
-                        local bucket = attrBucket(mdl)
-                        if bucket then bucket:SetAttribute(hitId, true) end
-                    end)
-                else
-                    hitId = tostring(tick()) .. "_" .. C.Config.UID_SUFFIX
-                end
-
+                local hitId = nextPerTreeHitId(mdl)
+                pcall(function()
+                    local bucket = attrBucket(mdl)
+                    if bucket then bucket:SetAttribute(hitId, true) end
+                end)
                 HitTarget(mdl, tool, hitId, impactCF)
             end)
         end
-
         task.wait(swingDelay)
     end
 
-    --------------------------------------------------------------------
-    -- Auras
-    --------------------------------------------------------------------
     local function startCharacterAura()
         if running.Character then return end
         running.Character = true
@@ -249,20 +268,11 @@ return function(C, R, UI)
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then task.wait(0.2) break end
-
                 local origin = hrp.Position
                 local radius = tonumber(C.State.AuraRadius) or 150
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
-
                 if #targets > 0 then
-                    local batch = targets
-                    if C.Config.MAX_TARGETS_PER_WAVE and #batch > C.Config.MAX_TARGETS_PER_WAVE then
-                        batch = {}
-                        for i = 1, C.Config.MAX_TARGETS_PER_WAVE do
-                            batch[i] = targets[i]
-                        end
-                    end
-                    chopWave(batch, C.Config.CHOP_SWING_DELAY, bestCharacterHitPart, false)
+                    chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
                 else
                     task.wait(0.3)
                 end
@@ -272,7 +282,6 @@ return function(C, R, UI)
     local function stopCharacterAura() running.Character = false end
 
     C.State._treeCursor = C.State._treeCursor or 1
-
     local function startSmallTreeAura()
         if running.SmallTree then return end
         running.SmallTree = true
@@ -281,20 +290,17 @@ return function(C, R, UI)
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then task.wait(0.2) break end
-
                 local origin = hrp.Position
                 local radius = tonumber(C.State.AuraRadius) or 150
-
                 local roots = {
                     WS,
                     RS:FindFirstChild("Assets"),
                     RS:FindFirstChild("CutsceneSets"),
                 }
-
                 local allTrees = collectTreesInRadius(roots, origin, radius)
                 local total = #allTrees
                 if total > 0 then
-                    local batchSize = math.min(C.Config.MAX_TARGETS_PER_WAVE, total)
+                    local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
                     if C.State._treeCursor > total then C.State._treeCursor = 1 end
                     local batch = table.create(batchSize)
                     for i = 1, batchSize do
@@ -302,7 +308,7 @@ return function(C, R, UI)
                         batch[i] = allTrees[idx]
                     end
                     C.State._treeCursor = C.State._treeCursor + batchSize
-                    chopWave(batch, C.Config.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                    chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
                 else
                     task.wait(0.3)
                 end
@@ -311,9 +317,6 @@ return function(C, R, UI)
     end
     local function stopSmallTreeAura() running.SmallTree = false end
 
-    --------------------------------------------------------------------
-    -- UI
-    --------------------------------------------------------------------
     CombatTab:Toggle({
         Title = "Character Aura",
         Value = C.State.Toggles.CharacterAura or false,
@@ -332,7 +335,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Big Trees toggle: requires Strong Axe. Silent auto-off if missing.
     local bigToggle
     bigToggle = CombatTab:Toggle({
         Title = "Big Trees (requires Strong Axe)",
@@ -343,7 +345,6 @@ return function(C, R, UI)
                     C.State.Toggles.BigTreeAura = true
                 else
                     C.State.Toggles.BigTreeAura = false
-                    -- attempt to visually revert; ignore if UI object lacks setter
                     pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
                     pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
                 end
@@ -353,7 +354,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Inventory watcher to auto-disable if Strong Axe is lost while toggle is on
     task.spawn(function()
         local inv = lp:WaitForChild("Inventory", 10)
         if not inv then return end
