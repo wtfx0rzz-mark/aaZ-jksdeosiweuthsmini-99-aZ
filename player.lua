@@ -14,7 +14,7 @@ return function(C, R, UI)
     local mobileFlyEnabled = false
     local FLYING           = false
     local flySpeed         = 3
-    local walkSpeedValue   = 24
+    local walkSpeedValue   = 50
     local speedEnabled     = false
 
     local forceFlyEnabled  = false
