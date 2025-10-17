@@ -9,13 +9,17 @@ return function(C, R, UI)
     assert(tab, "Bring tab not found in UI")
 
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 0.06
+    local PER_ITEM_DELAY        = 0.12   -- was 0.06
     local COLLIDE_OFF_SEC       = 0.22
     local DROP_ABOVE_HEAD_STUDS = 5
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 24
-    local ORB_OFFSET_Y          = 15  -- +5 higher than before
+    local ORB_OFFSET_Y          = 20     -- was 15
+
+    -- feed smoothing
+    local FEED_JITTER_ITEM      = 0.05   -- 0..this per item
+    local FEED_JITTER_BATCH     = 0.15   -- extra after each batch
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
@@ -325,9 +329,9 @@ return function(C, R, UI)
             if #list == 0 then break end
             for _,m in ipairs(list) do
                 if cookSet[m.Name] then cookFlow(m, camp) else burnFlow(m, camp) end
-                task.wait(PER_ITEM_DELAY)
+                task.wait(PER_ITEM_DELAY + math.random() * FEED_JITTER_ITEM)
             end
-            task.wait(0.05)
+            task.wait(0.05 + FEED_JITTER_BATCH)
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
@@ -341,8 +345,11 @@ return function(C, R, UI)
         while true do
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
-            for _,m in ipairs(list) do scrapFlow(m, scr); task.wait(PER_ITEM_DELAY) end
-            task.wait(0.05)
+            for _,m in ipairs(list) do
+                scrapFlow(m, scr)
+                task.wait(PER_ITEM_DELAY + math.random() * FEED_JITTER_ITEM)
+            end
+            task.wait(0.05 + FEED_JITTER_BATCH)
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
