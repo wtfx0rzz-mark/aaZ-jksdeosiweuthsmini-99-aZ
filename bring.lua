@@ -23,7 +23,7 @@ return function(C, R, UI)
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
-    local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
+    local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Cooked Steak","Cooked Morsel","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
@@ -32,9 +32,14 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    local fuelSet, junkSet = {}, {}
+    local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
     for _,n in ipairs(junkItems) do junkSet[n] = true end
+    cookSet["Morsel"] = true
+    cookSet["Steak"]  = true
+    cookSet["Ribs"]   = true
+    scrapAlso["Log"]   = true
+    scrapAlso["Chair"] = true
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -348,6 +353,13 @@ return function(C, R, UI)
         return out
     end
 
+    local function mergedSet(a, b)
+        local t = {}
+        for k,v in pairs(a) do if v then t[k] = true end end
+        for k,v in pairs(b) do if v then t[k] = true end end
+        return t
+    end
+
     local function burnNearby()
         local camp = CAMPFIRE_PATH
         if not camp then return end
@@ -359,10 +371,11 @@ return function(C, R, UI)
 
         local burned = 0
         local seen = {}
+        local targets = mergedSet(fuelSet, cookSet)
         for pass=1,MAX_PASSES do
             if burned >= AMOUNT_TO_BRING then break end
             local need = math.min(BATCH_SIZE, AMOUNT_TO_BRING - burned)
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, fuelSet, need, seen)
+            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, need, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
                 moveToCF(m, orb1.CFrame)
@@ -387,10 +400,11 @@ return function(C, R, UI)
 
         local scrapped = 0
         local seen = {}
+        local targets = mergedSet(junkSet, scrapAlso)
         for pass=1,MAX_PASSES do
             if scrapped >= AMOUNT_TO_BRING then break end
             local need = math.min(BATCH_SIZE, AMOUNT_TO_BRING - scrapped)
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, junkSet, need, seen)
+            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, need, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
                 moveToCF(m, orb1.CFrame)
@@ -420,15 +434,15 @@ return function(C, R, UI)
             list = collectByNameLoose(name, want)
         end
         if #list == 0 then return end
-        local campfire = fuelSet[name] and CAMPFIRE_PATH or nil
-        local scrapper = junkSet[name] and SCRAPPER_PATH or nil
+        local doBurn = fuelSet[name] or cookSet[name]
+        local doScrap = junkSet[name] or scrapAlso[name]
         for i,entry in ipairs(list) do
             if i > want then break end
             local model = entry.model
-            if campfire then
-                burnFlow(model, campfire)
-            elseif scrapper then
-                scrapFlow(model, scrapper)
+            if doBurn then
+                burnFlow(model, CAMPFIRE_PATH)
+            elseif doScrap then
+                scrapFlow(model, SCRAPPER_PATH)
             else
                 dropNearPlayer(model)
             end
@@ -451,8 +465,8 @@ return function(C, R, UI)
     tab:Section({ Title = "Actions" })
     tab:Slider({ Title = "Nearby Radius", Min = 6, Max = 60, Default = NEARBY_RADIUS, Callback = function(v) NEARBY_RADIUS = v end })
     tab:Slider({ Title = "Max To Process", Min = 10, Max = 200, Default = AMOUNT_TO_BRING, Callback = function(v) AMOUNT_TO_BRING = v end })
-    tab:Button({ Title = "Burn Nearby Fuel", Callback = burnNearby })
-    tab:Button({ Title = "Scrap Nearby Junk", Callback = scrapNearby })
+    tab:Button({ Title = "Burn Nearby Fuel/Food", Callback = burnNearby })
+    tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
     tab:Section({ Title = "Junk → Scrapper" })
     singleSelectDropdown({ title = "Select Junk Item", values = junkItems, setter = function(v) selJunk = v end })
@@ -462,7 +476,7 @@ return function(C, R, UI)
     singleSelectDropdown({ title = "Select Fuel Item", values = fuelItems, setter = function(v) selFuel = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selFuel, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Food" })
+    tab:Section({ Title = "Food (cookable included)", TitleRight = "" })
     singleSelectDropdown({ title = "Select Food Item", values = foodItems, setter = function(v) selFood = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selFood, AMOUNT_TO_BRING) end })
 
