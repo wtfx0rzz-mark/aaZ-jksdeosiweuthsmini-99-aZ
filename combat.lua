@@ -22,11 +22,11 @@ TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
 -- Tool preference order used when auto-equipping
 TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
 -- Upper bound of tree targets processed per wave
-TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 8
+TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 20
 -- Upper bound of character targets processed per wave
-TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 8
+TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 20
 -- Minimum seconds between hits on the same character (anti-spam)
-TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.5
+TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.4
 -- Wait inserted between sequential character hits to reduce spikes
 TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.02
 -- If true (default), sort characters by distance; set false to skip sort
