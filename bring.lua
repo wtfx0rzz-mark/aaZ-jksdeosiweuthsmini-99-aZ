@@ -9,12 +9,14 @@ return function(C, R, UI)
     assert(tab, "Bring tab not found in UI")
 
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 0.08
-    local COLLIDE_OFF_SEC       = 0.25
+    local PER_ITEM_DELAY        = 0.06
+    local COLLIDE_OFF_SEC       = 0.22
     local DROP_ABOVE_HEAD_STUDS = 5
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
-    local NEARBY_RADIUS         = 10
+    local NEARBY_RADIUS         = 24
+    local BATCH_SIZE            = 25
+    local MAX_PASSES            = 8
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
@@ -41,17 +43,6 @@ return function(C, R, UI)
     local function headPart()
         local ch = lp.Character
         return ch and ch:FindFirstChild("Head")
-    end
-    local function auraRadius()
-        local v = tonumber(C.State and C.State.AuraRadius) or 150
-        if v < 0 then v = 0 end
-        if v > 500 then v = 500 end
-        return v
-    end
-    local function withinRadius(pos)
-        local root = hrp()
-        if not root then return true end
-        return (pos - root.Position).Magnitude <= auraRadius()
     end
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return false end
@@ -88,8 +79,7 @@ return function(C, R, UI)
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents")
         if not re then return nil end
-        local names = {...}
-        for _,n in ipairs(names) do
+        for _,n in ipairs({...}) do
             local x = re:FindFirstChild(n)
             if x then return x end
         end
@@ -140,7 +130,7 @@ return function(C, R, UI)
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) then
                     local mp = mainPart(model)
-                    if mp and withinRadius(mp.Position) then
+                    if mp then
                         n = n + 1
                         found[#found+1] = {model=model, part=mp}
                         if limit and n >= limit then break end
@@ -157,7 +147,7 @@ return function(C, R, UI)
                 local nm = m.Name
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
                     local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
-                    if mp and withinRadius(mp.Position) then
+                    if mp then
                         n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
@@ -173,7 +163,7 @@ return function(C, R, UI)
             if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
-                    if mp and withinRadius(mp.Position) then
+                    if mp then
                         n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
@@ -190,7 +180,7 @@ return function(C, R, UI)
         for _,m in ipairs(items:GetChildren()) do
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
-                if mp and withinRadius(mp.Position) then
+                if mp then
                     n = n + 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and n >= limit then break end
@@ -212,7 +202,7 @@ return function(C, R, UI)
                     (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
                 if ok then
                     local mp = mainPart(m)
-                    if mp and withinRadius(mp.Position) then
+                    if mp then
                         n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
@@ -341,13 +331,17 @@ return function(C, R, UI)
         end)
     end
 
-    local function modelsNear(pos, radius, nameSet)
+    local function modelsNear(pos, radius, nameSet, maxCount, seen)
         local out = {}
+        local c = 0
         for _,d in ipairs(WS:GetDescendants()) do
-            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] then
+            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] then
                 local mp = mainPart(d)
                 if mp and (mp.Position - pos).Magnitude <= radius then
                     out[#out+1] = d
+                    seen[d] = true
+                    c = c + 1
+                    if maxCount and c >= maxCount then break end
                 end
             end
         end
@@ -358,15 +352,26 @@ return function(C, R, UI)
         local camp = CAMPFIRE_PATH
         if not camp then return end
         local root = hrp(); if not root then return end
-        local pcf = root.CFrame
-        local orb2 = makeOrb(pcf, "orb2")
+        local baseCF = root.CFrame
+        local orb2 = makeOrb(baseCF, "orb2")
         local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()) + Vector3.new(0,10,0)
         local orb1 = makeOrb(campCF, "orb1")
-        local list = modelsNear(orb2.Position, NEARBY_RADIUS, fuelSet)
-        for _,m in ipairs(list) do
-            moveToCF(m, orb1.CFrame)
-            burnFlow(m, camp)
-            task.wait(PER_ITEM_DELAY)
+
+        local burned = 0
+        local seen = {}
+        for pass=1,MAX_PASSES do
+            if burned >= AMOUNT_TO_BRING then break end
+            local need = math.min(BATCH_SIZE, AMOUNT_TO_BRING - burned)
+            local list = modelsNear(orb2.Position, NEARBY_RADIUS, fuelSet, need, seen)
+            if #list == 0 then break end
+            for _,m in ipairs(list) do
+                moveToCF(m, orb1.CFrame)
+                burnFlow(m, camp)
+                burned = burned + 1
+                if burned >= AMOUNT_TO_BRING then break end
+                task.wait(PER_ITEM_DELAY)
+            end
+            task.wait(0.05)
         end
         task.delay(1.0, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
@@ -375,15 +380,26 @@ return function(C, R, UI)
         local scr = SCRAPPER_PATH
         if not scr then return end
         local root = hrp(); if not root then return end
-        local pcf = root.CFrame
-        local orb2 = makeOrb(pcf, "orb2")
+        local baseCF = root.CFrame
+        local orb2 = makeOrb(baseCF, "orb2")
         local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()) + Vector3.new(0,10,0)
         local orb1 = makeOrb(scrCF, "orb1")
-        local list = modelsNear(orb2.Position, NEARBY_RADIUS, junkSet)
-        for _,m in ipairs(list) do
-            moveToCF(m, orb1.CFrame)
-            scrapFlow(m, scr)
-            task.wait(PER_ITEM_DELAY)
+
+        local scrapped = 0
+        local seen = {}
+        for pass=1,MAX_PASSES do
+            if scrapped >= AMOUNT_TO_BRING then break end
+            local need = math.min(BATCH_SIZE, AMOUNT_TO_BRING - scrapped)
+            local list = modelsNear(orb2.Position, NEARBY_RADIUS, junkSet, need, seen)
+            if #list == 0 then break end
+            for _,m in ipairs(list) do
+                moveToCF(m, orb1.CFrame)
+                scrapFlow(m, scr)
+                scrapped = scrapped + 1
+                if scrapped >= AMOUNT_TO_BRING then break end
+                task.wait(PER_ITEM_DELAY)
+            end
+            task.wait(0.05)
         end
         task.delay(1.0, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
@@ -433,8 +449,10 @@ return function(C, R, UI)
     end
 
     tab:Section({ Title = "Actions" })
-    tab:Button({ Title = "Burn Nearby Fuel (10u)", Callback = burnNearby })
-    tab:Button({ Title = "Scrap Nearby Junk (10u)", Callback = scrapNearby })
+    tab:Slider({ Title = "Nearby Radius", Min = 6, Max = 60, Default = NEARBY_RADIUS, Callback = function(v) NEARBY_RADIUS = v end })
+    tab:Slider({ Title = "Max To Process", Min = 10, Max = 200, Default = AMOUNT_TO_BRING, Callback = function(v) AMOUNT_TO_BRING = v end })
+    tab:Button({ Title = "Burn Nearby Fuel", Callback = burnNearby })
+    tab:Button({ Title = "Scrap Nearby Junk", Callback = scrapNearby })
 
     tab:Section({ Title = "Junk → Scrapper" })
     singleSelectDropdown({ title = "Select Junk Item", values = junkItems, setter = function(v) selJunk = v end })
