@@ -1,5 +1,5 @@
 --=====================================================
--- Bring Module • Drop near player (no terrain raycast)
+-- Bring Module • Drop in a straight line near player
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -12,22 +12,17 @@ return function(C, R, UI)
     assert(tab, "Bring tab not found in UI")
 
     -- ===================== TUNING =====================
-    -- How many items to fetch per click
-    local AMOUNT_TO_BRING      = 100
+    -- How many to fetch per click
+    local AMOUNT_TO_BRING        = 100
 
-    -- Drop placement relative to the player:
-    -- vertical lift above the player's Head position
-    local DROP_ABOVE_HEAD_STUDS = 5
-    -- horizontal offset in front of the player (along LookVector)
-    local DROP_AHEAD_STUDS      = 3
+    -- Placement relative to the player
+    local DROP_ABOVE_HEAD_STUDS  = 5    -- vertical lift above Head
+    local DROP_AHEAD_STUDS       = 3    -- base distance in front of you
+    local LINE_SPACING_STUDS     = 2.5  -- extra forward offset per item (keeps a line)
 
-    -- Spread the drops so they do not pile on one point:
-    -- distance between spiral rings on the XZ plane around the forward point
-    local SPIRAL_SPACING        = 2.75
-    -- keep collisions off briefly so the item clears the avatar before settling
-    local COLLIDE_OFF_SEC       = 0.30
-    -- small pacing between teleports to avoid bursts
-    local PER_ITEM_DELAY        = 0.10
+    -- Settle/robustness
+    local COLLIDE_OFF_SEC        = 0.30 -- collisions disabled during settle
+    local PER_ITEM_DELAY         = 0.10 -- pacing between teleports
     -- =================================================
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
@@ -88,31 +83,18 @@ return function(C, R, UI)
         return t
     end
 
-    -- golden angle spiral in local player frame (XZ plane)
-    local function spiralLocalOffset(i, spacing)
-        local theta = i * 2.399963229728653 -- golden angle in rad
-        local r = spacing * math.sqrt(i)
-        local dx = math.cos(theta) * r
-        local dz = math.sin(theta) * r
-        return dx, dz
-    end
-
-    -- Build the drop CFrame relative to Head + LookVector (no terrain raycast)
+    -- Build the drop CFrame relative to Head + LookVector in a straight line
     local function computeDropCF(index)
         local root = hrp(); if not root then return nil end
         local head = headPart()
         local basePos = head and head.Position or (root.Position + Vector3.new(0, 4, 0))
 
-        local look = root.CFrame.LookVector
-        local right = root.CFrame.RightVector
+        local look   = root.CFrame.LookVector
+        local center = basePos
+            + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0)
+            + look * (DROP_AHEAD_STUDS + (index - 1) * LINE_SPACING_STUDS)
 
-        local center = basePos + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0) + look * DROP_AHEAD_STUDS
-
-        local dx, dz = spiralLocalOffset(index or 1, SPIRAL_SPACING)
-        local offset = right * dx + look * dz
-
-        local dropPos = center + offset
-        return CFrame.lookAt(dropPos, dropPos + look)
+        return CFrame.lookAt(center, center + look)
     end
 
     local function getRemote(n)
@@ -154,7 +136,7 @@ return function(C, R, UI)
         local stopRE  = getRemote("StopDraggingItem")
         pcall(function() if startRE then startRE:FireServer(entry.model) end end)
 
-        local snap = setCollide(entry.model, false) -- avoid hitting player while dropping
+        local snap = setCollide(entry.model, false)
         zeroAssembly(entry.model)
 
         if entry.model:IsA("Model") then
@@ -163,7 +145,6 @@ return function(C, R, UI)
             entry.part.CFrame = dropCF
         end
 
-        -- encourage a clean settle
         for _,p in ipairs(getAllParts(entry.model)) do
             p.AssemblyLinearVelocity = Vector3.new(0, -8, 0)
         end
@@ -193,7 +174,7 @@ return function(C, R, UI)
                 if model and model:IsA("Model") and not isExcludedModel(model) then
                     local mp = mainPart(model)
                     if mp and withinRadius(mp.Position) then
-                        n += 1
+                        n = n + 1
                         found[#found+1] = {model=model, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -211,7 +192,7 @@ return function(C, R, UI)
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
                     local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
                     if mp and withinRadius(mp.Position) then
-                        n += 1
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -228,7 +209,7 @@ return function(C, R, UI)
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
                     if mp and withinRadius(mp.Position) then
-                        n += 1
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -246,7 +227,7 @@ return function(C, R, UI)
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
                 if mp and withinRadius(mp.Position) then
-                    n += 1
+                    n = n + 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and n >= limit then break end
                 end
@@ -270,7 +251,7 @@ return function(C, R, UI)
                 if ok then
                     local mp = mainPart(m)
                     if mp and withinRadius(mp.Position) then
-                        n += 1
+                        n = n + 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
