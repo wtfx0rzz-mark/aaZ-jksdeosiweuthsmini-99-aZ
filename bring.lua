@@ -15,15 +15,14 @@ return function(C, R, UI)
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 24
-    local BATCH_SIZE            = 25
-    local MAX_PASSES            = 8
+    local ORB_OFFSET_Y          = 15
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
-    local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Cooked Steak","Cooked Morsel","Berry","Carrot"}
+    local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
@@ -259,30 +258,59 @@ return function(C, R, UI)
             pcall(function() StopDraggingItem:FireServer(model or Instance.new("Model")) end)
         end
     end
+
+    local function moveModel(model, cf)
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p = mainPart(model)
+            if p then p.CFrame = cf end
+        end
+        task.delay(COLLIDE_OFF_SEC, function()
+            setCollide(model, true, snap)
+        end)
+    end
+
+    local function fireHandoffCF(fire)
+        local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
+        local cf = p and p.CFrame or fire:GetPivot()
+        return cf + Vector3.new(0, 1.5, 0)
+    end
+
     local function burnFlow(model, campfire)
         resolveRemotes()
-        local ok = false
         startDrag(model)
+        local handoff = fireHandoffCF(campfire)
+        moveModel(model, handoff)
+        local ok = false
         if RequestBurnItem then
             ok = pcall(function()
                 RequestBurnItem:FireServer(campfire, Instance.new("Model"))
             end)
         end
-        if not ok then pivotOverTarget(model, campfire) end
+        if not ok then
+            pivotOverTarget(model, campfire)
+        end
         stopDrag(model)
     end
+
     local function scrapFlow(model, scrapper)
         resolveRemotes()
-        local ok = false
         startDrag(model)
+        local ok = false
         if RequestScrapItem then
             ok = pcall(function()
                 RequestScrapItem:FireServer(scrapper, Instance.new("Model"))
             end)
         end
-        if not ok then pivotOverTarget(model, scrapper) end
+        if not ok then
+            pivotOverTarget(model, scrapper)
+        end
         stopDrag(model)
     end
+
     local function dropNearPlayer(model)
         local cf = computeForwardDropCF()
         if not cf then return end
@@ -322,20 +350,6 @@ return function(C, R, UI)
         return part
     end
 
-    local function moveToCF(model, cf)
-        local snap = setCollide(model, false)
-        zeroAssembly(model)
-        if model:IsA("Model") then
-            model:PivotTo(cf)
-        else
-            local p = mainPart(model)
-            if p then p.CFrame = cf end
-        end
-        task.delay(COLLIDE_OFF_SEC, function()
-            setCollide(model, true, snap)
-        end)
-    end
-
     local function modelsNear(pos, radius, nameSet, maxCount, seen)
         local out = {}
         local c = 0
@@ -364,21 +378,16 @@ return function(C, R, UI)
         local camp = CAMPFIRE_PATH
         if not camp then return end
         local root = hrp(); if not root then return end
-        local baseCF = root.CFrame
-        local orb2 = makeOrb(baseCF, "orb2")
-        local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()) + Vector3.new(0,10,0)
+        local orb2 = makeOrb(root.CFrame + Vector3.new(0,0,0), "orb2")
+        local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0)
         local orb1 = makeOrb(campCF, "orb1")
-
-        local burned = 0
-        local seen = {}
+        local burned, seen = 0, {}
         local targets = mergedSet(fuelSet, cookSet)
-        for pass=1,MAX_PASSES do
-            if burned >= AMOUNT_TO_BRING then break end
-            local need = math.min(BATCH_SIZE, AMOUNT_TO_BRING - burned)
+        while burned < AMOUNT_TO_BRING do
+            local need = AMOUNT_TO_BRING - burned
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, need, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
-                moveToCF(m, orb1.CFrame)
                 burnFlow(m, camp)
                 burned = burned + 1
                 if burned >= AMOUNT_TO_BRING then break end
@@ -393,21 +402,16 @@ return function(C, R, UI)
         local scr = SCRAPPER_PATH
         if not scr then return end
         local root = hrp(); if not root then return end
-        local baseCF = root.CFrame
-        local orb2 = makeOrb(baseCF, "orb2")
-        local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()) + Vector3.new(0,10,0)
+        local orb2 = makeOrb(root.CFrame + Vector3.new(0,0,0), "orb2")
+        local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0)
         local orb1 = makeOrb(scrCF, "orb1")
-
-        local scrapped = 0
-        local seen = {}
+        local scrapped, seen = 0, {}
         local targets = mergedSet(junkSet, scrapAlso)
-        for pass=1,MAX_PASSES do
-            if scrapped >= AMOUNT_TO_BRING then break end
-            local need = math.min(BATCH_SIZE, AMOUNT_TO_BRING - scrapped)
+        while scrapped < AMOUNT_TO_BRING do
+            local need = AMOUNT_TO_BRING - scrapped
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, need, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
-                moveToCF(m, orb1.CFrame)
                 scrapFlow(m, scr)
                 scrapped = scrapped + 1
                 if scrapped >= AMOUNT_TO_BRING then break end
@@ -463,8 +467,6 @@ return function(C, R, UI)
     end
 
     tab:Section({ Title = "Actions" })
-    tab:Slider({ Title = "Nearby Radius", Min = 6, Max = 60, Default = NEARBY_RADIUS, Callback = function(v) NEARBY_RADIUS = v end })
-    tab:Slider({ Title = "Max To Process", Min = 10, Max = 200, Default = AMOUNT_TO_BRING, Callback = function(v) AMOUNT_TO_BRING = v end })
     tab:Button({ Title = "Burn Nearby Fuel/Food", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
@@ -476,7 +478,7 @@ return function(C, R, UI)
     singleSelectDropdown({ title = "Select Fuel Item", values = fuelItems, setter = function(v) selFuel = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selFuel, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Food (cookable included)", TitleRight = "" })
+    tab:Section({ Title = "Food" })
     singleSelectDropdown({ title = "Select Food Item", values = foodItems, setter = function(v) selFood = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selFood, AMOUNT_TO_BRING) end })
 
