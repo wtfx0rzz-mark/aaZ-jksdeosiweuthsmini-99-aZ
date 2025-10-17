@@ -1,3 +1,8 @@
+--=====================================================
+-- 1337 Nights | Bring Tab (workspace-wide, NPC-safe + Morsel drop fix)
+--  • Farthest-first
+--  • Re-enable physics and gravity properly for all items
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -8,297 +13,118 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING = 100
+    local AMOUNT_TO_BRING = 50
     local DROP_FORWARD = 5
     local DROP_UP      = 5
 
-    local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
-    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
-    local foodItems    = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot"}
-    local medicalItems = {"Bandage","MedKit"}
-    local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
-    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
-
-    local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
-        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
+    local junkItems = {
+        "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal",
+        "Old Radio","Washing Machine","Old Car Engine","UFO Junk","UFO Component"
+    }
+    local foodItems = {
+        "Morsel","Cooked Morsel","Steak","Cooked Steak","Cake","Berry","Carrot"
+    }
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
-        return ch and ch:FindFirstChild("HumanoidRootPart")
+        return ch:FindFirstChild("HumanoidRootPart")
     end
 
-    local function auraRadius()
-        return math.clamp(tonumber(C.State and C.State.AuraRadius) or 150, 0, 500)
+    local function mainPart(model)
+        if not model then return nil end
+        if model.PrimaryPart then return model.PrimaryPart end
+        return model:FindFirstChildWhichIsA("BasePart")
     end
 
-    local function withinRadius(pos)
-        local root = hrp()
-        if not root then return true end
-        return (pos - root.Position).Magnitude <= auraRadius()
+    local function getRemote(name)
+        local r = RS:FindFirstChild("RemoteEvents")
+        return r and r:FindFirstChild(name) or nil
     end
 
-    local function isExcludedModel(m)
-        if not (m and m:IsA("Model")) then return false end
-        local n = m.Name:lower()
-        return n == "pelt trader" or n:find("trader") or n:find("shopkeeper")
+    local function distance(a, b)
+        return (a.Position - b.Position).Magnitude
     end
 
-    local function hasHumanoid(model)
-        if not (model and model:IsA("Model")) then return false end
-        return model:FindFirstChildOfClass("Humanoid") ~= nil
-    end
-
-    local function mainPart(obj)
-        if not obj or not obj.Parent then return nil end
-        if obj:IsA("BasePart") then return obj end
-        if obj:IsA("Model") then
-            if obj.PrimaryPart then return obj.PrimaryPart end
-            return obj:FindFirstChildWhichIsA("BasePart")
+    local function releasePhysics(m)
+        if not m then return end
+        for _,p in ipairs(m:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.Anchored = false
+                p.CanCollide = true
+                p.AssemblyLinearVelocity = Vector3.zero
+                p.AssemblyAngularVelocity = Vector3.zero
+            end
         end
-        return nil
     end
 
-    local function getAllParts(target)
+    local function dropModelNearPlayer(m)
+        local root = hrp()
+        if not (root and m) then return end
+        local mp = mainPart(m)
+        if not mp then return end
+
+        -- place gently in air then re-enable gravity
+        local dropCF = CFrame.new(root.Position + root.CFrame.LookVector * DROP_FORWARD + Vector3.new(0, DROP_UP, 0))
+        pcall(function() mp.CFrame = dropCF end)
+
+        task.wait(0.05)
+        releasePhysics(m)
+        task.wait(0.05)
+
+        -- force a small downward impulse to break float state
+        pcall(function()
+            mp.AssemblyLinearVelocity = Vector3.new(0, -25, 0)
+        end)
+    end
+
+    local function findCandidateItems(list)
         local t = {}
-        if target:IsA("BasePart") then
-            t[1] = target
-        elseif target:IsA("Model") then
-            for _,d in ipairs(target:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    t[#t+1] = d
+        local root = hrp(); if not root then return t end
+        local items = WS:FindFirstChild("Items"); if not items then return t end
+        for _,m in ipairs(items:GetChildren()) do
+            if m:IsA("Model") then
+                for _,n in ipairs(list) do
+                    if m.Name == n then
+                        local mp = mainPart(m)
+                        if mp then table.insert(t, {m=m, dist=distance(root, mp)}) end
+                    end
                 end
             end
         end
+        table.sort(t, function(a,b) return a.dist > b.dist end)
         return t
     end
 
-    -- CHANGED: no terrain raycast; drop 5 studs above Head and 5 studs forward
-    local function computeDropCF()
-        local root = hrp()
-        if not root then return nil, nil end
-        local head = (lp.Character and lp.Character:FindFirstChild("Head")) or nil
-        local base  = head and head.Position or (root.Position + Vector3.new(0,4,0))
-        local fwd   = root.CFrame.LookVector
-        local dropPos = base + Vector3.new(0, DROP_UP, 0) + fwd * DROP_FORWARD
-        return CFrame.lookAt(dropPos, dropPos + fwd), fwd
-    end
+    local function bringItems(list)
+        local dragRemote = getRemote("RequestStartDraggingItem")
+        local stopRemote = getRemote("StopDraggingItem")
+        if not dragRemote or not stopRemote then return end
 
-    local function getRemote(n)
-        local f = RS:FindFirstChild("RemoteEvents")
-        return f and f:FindFirstChild(n) or nil
-    end
-
-    local function nudgeAsync(entry, forward)
-        task.defer(function()
-            if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            local v = forward * 6 + Vector3.new(0, -30, 0)
-            for _,p in ipairs(getAllParts(entry.model)) do
-                p.AssemblyLinearVelocity = v
-            end
-        end)
-    end
-
-    local function teleportOne(entry)
-        local root = hrp()
-        if not (root and entry and entry.model and entry.part) then return false end
-        if not entry.model.Parent or entry.part.Anchored then return false end
-        if isExcludedModel(entry.model) then return false end
-
-        local dropCF, forward = computeDropCF()
-        if not dropCF then return false end
-
-        local startRE = getRemote("RequestStartDraggingItem")
-        local stopRE  = getRemote("StopDraggingItem")
-        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
-        task.wait(0.03)
-
-        pcall(function() entry.part:SetNetworkOwner(lp) end)
-
-        if entry.model:IsA("Model") then
-            entry.model:PivotTo(dropCF)
-        else
-            entry.part.CFrame = dropCF
-        end
-
-        nudgeAsync(entry, forward)
-
-        task.delay(0.08, function()
-            if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
-        end)
-
-        return true
-    end
-
-    local function sortedFarthest(list)
-        local root = hrp()
-        if not root then return list end
-        table.sort(list, function(a,b)
-            return (a.part.Position - root.Position).Magnitude > (b.part.Position - root.Position).Magnitude
-        end)
-        return list
-    end
-
-    local function collectByNameLoose(name, limit)
-        local found, n = {}, 0
-        for _,d in ipairs(WS:GetDescendants()) do
-            if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
-                local model = d:IsA("Model") and d or d.Parent
-                if model and model:IsA("Model") and not isExcludedModel(model) then
-                    local mp = mainPart(model)
-                    if mp and withinRadius(mp.Position) then
-                        n = n + 1
-                        found[#found+1] = {model=model, part=mp}
-                        if limit and n >= limit then break end
-                    end
-                end
-            end
-        end
-        return sortedFarthest(found)
-    end
-
-    local function collectMossyCoins(limit)
-        local out, n = {}, 0
-        for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and not isExcludedModel(m) then
-                local nm = m.Name
-                if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
-                    local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
-                    if mp and withinRadius(mp.Position) then
-                        n = n + 1
-                        out[#out+1] = {model=m, part=mp}
-                        if limit and n >= limit then break end
-                    end
-                end
-            end
-        end
-        return sortedFarthest(out)
-    end
-
-    local function collectCultists(limit)
-        local out, n = {}, 0
-        for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and m.Name:lower():find("cultist", 1, true) and not isExcludedModel(m) then
-                if hasHumanoid(m) then
-                    local mp = mainPart(m)
-                    if mp and withinRadius(mp.Position) then
-                        n = n + 1
-                        out[#out+1] = {model=m, part=mp}
-                        if limit and n >= limit then break end
-                    end
-                end
-            end
-        end
-        return sortedFarthest(out)
-    end
-
-    local function collectSaplings(limit)
-        local out, n = {}, 0
-        local items = WS:FindFirstChild("Items")
-        if not items then return out end
-        for _,m in ipairs(items:GetChildren()) do
-            if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
-                local mp = mainPart(m)
-                if mp and withinRadius(mp.Position) then
-                    n = n + 1
-                    out[#out+1] = {model=m, part=mp}
-                    if limit and n >= limit then break end
-                end
-            end
-        end
-        return sortedFarthest(out)
-    end
-
-    local function collectPelts(which, limit)
-        local out, n = {}, 0
-        for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and not isExcludedModel(m) then
-                local nm = m.Name
-                local ok =
-                    (which == "Bunny Foot" and nm == "Bunny Foot") or
-                    (which == "Wolf Pelt" and nm == "Wolf Pelt") or
-                    (which == "Alpha Wolf Pelt" and nm:lower():find("alpha") and nm:lower():find("wolf")) or
-                    (which == "Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar")) or
-                    (which == "Polar Bear Pelt" and nm == "Polar Bear Pelt")
-
-                if ok then
-                    local mp = mainPart(m)
-                    if mp and withinRadius(mp.Position) then
-                        n = n + 1
-                        out[#out+1] = {model=m, part=mp}
-                        if limit and n >= limit then break end
-                    end
-                end
-            end
-        end
-        return sortedFarthest(out)
-    end
-
-    local function bringSelected(name, count)
-        local want = tonumber(count) or 0
-        if want <= 0 then return end
-        local list = {}
-
-        if name == "Mossy Coin" then
-            list = collectMossyCoins(want)
-        elseif name == "Cultist" then
-            list = collectCultists(want)
-        elseif name == "Sapling" then
-            list = collectSaplings(want)
-        elseif table.find(pelts, name) then
-            list = collectPelts(name, want)
-        else
-            list = collectByNameLoose(name, want)
-        end
-
-        if #list == 0 then return end
-        local brought = 0
-        for _,entry in ipairs(list) do
-            if brought >= want then break end
-            if teleportOne(entry) then
-                brought = brought + 1
-                task.wait(0.12)
+        local all = findCandidateItems(list)
+        local count = 0
+        for _,entry in ipairs(all) do
+            if count >= AMOUNT_TO_BRING then break end
+            local m = entry.m
+            local mp = mainPart(m)
+            if m and mp then
+                pcall(function() dragRemote:FireServer(m) end)
+                task.wait(0.05)
+                dropModelNearPlayer(m)
+                pcall(function() stopRemote:FireServer(m) end)
+                count += 1
+                task.wait(0.1)
             end
         end
     end
 
-    local function singleSelectDropdown(args)
-        return tab:Dropdown({
-            Title = args.title,
-            Values = args.values,
-            Multi = false,
-            AllowNone = false,
-            Callback = function(choice)
-                if choice and choice ~= "" then args.setter(choice) end
-            end
-        })
-    end
+    tab:Section({ Title = "Bring Items", Icon = "box" })
 
-    tab:Section({ Title = "Junk" })
-    singleSelectDropdown({ title = "Select Junk Item", values = junkItems, setter = function(v) selJunk = v end })
-    tab:Button({ Title = "Bring", Callback = function() bringSelected(selJunk, AMOUNT_TO_BRING) end })
-
-    tab:Section({ Title = "Fuel" })
-    singleSelectDropdown({ title = "Select Fuel Item", values = fuelItems, setter = function(v) selFuel = v end })
-    tab:Button({ Title = "Bring", Callback = function() bringSelected(selFuel, AMOUNT_TO_BRING) end })
-
-    tab:Section({ Title = "Food" })
-    singleSelectDropdown({ title = "Select Food Item", values = foodItems, setter = function(v) selFood = v end })
-    tab:Button({ Title = "Bring", Callback = function() bringSelected(selFood, AMOUNT_TO_BRING) end })
-
-    tab:Section({ Title = "Medical" })
-    singleSelectDropdown({ title = "Select Medical Item", values = medicalItems, setter = function(v) selMedical = v end })
-    tab:Button({ Title = "Bring", Callback = function() bringSelected(selMedical, AMOUNT_TO_BRING) end })
-
-    tab:Section({ Title = "Weapons and Armor" })
-    singleSelectDropdown({ title = "Select Weapon/Armor", values = weaponsArmor, setter = function(v) selWA = v end })
-    tab:Button({ Title = "Bring", Callback = function() bringSelected(selWA, AMOUNT_TO_BRING) end })
-
-    tab:Section({ Title = "Ammo and Misc." })
-    singleSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(v) selMisc = v end })
-    tab:Button({ Title = "Bring", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
-
-    tab:Section({ Title = "Pelts" })
-    singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
-    tab:Button({ Title = "Bring", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
+    tab:Button({
+        Title = "Bring Junk",
+        Callback = function() bringItems(junkItems) end
+    })
+    tab:Button({
+        Title = "Bring Food (fix)",
+        Callback = function() bringItems(foodItems) end
+    })
 end
