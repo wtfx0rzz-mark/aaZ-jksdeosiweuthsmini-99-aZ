@@ -6,6 +6,7 @@ return function(C, R, UI)
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
     local PPS     = game:GetService("ProximityPromptService")
+    local CS      = game:GetService("CollectionService")
 
     local lp = Players.LocalPlayer
     local Tabs = (UI and UI.Tabs) or {}
@@ -15,6 +16,7 @@ return function(C, R, UI)
         return
     end
 
+    -- ========= util =========
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -67,8 +69,8 @@ return function(C, R, UI)
         local total, off = 0, 0
         for _,d in ipairs(ch:GetDescendants()) do
             if d:IsA("BasePart") then
-                total = total + 1
-                if d.CanCollide == false then off = off + 1 end
+                total += 1
+                if d.CanCollide == false then off += 1 end
             end
         end
         return (total > 0) and ((off / total) >= 0.9) or false
@@ -76,6 +78,7 @@ return function(C, R, UI)
 
     local PHASE_DIST = 10
 
+    -- ========= edge buttons UI =========
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -124,6 +127,7 @@ return function(C, R, UI)
         teleportTo(CFrame.new(dest, dest + root.CFrame.LookVector))
     end)
 
+    -- mark + teleport
     local markedCF = nil
     local HOLD_THRESHOLD = 0.5
     local downAt, suppressClick = 0, false
@@ -132,7 +136,6 @@ return function(C, R, UI)
         downAt = os.clock()
         suppressClick = false
     end)
-
     tpBtn.MouseButton1Up:Connect(function()
         local held = os.clock() - (downAt or 0)
         if held >= HOLD_THRESHOLD then
@@ -148,24 +151,22 @@ return function(C, R, UI)
             end
         end
     end)
-
     tpBtn.MouseButton1Click:Connect(function()
         if suppressClick then suppressClick = false return end
         if not markedCF then return end
         teleportTo(markedCF)
     end)
 
+    -- plant sapling ahead
     local AHEAD_DIST  = 3
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
-
     local function groundAhead(root)
         local base   = root.Position + root.CFrame.LookVector * AHEAD_DIST
         local start  = base + Vector3.new(0, RAY_HEIGHT, 0)
         local result = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
         return result and result.Position or base
     end
-
     local function findClosestSapling()
         local items = WS:FindFirstChild("Items")
         local root  = hrp()
@@ -182,25 +183,21 @@ return function(C, R, UI)
         end
         return closest
     end
-
     local function plantNearestSaplingInFront()
         local sapling = findClosestSapling()
         if not sapling then return end
-
         local startDrag = getRemote("RequestStartDraggingItem")
         local stopDrag  = getRemote("StopDraggingItem")
         local plantRF   = getRemote("RequestPlantItem")
         if not plantRF then return end
 
-        local root = hrp()
-        if not root then return end
+        local root = hrp(); if not root then return end
         local plantPos = groundAhead(root)
 
         if startDrag then
             pcall(function() startDrag:FireServer(sapling) end)
             pcall(function() startDrag:FireServer(Instance.new("Model")) end)
         end
-
         task.wait(0.05)
 
         local ok = pcall(function()
@@ -216,41 +213,70 @@ return function(C, R, UI)
             pcall(function() plantRF:FireServer(sapling, Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
             pcall(function() plantRF:FireServer(Instance.new("Model"), Vector3.new(plantPos.X, plantPos.Y, plantPos.Z)) end)
         end
-
         task.wait(0.05)
-
         if stopDrag then
             pcall(function() stopDrag:FireServer(sapling) end)
             pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
         end
     end
+    plantBtn.MouseButton1Click:Connect(function() plantNearestSaplingInFront() end)
 
-    plantBtn.MouseButton1Click:Connect(function()
-        plantNearestSaplingInFront()
-    end)
-
+    -- ========= Lost Child (event-driven; no scanning loop) =========
     local MAX_TO_SAVE   = 4
-    local SCAN_INTERVAL = 0.5
     local savedCount    = 0
-    local knownLost     = {}
     local autoLostEnabled = false
+    local lostEligible  = setmetatable({}, {__mode="k"})  -- set of models with Lost==true
 
     local function isLostChildModel(m)
         return m and m:IsA("Model") and m.Name:match("^Lost Child")
     end
-    local function isEligibleLost(m)
-        return isLostChildModel(m) and (m:GetAttribute("Lost") == true)
+
+    local function refreshLostBtn()
+        local anyEligible = next(lostEligible) ~= nil
+        lostBtn.Visible = autoLostEnabled and (savedCount < MAX_TO_SAVE) and anyEligible
     end
+
+    local function onLostAttrChange(m)
+        local v = m:GetAttribute("Lost") == true
+        local was = lostEligible[m] == true
+        if v then
+            lostEligible[m] = true
+        else
+            if was and savedCount < MAX_TO_SAVE then
+                savedCount += 1
+            end
+            lostEligible[m] = nil
+        end
+        refreshLostBtn()
+    end
+
+    local function trackLostModel(m)
+        if not isLostChildModel(m) then return end
+        -- initial
+        onLostAttrChange(m)
+        -- attr changes
+        m:GetAttributeChangedSignal("Lost"):Connect(function() onLostAttrChange(m) end)
+        -- cleanup
+        m.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                lostEligible[m] = nil
+                refreshLostBtn()
+            end
+        end)
+    end
+
+    -- seed and live tracking
+    for _,d in ipairs(WS:GetDescendants()) do trackLostModel(d) end
+    WS.DescendantAdded:Connect(trackLostModel)
+
     local function findNearestEligibleLost()
         local root = hrp(); if not root then return nil end
         local best, bestD = nil, math.huge
-        for _,d in ipairs(WS:GetDescendants()) do
-            if isEligibleLost(d) then
-                local mp = mainPart(d)
-                if mp then
-                    local dist = (mp.Position - root.Position).Magnitude
-                    if dist < bestD then bestD, best = dist, d end
-                end
+        for m,_ in pairs(lostEligible) do
+            local mp = mainPart(m)
+            if mp then
+                local dist = (mp.Position - root.Position).Magnitude
+                if dist < bestD then bestD, best = dist, m end
             end
         end
         return best
@@ -268,110 +294,51 @@ return function(C, R, UI)
             snap = snapshotCollide()
             setCollideAll(false)
         end
-
         local mp = mainPart(target)
         if mp then
             teleportTo(CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position))
         end
-
         if not hadNoclip then
             setCollideAll(true, snap)
         end
     end
+    lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
 
-    lostBtn.MouseButton1Click:Connect(function()
-        teleportToNearestLost()
-    end)
-
-    task.spawn(function()
-        while true do
-            for _,d in ipairs(WS:GetDescendants()) do
-                if isLostChildModel(d) then
-                    local cur = d:GetAttribute("Lost") == true
-                    local prev = knownLost[d]
-                    if prev == nil then
-                        knownLost[d] = cur
-                    elseif prev == true and cur == false then
-                        if savedCount < MAX_TO_SAVE then
-                            savedCount = savedCount + 1
-                        end
-                        knownLost[d] = cur
-                    else
-                        knownLost[d] = cur
-                    end
-                end
-            end
-
-            local anyEligible = false
-            if savedCount < MAX_TO_SAVE and autoLostEnabled then
-                anyEligible = (findNearestEligibleLost() ~= nil)
-            end
-            lostBtn.Visible = anyEligible
-
-            if savedCount >= MAX_TO_SAVE then
-                lostBtn.Visible = false
-            end
-
-            task.wait(SCAN_INTERVAL)
-        end
-    end)
-
+    -- ========= UI tab =========
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
 
     tab:Toggle({
         Title = "Show Phase 10 button",
         Value = false,
-        Callback = function(state)
-            phaseBtn.Visible = state
-        end
+        Callback = function(state) phaseBtn.Visible = state end
     })
-
     tab:Toggle({
         Title = "Show Teleport button",
         Value = false,
-        Callback = function(state)
-            tpBtn.Visible = state
-        end
+        Callback = function(state) tpBtn.Visible = state end
     })
-
     tab:Toggle({
         Title = "Plant Saplings",
         Value = false,
-        Callback = function(state)
-            plantBtn.Visible = state
-        end
+        Callback = function(state) plantBtn.Visible = state end
     })
-
     tab:Toggle({
         Title = "Auto Teleport to Lost Child",
         Value = false,
         Callback = function(state)
             autoLostEnabled = state
-            if not state then
-                lostBtn.Visible = false
-            end
+            refreshLostBtn()
         end
     })
 
     ----------------------------------------------------------------
-    -- Instant Interact (event-driven, race-safe)
+    -- Instant Interact (event-driven, race-safe, cooldown after trigger)
     ----------------------------------------------------------------
     local promptDurations = setmetatable({}, { __mode = "k" })
     local shownConn, trigConn, hiddenConn
-    local INSTANT_HOLD = 0.05 -- near-instant without 0s race
-
-    local function onPromptShown(prompt)
-        if not prompt or not prompt:IsA("ProximityPrompt") then return end
-        if promptDurations[prompt] == nil then
-            promptDurations[prompt] = prompt.HoldDuration
-        end
-        -- defer to ensure parent/adornee are fully set before modification
-        task.defer(function()
-            if prompt and prompt.Parent then
-                pcall(function() prompt.HoldDuration = INSTANT_HOLD end)
-            end
-        end)
-    end
+    local INSTANT_HOLD     = 0.05   -- near-instant without 0s race
+    local TRIGGER_COOLDOWN = 0.25   -- prevent rapid re-triggers
+    local promptCooldownAt = setmetatable({}, { __mode = "k" })
 
     local function restorePrompt(prompt)
         local orig = promptDurations[prompt]
@@ -381,11 +348,30 @@ return function(C, R, UI)
         promptDurations[prompt] = nil
     end
 
+    local function onPromptShown(prompt)
+        if not prompt or not prompt:IsA("ProximityPrompt") then return end
+        if promptDurations[prompt] == nil then
+            promptDurations[prompt] = prompt.HoldDuration
+        end
+        task.defer(function()
+            if prompt and prompt.Parent then
+                pcall(function() prompt.HoldDuration = INSTANT_HOLD end)
+            end
+        end)
+    end
+
     local function enableInstantInteract()
         if shownConn then return end
         shownConn  = PPS.PromptShown:Connect(onPromptShown)
         trigConn   = PPS.PromptTriggered:Connect(function(prompt, player)
-            if player == lp then restorePrompt(prompt) end
+            if player ~= lp then return end
+            -- cool down the specific prompt to avoid bursty reopens
+            promptCooldownAt[prompt] = os.clock()
+            pcall(function() prompt.Enabled = false end)
+            task.delay(TRIGGER_COOLDOWN, function()
+                if prompt then pcall(function() prompt.Enabled = true end) end
+            end)
+            restorePrompt(prompt)
         end)
         hiddenConn = PPS.PromptHidden:Connect(function(prompt)
             restorePrompt(prompt)
@@ -402,16 +388,11 @@ return function(C, R, UI)
     end
 
     enableInstantInteract()
-
     tab:Toggle({
         Title = "Instant Interact",
         Value = true,
         Callback = function(state)
-            if state then
-                enableInstantInteract()
-            else
-                disableInstantInteract()
-            end
+            if state then enableInstantInteract() else disableInstantInteract() end
         end
     })
 
