@@ -34,11 +34,10 @@ return function(C, R, UI)
     local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
     for _,n in ipairs(junkItems) do junkSet[n] = true end
-    cookSet["Morsel"] = true
-    cookSet["Steak"]  = true
-    cookSet["Ribs"]   = true
-    scrapAlso["Log"]   = true
-    scrapAlso["Chair"] = true
+    cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
+    scrapAlso["Log"] = true; scrapAlso["Chair"] = true
+
+    local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -90,10 +89,11 @@ return function(C, R, UI)
         return nil
     end
 
-    local RequestStartDraggingItem, RequestBurnItem, RequestScrapItem, StopDraggingItem
+    local RequestStartDraggingItem, RequestBurnItem, RequestCookItem, RequestScrapItem, StopDraggingItem
     local function resolveRemotes()
         RequestStartDraggingItem = RequestStartDraggingItem or getRemote("RequestStartDraggingItem","StartDraggingItem")
         RequestBurnItem          = RequestBurnItem          or getRemote("RequestBurnItem","BurnItem","RequestFireAdd")
+        RequestCookItem          = RequestCookItem          or getRemote("RequestCookItem","CookItem")
         RequestScrapItem         = RequestScrapItem         or getRemote("RequestScrapItem","ScrapItem","RequestWorkbenchScrap")
         StopDraggingItem         = StopDraggingItem         or getRemote("StopDraggingItem","RequestStopDraggingItem")
     end
@@ -252,13 +252,12 @@ return function(C, R, UI)
             pcall(function() RequestStartDraggingItem:FireServer(model) end)
         end
     end
-    local function stopDrag(model)
+    local function stopDrag()
         resolveRemotes()
         if StopDraggingItem then
-            pcall(function() StopDraggingItem:FireServer(model or Instance.new("Model")) end)
+            pcall(function() StopDraggingItem:FireServer(Instance.new("Model")) end)
         end
     end
-
     local function moveModel(model, cf)
         local snap = setCollide(model, false)
         zeroAssembly(model)
@@ -272,7 +271,6 @@ return function(C, R, UI)
             setCollide(model, true, snap)
         end)
     end
-
     local function fireHandoffCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         local cf = p and p.CFrame or fire:GetPivot()
@@ -282,18 +280,29 @@ return function(C, R, UI)
     local function burnFlow(model, campfire)
         resolveRemotes()
         startDrag(model)
-        local handoff = fireHandoffCF(campfire)
-        moveModel(model, handoff)
+        moveModel(model, fireHandoffCF(campfire))
         local ok = false
         if RequestBurnItem then
             ok = pcall(function()
                 RequestBurnItem:FireServer(campfire, Instance.new("Model"))
             end)
         end
-        if not ok then
-            pivotOverTarget(model, campfire)
+        if not ok then pivotOverTarget(model, campfire) end
+        stopDrag()
+    end
+
+    local function cookFlow(model, campfire)
+        resolveRemotes()
+        startDrag(model)
+        moveModel(model, fireHandoffCF(campfire))
+        local ok = false
+        if RequestCookItem then
+            ok = pcall(function()
+                RequestCookItem:FireServer(campfire, Instance.new("Model"))
+            end)
         end
-        stopDrag(model)
+        if not ok then pivotOverTarget(model, campfire) end
+        stopDrag()
     end
 
     local function scrapFlow(model, scrapper)
@@ -305,10 +314,8 @@ return function(C, R, UI)
                 RequestScrapItem:FireServer(scrapper, Instance.new("Model"))
             end)
         end
-        if not ok then
-            pivotOverTarget(model, scrapper)
-        end
-        stopDrag(model)
+        if not ok then pivotOverTarget(model, scrapper) end
+        stopDrag()
     end
 
     local function dropNearPlayer(model)
@@ -350,23 +357,19 @@ return function(C, R, UI)
         return part
     end
 
-    local function modelsNear(pos, radius, nameSet, maxCount, seen)
+    local function modelsNear(pos, radius, nameSet, seen)
         local out = {}
-        local c = 0
         for _,d in ipairs(WS:GetDescendants()) do
             if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] then
                 local mp = mainPart(d)
                 if mp and (mp.Position - pos).Magnitude <= radius then
                     out[#out+1] = d
                     seen[d] = true
-                    c = c + 1
-                    if maxCount and c >= maxCount then break end
                 end
             end
         end
         return out
     end
-
     local function mergedSet(a, b)
         local t = {}
         for k,v in pairs(a) do if v then t[k] = true end end
@@ -378,19 +381,20 @@ return function(C, R, UI)
         local camp = CAMPFIRE_PATH
         if not camp then return end
         local root = hrp(); if not root then return end
-        local orb2 = makeOrb(root.CFrame + Vector3.new(0,0,0), "orb2")
+        local orb2 = makeOrb(root.CFrame, "orb2")
         local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0)
         local orb1 = makeOrb(campCF, "orb1")
-        local burned, seen = 0, {}
+        local seen = {}
         local targets = mergedSet(fuelSet, cookSet)
-        while burned < AMOUNT_TO_BRING do
-            local need = AMOUNT_TO_BRING - burned
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, need, seen)
+        while true do
+            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
-                burnFlow(m, camp)
-                burned = burned + 1
-                if burned >= AMOUNT_TO_BRING then break end
+                if cookSet[m.Name] then
+                    cookFlow(m, camp)
+                else
+                    burnFlow(m, camp)
+                end
                 task.wait(PER_ITEM_DELAY)
             end
             task.wait(0.05)
@@ -402,19 +406,16 @@ return function(C, R, UI)
         local scr = SCRAPPER_PATH
         if not scr then return end
         local root = hrp(); if not root then return end
-        local orb2 = makeOrb(root.CFrame + Vector3.new(0,0,0), "orb2")
+        local orb2 = makeOrb(root.CFrame, "orb2")
         local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0)
         local orb1 = makeOrb(scrCF, "orb1")
-        local scrapped, seen = 0, {}
+        local seen = {}
         local targets = mergedSet(junkSet, scrapAlso)
-        while scrapped < AMOUNT_TO_BRING do
-            local need = AMOUNT_TO_BRING - scrapped
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, need, seen)
+        while true do
+            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
                 scrapFlow(m, scr)
-                scrapped = scrapped + 1
-                if scrapped >= AMOUNT_TO_BRING then break end
                 task.wait(PER_ITEM_DELAY)
             end
             task.wait(0.05)
@@ -438,12 +439,15 @@ return function(C, R, UI)
             list = collectByNameLoose(name, want)
         end
         if #list == 0 then return end
-        local doBurn = fuelSet[name] or cookSet[name]
+        local doCook = cookSet[name]
+        local doBurn = fuelSet[name]
         local doScrap = junkSet[name] or scrapAlso[name]
         for i,entry in ipairs(list) do
             if i > want then break end
             local model = entry.model
-            if doBurn then
+            if doCook then
+                cookFlow(model, CAMPFIRE_PATH)
+            elseif doBurn then
                 burnFlow(model, CAMPFIRE_PATH)
             elseif doScrap then
                 scrapFlow(model, SCRAPPER_PATH)
@@ -467,7 +471,7 @@ return function(C, R, UI)
     end
 
     tab:Section({ Title = "Actions" })
-    tab:Button({ Title = "Burn Nearby Fuel/Food", Callback = burnNearby })
+    tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
     tab:Section({ Title = "Junk → Scrapper" })
