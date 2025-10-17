@@ -1,3 +1,6 @@
+--=====================================================
+-- Bring Module • Drop near player (no terrain raycast)
+--=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -8,9 +11,24 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING = 100
-    local DROP_FORWARD = 5
-    local DROP_UP      = 5
+    -- ===================== TUNING =====================
+    -- How many items to fetch per click
+    local AMOUNT_TO_BRING      = 100
+
+    -- Drop placement relative to the player:
+    -- vertical lift above the player's Head position
+    local DROP_ABOVE_HEAD_STUDS = 5
+    -- horizontal offset in front of the player (along LookVector)
+    local DROP_AHEAD_STUDS      = 3
+
+    -- Spread the drops so they do not pile on one point:
+    -- distance between spiral rings on the XZ plane around the forward point
+    local SPIRAL_SPACING        = 2.75
+    -- keep collisions off briefly so the item clears the avatar before settling
+    local COLLIDE_OFF_SEC       = 0.30
+    -- small pacing between teleports to avoid bursts
+    local PER_ITEM_DELAY        = 0.10
+    -- =================================================
 
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
@@ -23,32 +41,32 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
+    -- ===================== helpers =====================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
-
+    local function headPart()
+        local ch = lp.Character
+        return ch and ch:FindFirstChild("Head")
+    end
     local function auraRadius()
         return math.clamp(tonumber(C.State and C.State.AuraRadius) or 150, 0, 500)
     end
-
     local function withinRadius(pos)
         local root = hrp()
         if not root then return true end
         return (pos - root.Position).Magnitude <= auraRadius()
     end
-
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return false end
         local n = m.Name:lower()
         return n == "pelt trader" or n:find("trader") or n:find("shopkeeper")
     end
-
     local function hasHumanoid(model)
         if not (model and model:IsA("Model")) then return false end
         return model:FindFirstChildOfClass("Humanoid") ~= nil
     end
-
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -58,31 +76,43 @@ return function(C, R, UI)
         end
         return nil
     end
-
     local function getAllParts(target)
         local t = {}
         if target:IsA("BasePart") then
             t[1] = target
         elseif target:IsA("Model") then
             for _,d in ipairs(target:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    t[#t+1] = d
-                end
+                if d:IsA("BasePart") then t[#t+1] = d end
             end
         end
         return t
     end
 
-    local function computeDropCF()
-        local root = hrp()
-        if not root then return nil, nil end
-        local forward = root.CFrame.LookVector
-        local ahead   = root.Position + forward * DROP_FORWARD
-        local start   = ahead + Vector3.new(0, 500, 0)
-        local rc      = WS:Raycast(start, Vector3.new(0, -2000, 0))
-        local basePos = rc and rc.Position or ahead
-        local dropPos = basePos + Vector3.new(0, DROP_UP, 0)
-        return CFrame.lookAt(dropPos, dropPos + forward), forward
+    -- golden angle spiral in local player frame (XZ plane)
+    local function spiralLocalOffset(i, spacing)
+        local theta = i * 2.399963229728653 -- golden angle in rad
+        local r = spacing * math.sqrt(i)
+        local dx = math.cos(theta) * r
+        local dz = math.sin(theta) * r
+        return dx, dz
+    end
+
+    -- Build the drop CFrame relative to Head + LookVector (no terrain raycast)
+    local function computeDropCF(index)
+        local root = hrp(); if not root then return nil end
+        local head = headPart()
+        local basePos = head and head.Position or (root.Position + Vector3.new(0, 4, 0))
+
+        local look = root.CFrame.LookVector
+        local right = root.CFrame.RightVector
+
+        local center = basePos + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0) + look * DROP_AHEAD_STUDS
+
+        local dx, dz = spiralLocalOffset(index or 1, SPIRAL_SPACING)
+        local offset = right * dx + look * dz
+
+        local dropPos = center + offset
+        return CFrame.lookAt(dropPos, dropPos + look)
     end
 
     local function getRemote(n)
@@ -90,31 +120,42 @@ return function(C, R, UI)
         return f and f:FindFirstChild(n) or nil
     end
 
-    local function nudgeAsync(entry, forward)
-        task.defer(function()
-            if not (entry.model and entry.model.Parent and entry.part and entry.part.Parent) then return end
-            local v = forward * 6 + Vector3.new(0, -30, 0)
-            for _,p in ipairs(getAllParts(entry.model)) do
-                p.AssemblyLinearVelocity = v
+    local function zeroAssembly(model)
+        for _,p in ipairs(getAllParts(model)) do
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+        end
+    end
+    local function setCollide(model, on, snapshot)
+        local parts = getAllParts(model)
+        if on and snapshot then
+            for part,can in pairs(snapshot) do
+                if part and part.Parent then part.CanCollide = can end
             end
-        end)
+            return
+        end
+        local snap = {}
+        for _,p in ipairs(parts) do
+            snap[p] = p.CanCollide
+            p.CanCollide = false
+        end
+        return snap
     end
 
-    local function teleportOne(entry)
+    local function teleportOne(entry, index)
         local root = hrp()
         if not (root and entry and entry.model and entry.part) then return false end
-        if not entry.model.Parent or entry.part.Anchored then return false end
-        if isExcludedModel(entry.model) then return false end
+        if not entry.model.Parent or entry.part.Anchored or isExcludedModel(entry.model) then return false end
 
-        local dropCF, forward = computeDropCF()
+        local dropCF = computeDropCF(index or 1)
         if not dropCF then return false end
 
         local startRE = getRemote("RequestStartDraggingItem")
         local stopRE  = getRemote("StopDraggingItem")
-        if startRE then pcall(function() startRE:FireServer(entry.model) end) end
-        task.wait(0.03)
+        pcall(function() if startRE then startRE:FireServer(entry.model) end end)
 
-        pcall(function() entry.part:SetNetworkOwner(lp) end)
+        local snap = setCollide(entry.model, false) -- avoid hitting player while dropping
+        zeroAssembly(entry.model)
 
         if entry.model:IsA("Model") then
             entry.model:PivotTo(dropCF)
@@ -122,10 +163,14 @@ return function(C, R, UI)
             entry.part.CFrame = dropCF
         end
 
-        nudgeAsync(entry, forward)
+        -- encourage a clean settle
+        for _,p in ipairs(getAllParts(entry.model)) do
+            p.AssemblyLinearVelocity = Vector3.new(0, -8, 0)
+        end
 
-        task.delay(0.08, function()
-            if stopRE then pcall(function() stopRE:FireServer(entry.model) end) end
+        task.delay(COLLIDE_OFF_SEC, function()
+            setCollide(entry.model, true, snap)
+            pcall(function() if stopRE then stopRE:FireServer(entry.model) end end)
         end)
 
         return true
@@ -148,7 +193,7 @@ return function(C, R, UI)
                 if model and model:IsA("Model") and not isExcludedModel(model) then
                     local mp = mainPart(model)
                     if mp and withinRadius(mp.Position) then
-                        n = n + 1
+                        n += 1
                         found[#found+1] = {model=model, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -166,7 +211,7 @@ return function(C, R, UI)
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
                     local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
                     if mp and withinRadius(mp.Position) then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -183,7 +228,7 @@ return function(C, R, UI)
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
                     if mp and withinRadius(mp.Position) then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -201,7 +246,7 @@ return function(C, R, UI)
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
                 if mp and withinRadius(mp.Position) then
-                    n = n + 1
+                    n += 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and n >= limit then break end
                 end
@@ -225,7 +270,7 @@ return function(C, R, UI)
                 if ok then
                     local mp = mainPart(m)
                     if mp and withinRadius(mp.Position) then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -238,7 +283,7 @@ return function(C, R, UI)
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
-        local list = {}
+        local list
 
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
@@ -251,15 +296,12 @@ return function(C, R, UI)
         else
             list = collectByNameLoose(name, want)
         end
-
         if #list == 0 then return end
-        local brought = 0
-        for _,entry in ipairs(list) do
-            if brought >= want then break end
-            if teleportOne(entry) then
-                brought = brought + 1
-                task.wait(0.12)
-            end
+
+        for i,entry in ipairs(list) do
+            if i > want then break end
+            teleportOne(entry, i)
+            task.wait(PER_ITEM_DELAY)
         end
     end
 
@@ -275,6 +317,7 @@ return function(C, R, UI)
         })
     end
 
+    -- ===================== UI =====================
     tab:Section({ Title = "Junk" })
     singleSelectDropdown({ title = "Select Junk Item", values = junkItems, setter = function(v) selJunk = v end })
     tab:Button({ Title = "Bring", Callback = function() bringSelected(selJunk, AMOUNT_TO_BRING) end })
