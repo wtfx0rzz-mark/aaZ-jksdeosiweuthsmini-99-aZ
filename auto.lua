@@ -6,7 +6,6 @@ return function(C, R, UI)
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
     local PPS     = game:GetService("ProximityPromptService")
-    local CS      = game:GetService("CollectionService")
 
     local lp = Players.LocalPlayer
     local Tabs = (UI and UI.Tabs) or {}
@@ -252,11 +251,8 @@ return function(C, R, UI)
 
     local function trackLostModel(m)
         if not isLostChildModel(m) then return end
-        -- initial
         onLostAttrChange(m)
-        -- attr changes
         m:GetAttributeChangedSignal("Lost"):Connect(function() onLostAttrChange(m) end)
-        -- cleanup
         m.AncestryChanged:Connect(function(_, parent)
             if not parent then
                 lostEligible[m] = nil
@@ -265,7 +261,6 @@ return function(C, R, UI)
         end)
     end
 
-    -- seed and live tracking
     for _,d in ipairs(WS:GetDescendants()) do trackLostModel(d) end
     WS.DescendantAdded:Connect(trackLostModel)
 
@@ -332,13 +327,40 @@ return function(C, R, UI)
     })
 
     ----------------------------------------------------------------
-    -- Instant Interact (event-driven, race-safe, cooldown after trigger)
+    -- Instant Interact (event-driven, race-safe, cooldown + exclusions)
     ----------------------------------------------------------------
-    local promptDurations = setmetatable({}, { __mode = "k" })
-    local shownConn, trigConn, hiddenConn
     local INSTANT_HOLD     = 0.05   -- near-instant without 0s race
     local TRIGGER_COOLDOWN = 0.25   -- prevent rapid re-triggers
-    local promptCooldownAt = setmetatable({}, { __mode = "k" })
+
+    -- skip prompts that belong to closets/doors to avoid game-side errors
+    local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
+    local EXCLUDE_ANCESTOR_SUBSTR = { "closetdoors", "closet", "door", "landmarks" }
+
+    local function strfindAny(s, list)
+        s = string.lower(s or "")
+        for _, w in ipairs(list) do
+            if string.find(s, w, 1, true) then return true end
+        end
+        return false
+    end
+
+    local function shouldSkipPrompt(p)
+        if not p or not p.Parent then return true end
+        if strfindAny(p.Name, EXCLUDE_NAME_SUBSTR) then return true end
+        pcall(function()
+            if strfindAny(p.ObjectText, EXCLUDE_NAME_SUBSTR) then error(true) end
+            if strfindAny(p.ActionText, EXCLUDE_NAME_SUBSTR) then error(true) end
+        end)
+        local a = p.Parent
+        while a and a ~= workspace do
+            if strfindAny(a.Name, EXCLUDE_ANCESTOR_SUBSTR) then return true end
+            a = a.Parent
+        end
+        return false
+    end
+
+    local promptDurations = setmetatable({}, { __mode = "k" })
+    local shownConn, trigConn, hiddenConn
 
     local function restorePrompt(prompt)
         local orig = promptDurations[prompt]
@@ -350,11 +372,12 @@ return function(C, R, UI)
 
     local function onPromptShown(prompt)
         if not prompt or not prompt:IsA("ProximityPrompt") then return end
+        if shouldSkipPrompt(prompt) then return end
         if promptDurations[prompt] == nil then
             promptDurations[prompt] = prompt.HoldDuration
         end
         task.defer(function()
-            if prompt and prompt.Parent then
+            if prompt and prompt.Parent and not shouldSkipPrompt(prompt) then
                 pcall(function() prompt.HoldDuration = INSTANT_HOLD end)
             end
         end)
@@ -364,16 +387,15 @@ return function(C, R, UI)
         if shownConn then return end
         shownConn  = PPS.PromptShown:Connect(onPromptShown)
         trigConn   = PPS.PromptTriggered:Connect(function(prompt, player)
-            if player ~= lp then return end
-            -- cool down the specific prompt to avoid bursty reopens
-            promptCooldownAt[prompt] = os.clock()
+            if player ~= lp or shouldSkipPrompt(prompt) then return end
             pcall(function() prompt.Enabled = false end)
             task.delay(TRIGGER_COOLDOWN, function()
-                if prompt then pcall(function() prompt.Enabled = true end) end
+                if prompt and prompt.Parent then pcall(function() prompt.Enabled = true end) end
             end)
             restorePrompt(prompt)
         end)
         hiddenConn = PPS.PromptHidden:Connect(function(prompt)
+            if shouldSkipPrompt(prompt) then return end
             restorePrompt(prompt)
         end)
     end
