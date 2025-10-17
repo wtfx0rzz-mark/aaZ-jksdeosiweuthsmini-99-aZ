@@ -66,9 +66,6 @@ return function(C, R, UI)
     local scanConn, hoverConn = nil, nil
     local gathered, list = {}, {}
 
-    -- Hold dropdown refs so we can reset them
-    local DD = { Junk=nil, Fuel=nil, Food=nil, Medical=nil, WA=nil, Misc=nil, Pelts=nil }
-
     ----------------------------------------------------------------------
     -- Helpers
     ----------------------------------------------------------------------
@@ -352,25 +349,7 @@ return function(C, R, UI)
     tab:Button({ Title = "Drop Items", Callback = function() placeDown() end })
     tab:Divider()
 
-    -- Clear Selections
-    local function clearSelectionsUI()
-        for _,set in pairs(Selected) do for k in pairs(set) do set[k] = nil end end
-        wantMossy, wantCultist, wantSapling = false, false, false
-        wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
-        stopGather()
-        clearAll()
-        local function reset(w)
-            if not w then return end
-            pcall(function() if w.Set then w:Set({}) end end)
-            pcall(function() if w.SetValue then w:SetValue({}) end end)
-            pcall(function() if w.SetValues then w:SetValues({}) end end)
-            pcall(function() if w.Clear then w:Clear() end end)
-        end
-        for _,w in pairs(DD) do reset(w) end
-    end
-
-    tab:Button({ Title = "Clear Selections", Callback = clearSelectionsUI })
-
+    tab:Section({ Title = "Selection", Icon = "check-square" })
     tab:Button({
         Title = "Gather Items",
         Callback = function()
@@ -383,7 +362,7 @@ return function(C, R, UI)
     tab:Divider()
 
     local function dropdownMulti(args)
-        local widget = tab:Dropdown({
+        return tab:Dropdown({
             Title = args.title,
             Values = args.values,
             Multi = true,
@@ -420,29 +399,28 @@ return function(C, R, UI)
                 end
             end
         })
-        return widget
     end
 
     tab:Section({ Title = "Junk" })
-    DD.Junk = dropdownMulti({ title="Select Junk Items", values=junkItems, set=Selected.Junk, kind="Junk" })
+    dropdownMulti({ title="Select Junk Items", values=junkItems, set=Selected.Junk, kind="Junk" })
 
     tab:Section({ Title = "Fuel" })
-    DD.Fuel = dropdownMulti({ title="Select Fuel Items", values=fuelItems, set=Selected.Fuel, kind="Fuel" })
+    dropdownMulti({ title="Select Fuel Items", values=fuelItems, set=Selected.Fuel, kind="Fuel" })
 
     tab:Section({ Title = "Food" })
-    DD.Food = dropdownMulti({ title="Select Food Items", values=foodItems, set=Selected.Food, kind="Food" })
+    dropdownMulti({ title="Select Food Items", values=foodItems, set=Selected.Food, kind="Food" })
 
     tab:Section({ Title = "Medical" })
-    DD.Medical = dropdownMulti({ title="Select Medical Items", values=medicalItems, set=Selected.Medical, kind="Medical" })
+    dropdownMulti({ title="Select Medical Items", values=medicalItems, set=Selected.Medical, kind="Medical" })
 
     tab:Section({ Title = "Weapons & Armor" })
-    DD.WA = dropdownMulti({ title="Select Weapon/Armor", values=weaponsArmor, set=Selected.WA, kind="WA" })
+    dropdownMulti({ title="Select Weapon/Armor", values=weaponsArmor, set=Selected.WA, kind="WA" })
 
     tab:Section({ Title = "Ammo & Misc." })
-    DD.Misc = dropdownMulti({ title="Select Ammo/Misc", values=ammoMisc, set=Selected.Misc, kind="Misc" })
+    dropdownMulti({ title="Select Ammo/Misc", values=ammoMisc, set=Selected.Misc, kind="Misc" })
 
     tab:Section({ Title = "Pelts" })
-    DD.Pelts = dropdownMulti({ title="Select Pelts", values=pelts, set=Selected.Pelts, kind="Pelts" })
+    dropdownMulti({ title="Select Pelts", values=pelts, set=Selected.Pelts, kind="Pelts" })
 
     ----------------------------------------------------------------------
     -- Edge "Place" button (shared screen GUI)
