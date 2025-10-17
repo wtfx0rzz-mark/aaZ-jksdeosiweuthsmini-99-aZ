@@ -329,8 +329,8 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- Instant Interact (event-driven, race-safe, cooldown + exclusions)
     ----------------------------------------------------------------
-    local INSTANT_HOLD     = 0.05   -- near-instant without 0s race
-    local TRIGGER_COOLDOWN = 0.25   -- prevent rapid re-triggers
+    local INSTANT_HOLD     = 0.2   -- near-instant without 0s race
+    local TRIGGER_COOLDOWN = 0.4   -- prevent rapid re-triggers
 
     -- skip prompts that belong to closets/doors to avoid game-side errors
     local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
