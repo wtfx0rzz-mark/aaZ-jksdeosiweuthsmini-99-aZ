@@ -1,11 +1,14 @@
 --=====================================================
 -- 1337 Nights | Auto Tab • Edge Buttons + Lost Child Toggle + Instant Interact
+--  • Hard-stick teleports to ensure server-side position commit
+--  • New edge button: Teleport to Campfire
 --=====================================================
 return function(C, R, UI)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
     local PPS     = game:GetService("ProximityPromptService")
+    local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
 
     local lp = Players.LocalPlayer
     local Tabs = (UI and UI.Tabs) or {}
@@ -34,12 +37,13 @@ return function(C, R, UI)
         root.AssemblyLinearVelocity  = Vector3.new(0,0,0)
         root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end
-    local function teleportTo(cf)
-        local root = hrp(); if not root then return end
-        zeroAssembly(root)
-        root.CFrame = cf
-        zeroAssembly(root)
-    end
+
+    -- hard-stick teleport
+    local STICK_DURATION    = 0.35
+    local STICK_EXTRA_FR    = 2
+    local STICK_CLEAR_VEL   = true
+    local TELEPORT_UP_NUDGE = 0.05
+
     local function snapshotCollide()
         local ch = lp.Character
         if not ch then return {} end
@@ -73,6 +77,86 @@ return function(C, R, UI)
             end
         end
         return (total > 0) and ((off / total) >= 0.9) or false
+    end
+
+    local function teleportSticky(cf)
+        local root = hrp(); if not root then return end
+        local ch   = lp.Character
+        local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
+
+        local hadNoclip = isNoclipNow()
+        local snap
+        if not hadNoclip then
+            snap = snapshotCollide()
+            setCollideAll(false)
+        end
+
+        if ch then pcall(function() ch:PivotTo(targetCF) end) end
+        pcall(function() root.CFrame = targetCF end)
+        if STICK_CLEAR_VEL then zeroAssembly(root) end
+
+        local t0 = os.clock()
+        while (os.clock() - t0) < STICK_DURATION do
+            if ch then pcall(function() ch:PivotTo(targetCF) end) end
+            pcall(function() root.CFrame = targetCF end)
+            if STICK_CLEAR_VEL then zeroAssembly(root) end
+            Run.Heartbeat:Wait()
+        end
+        for _=1,STICK_EXTRA_FR do
+            if ch then pcall(function() ch:PivotTo(targetCF) end) end
+            pcall(function() root.CFrame = targetCF end)
+            if STICK_CLEAR_VEL then zeroAssembly(root) end
+            Run.Heartbeat:Wait()
+        end
+
+        if not hadNoclip then
+            setCollideAll(true, snap)
+        end
+        if STICK_CLEAR_VEL then zeroAssembly(root) end
+    end
+
+    -- campfire resolver + safe TP CF
+    local function fireCenterPart(fire)
+        return fire:FindFirstChild("Center")
+            or fire:FindFirstChild("InnerTouchZone")
+            or mainPart(fire)
+            or fire.PrimaryPart
+    end
+    local function resolveCampfireModel()
+        local map = WS:FindFirstChild("Map")
+        local cg  = map and map:FindFirstChild("Campground")
+        local mf  = cg and cg:FindFirstChild("MainFire")
+        if mf then return mf end
+        for _,d in ipairs(WS:GetDescendants()) do
+            if d:IsA("Model") then
+                local n = (d.Name or ""):lower()
+                if n == "mainfire" or n == "campfire" or n == "camp fire" then
+                    return d
+                end
+            end
+        end
+        return nil
+    end
+    local function groundBelow(pos)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {lp.Character}
+        local rc = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
+        return rc and rc.Position or pos
+    end
+    local function campfireTeleportCF()
+        local fire = resolveCampfireModel(); if not fire then return nil end
+        local center = fireCenterPart(fire); if not center then return fire:GetPivot() end
+        local look   = center.CFrame.LookVector
+        local zone   = fire:FindFirstChild("InnerTouchZone")
+        local offset = 6
+        if zone and zone:IsA("BasePart") then
+            offset = math.max(zone.Size.X, zone.Size.Z) * 0.5 + 4
+        end
+        local targetPos = center.Position + look * offset + Vector3.new(0, 3, 0)
+        local g = groundBelow(targetPos)
+        local finalPos = Vector3.new(targetPos.X, g.Y + 2.5, targetPos.Z)
+        return CFrame.new(finalPos, center.Position)
     end
 
     local PHASE_DIST = 10
@@ -118,12 +202,13 @@ return function(C, R, UI)
     local tpBtn    = makeEdgeBtn("TpEdge",      2, "Teleport")
     local plantBtn = makeEdgeBtn("PlantEdge",   3, "Plant")
     local lostBtn  = makeEdgeBtn("LostEdge",    4, "Lost Child")
+    local campBtn  = makeEdgeBtn("CampEdge",    5, "Campfire")
 
     phaseBtn.MouseButton1Click:Connect(function()
         local root = hrp()
         if not root then return end
         local dest = root.Position + root.CFrame.LookVector * PHASE_DIST
-        teleportTo(CFrame.new(dest, dest + root.CFrame.LookVector))
+        teleportSticky(CFrame.new(dest, dest + root.CFrame.LookVector))
     end)
 
     -- mark + teleport
@@ -153,7 +238,12 @@ return function(C, R, UI)
     tpBtn.MouseButton1Click:Connect(function()
         if suppressClick then suppressClick = false return end
         if not markedCF then return end
-        teleportTo(markedCF)
+        teleportSticky(markedCF)
+    end)
+
+    campBtn.MouseButton1Click:Connect(function()
+        local cf = campfireTeleportCF()
+        if cf then teleportSticky(cf) end
     end)
 
     -- plant sapling ahead
@@ -224,7 +314,7 @@ return function(C, R, UI)
     local MAX_TO_SAVE   = 4
     local savedCount    = 0
     local autoLostEnabled = false
-    local lostEligible  = setmetatable({}, {__mode="k"})  -- set of models with Lost==true
+    local lostEligible  = setmetatable({}, {__mode="k"})
 
     local function isLostChildModel(m)
         return m and m:IsA("Model") and m.Name:match("^Lost Child")
@@ -281,20 +371,9 @@ return function(C, R, UI)
         if savedCount >= MAX_TO_SAVE then return end
         local target = findNearestEligibleLost()
         if not target then return end
-
-        local root = hrp(); if not root then return end
-        local hadNoclip = isNoclipNow()
-        local snap
-        if not hadNoclip then
-            snap = snapshotCollide()
-            setCollideAll(false)
-        end
         local mp = mainPart(target)
         if mp then
-            teleportTo(CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position))
-        end
-        if not hadNoclip then
-            setCollideAll(true, snap)
+            teleportSticky(CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position))
         end
     end
     lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
@@ -325,14 +404,15 @@ return function(C, R, UI)
             refreshLostBtn()
         end
     })
+    tab:Toggle({
+        Title = "Show Campfire button",
+        Value = false,
+        Callback = function(state) campBtn.Visible = state end
+    })
 
-    ----------------------------------------------------------------
-    -- Instant Interact (event-driven, race-safe, cooldown + exclusions)
-    ----------------------------------------------------------------
-    local INSTANT_HOLD     = 0.2   -- near-instant without 0s race
-    local TRIGGER_COOLDOWN = 0.4   -- prevent rapid re-triggers
-
-    -- skip prompts that belong to closets/doors to avoid game-side errors
+    -- Instant Interact
+    local INSTANT_HOLD     = 0.2
+    local TRIGGER_COOLDOWN = 0.4
     local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
     local EXCLUDE_ANCESTOR_SUBSTR = { "closetdoors", "closet", "door", "landmarks" }
 
@@ -343,7 +423,6 @@ return function(C, R, UI)
         end
         return false
     end
-
     local function shouldSkipPrompt(p)
         if not p or not p.Parent then return true end
         if strfindAny(p.Name, EXCLUDE_NAME_SUBSTR) then return true end
@@ -369,7 +448,6 @@ return function(C, R, UI)
         end
         promptDurations[prompt] = nil
     end
-
     local function onPromptShown(prompt)
         if not prompt or not prompt:IsA("ProximityPrompt") then return end
         if shouldSkipPrompt(prompt) then return end
@@ -382,7 +460,6 @@ return function(C, R, UI)
             end
         end)
     end
-
     local function enableInstantInteract()
         if shownConn then return end
         shownConn  = PPS.PromptShown:Connect(onPromptShown)
@@ -399,7 +476,6 @@ return function(C, R, UI)
             restorePrompt(prompt)
         end)
     end
-
     local function disableInstantInteract()
         if shownConn  then shownConn:Disconnect();  shownConn  = nil end
         if trigConn   then trigConn:Disconnect();   trigConn   = nil end
@@ -408,7 +484,6 @@ return function(C, R, UI)
             restorePrompt(p)
         end
     end
-
     enableInstantInteract()
     tab:Toggle({
         Title = "Instant Interact",
