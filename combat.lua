@@ -270,7 +270,7 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then task.wait(0.2) break end
                 local origin = hrp.Position
-                local radius = tonumber(C.State.AuraRadius) or 100
+                local radius = tonumber(C.State.AuraRadius) or 150
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
                 if #targets > 0 then
                     chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
@@ -373,7 +373,7 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
         Title = "Distance",
         Value = { Min = 0, Max = 500, Default = C.State.AuraRadius or 100 },
         Callback = function(v)
-            C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 500)
+            C.State.AuraRadius = math.clamp(tonumber(v) or 100, 0, 500)
         end
     })
 end
