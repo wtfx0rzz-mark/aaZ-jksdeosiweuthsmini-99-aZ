@@ -8,23 +8,20 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- tuning
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 0.12   -- slowed feed
-    local FEED_JITTER_ITEM      = 0.05
-    local FEED_JITTER_BATCH     = 0.15
+    local PER_ITEM_DELAY        = 1.0
+    local FEED_JITTER_ITEM      = 0
+    local FEED_JITTER_BATCH     = 0
     local COLLIDE_OFF_SEC       = 0.22
-    local DROP_ABOVE_HEAD_STUDS = 5
-    local FALLBACK_UP           = 5
+    local DROP_ABOVE_HEAD_STUDS = 18
+    local FALLBACK_UP           = 18
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 24
-    local ORB_OFFSET_Y          = 20     -- +5 higher
+    local ORB_OFFSET_Y          = 18
 
-    -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- data
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -36,7 +33,6 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    -- sets for top action buttons only
     local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
     for _,n in ipairs(junkItems) do junkSet[n] = true end
@@ -45,7 +41,6 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
-    -- helpers
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -127,7 +122,6 @@ return function(C, R, UI)
         return list
     end
 
-    -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
@@ -216,7 +210,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- placement
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -246,7 +239,6 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    -- campfire helpers kept for top buttons only
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -281,7 +273,6 @@ return function(C, R, UI)
         return best
     end
 
-    -- flows for top action buttons
     local function burnFlow(model, campfire)
         resolveRemotes()
         startDrag(model)
@@ -354,21 +345,21 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- top buttons: feed to machines
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
-        local orb2 = makeOrb(root.CFrame, "orb2")
-        local orb1 = makeOrb((mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
+        local orb2 = makeOrb(root.CFrame + Vector3.new(0, ORB_OFFSET_Y, 0), "orb2")
+        local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
+        local orb1 = makeOrb(campCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
         local seen, targets = {}, mergedSet(fuelSet, cookSet)
         while true do
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
                 if cookSet[m.Name] then cookFlow(m, camp) else burnFlow(m, camp) end
-                task.wait(PER_ITEM_DELAY + math.random() * FEED_JITTER_ITEM)
+                task.wait(PER_ITEM_DELAY)
             end
-            task.wait(0.05 + FEED_JITTER_BATCH)
+            task.wait(0)
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
@@ -376,22 +367,22 @@ return function(C, R, UI)
     local function scrapNearby()
         local scr = SCRAPPER_PATH; if not scr then return end
         local root = hrp(); if not root then return end
-        local orb2 = makeOrb(root.CFrame, "orb2")
-        local orb1 = makeOrb((mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
+        local orb2 = makeOrb(root.CFrame + Vector3.new(0, ORB_OFFSET_Y, 0), "orb2")
+        local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
+        local orb1 = makeOrb(scrCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
         local seen, targets = {}, mergedSet(junkSet, scrapAlso)
         while true do
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
                 scrapFlow(m, scr)
-                task.wait(PER_ITEM_DELAY + math.random() * FEED_JITTER_ITEM)
+                task.wait(PER_ITEM_DELAY)
             end
-            task.wait(0.05 + FEED_JITTER_BATCH)
+            task.wait(0)
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    -- per-dropdown button: ONLY drop near player. No routing.
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -415,7 +406,6 @@ return function(C, R, UI)
         end
     end
 
-    -- UI
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
