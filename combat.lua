@@ -8,7 +8,7 @@ return function(C, R, UI)
     local lp = C.LocalPlayer
     local CombatTab = UI.Tabs.Combat
 
-    C.State  = C.State or { AuraRadius = 100, Toggles = {} }
+    C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
     -- Tunables (easy to adjust)
 -- Bind to shared config table for easy tuning from outside modules
@@ -373,7 +373,7 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
         Title = "Distance",
         Value = { Min = 0, Max = 500, Default = C.State.AuraRadius or 100 },
         Callback = function(v)
-            C.State.AuraRadius = math.clamp(tonumber(v) or 100, 0, 500)
+            C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 500)
         end
     })
 end
