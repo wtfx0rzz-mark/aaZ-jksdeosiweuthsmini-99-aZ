@@ -41,6 +41,134 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
+    local Logger = { gui=nil, box=nil, minimized=false }
+    function Logger.init()
+        if self and self.__dummy then end
+        if Logger.gui and Logger.gui.Parent then return end
+        local pg = lp:WaitForChild("PlayerGui")
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "BringLogHUD"
+        sg.ResetOnSpawn = false
+        sg.IgnoreGuiInset = true
+        sg.Parent = pg
+
+        local win = Instance.new("Frame")
+        win.Name = "Window"
+        win.AnchorPoint = Vector2.new(1,0)
+        win.Position = UDim2.new(1, -10, 0, 10)
+        win.Size = UDim2.new(0, 440, 0, 240)
+        win.BackgroundColor3 = Color3.fromRGB(20,20,20)
+        win.BackgroundTransparency = 0.1
+        win.BorderSizePixel = 0
+        win.Parent = sg
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0,10)
+        corner.Parent = win
+
+        local title = Instance.new("TextLabel")
+        title.Name = "Title"
+        title.Size = UDim2.new(1, -100, 0, 28)
+        title.Position = UDim2.new(0, 10, 0, 0)
+        title.BackgroundTransparency = 1
+        title.Font = Enum.Font.Code
+        title.TextSize = 16
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.TextColor3 = Color3.fromRGB(230,230,230)
+        title.Text = "Bring Logger"
+        title.Parent = win
+
+        local btnMin = Instance.new("TextButton")
+        btnMin.Name = "Min"
+        btnMin.Size = UDim2.new(0, 60, 0, 24)
+        btnMin.Position = UDim2.new(1, -140, 0, 2)
+        btnMin.BackgroundColor3 = Color3.fromRGB(40,40,40)
+        btnMin.AutoButtonColor = true
+        btnMin.TextColor3 = Color3.fromRGB(230,230,230)
+        btnMin.Font = Enum.Font.Code
+        btnMin.TextSize = 14
+        btnMin.Text = "Minimize"
+        btnMin.Parent = win
+        Instance.new("UICorner", btnMin).CornerRadius = UDim.new(0,6)
+
+        local btnCopy = Instance.new("TextButton")
+        btnCopy.Name = "Copy"
+        btnCopy.Size = UDim2.new(0, 60, 0, 24)
+        btnCopy.Position = UDim2.new(1, -70, 0, 2)
+        btnCopy.BackgroundColor3 = Color3.fromRGB(40,40,40)
+        btnCopy.AutoButtonColor = true
+        btnCopy.TextColor3 = Color3.fromRGB(230,230,230)
+        btnCopy.Font = Enum.Font.Code
+        btnCopy.TextSize = 14
+        btnCopy.Text = "Copy"
+        btnCopy.Parent = win
+        Instance.new("UICorner", btnCopy).CornerRadius = UDim.new(0,6)
+
+        local body = Instance.new("TextBox")
+        body.Name = "Body"
+        body.MultiLine = true
+        body.ClearTextOnFocus = false
+        body.TextWrapped = false
+        body.TextEditable = true
+        body.RichText = false
+        body.TextXAlignment = Enum.TextXAlignment.Left
+        body.TextYAlignment = Enum.TextYAlignment.Top
+        body.Font = Enum.Font.Code
+        body.TextSize = 14
+        body.TextColor3 = Color3.fromRGB(220,220,220)
+        body.BackgroundColor3 = Color3.fromRGB(10,10,10)
+        body.BackgroundTransparency = 0.2
+        body.Position = UDim2.new(0, 10, 0, 34)
+        body.Size = UDim2.new(1, -20, 1, -44)
+        body.Text = ""
+        body.Parent = win
+        Instance.new("UICorner", body).CornerRadius = UDim.new(0,6)
+
+        btnMin.MouseButton1Click:Connect(function()
+            Logger.minimized = not Logger.minimized
+            if Logger.minimized then
+                body.Visible = false
+                win.Size = UDim2.new(0, 440, 0, 30)
+                btnMin.Text = "Expand"
+            else
+                body.Visible = true
+                win.Size = UDim2.new(0, 440, 0, 240)
+                btnMin.Text = "Minimize"
+            end
+        end)
+
+        btnCopy.MouseButton1Click:Connect(function()
+            local text = body.Text
+            local ok = pcall(function() setclipboard(text) end)
+            if ok then
+                Logger.log("copied to clipboard")
+            else
+                Logger.log("clipboard not available")
+                body:CaptureFocus()
+                body.CursorPosition = #body.Text + 1
+                body.SelectionStart = 1
+            end
+        end)
+
+        Logger.gui = sg
+        Logger.box = body
+    end
+    function Logger.log(msg)
+        Logger.init()
+        local ts = os.date("%X")
+        local line = "["..ts.."] "..tostring(msg)
+        if Logger.box.Text == "" then
+            Logger.box.Text = line
+        else
+            Logger.box.Text = Logger.box.Text .. "\n" .. line
+        end
+        Logger.box.CursorPosition = #Logger.box.Text + 1
+    end
+    function Logger.clear()
+        Logger.init()
+        Logger.box.Text = ""
+    end
+
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -229,10 +357,29 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    local function startDrag(model) resolveRemotes(); if StartDrag then pcall(function() StartDrag:FireServer(model) end) end end
-    local function stopDrag()     resolveRemotes(); if StopDrag then pcall(function() StopDrag:FireServer(Instance.new("Model")) end) end end
+    local function startDrag(model)
+        resolveRemotes()
+        Logger.log("startDrag: "..tostring(model and model.Name or "nil"))
+        if StartDrag then
+            local ok = pcall(function() StartDrag:FireServer(model) end)
+            Logger.log("startDrag sent: "..tostring(ok))
+        else
+            Logger.log("startDrag missing remote")
+        end
+    end
+    local function stopDrag()
+        resolveRemotes()
+        Logger.log("stopDrag")
+        if StopDrag then
+            local ok = pcall(function() StopDrag:FireServer(Instance.new("Model")) end)
+            Logger.log("stopDrag sent: "..tostring(ok))
+        else
+            Logger.log("stopDrag missing remote")
+        end
+    end
 
     local function moveModel(model, cf)
+        Logger.log("moveModel → target CF")
         local snap = setCollide(model, false)
         zeroAssembly(model)
         if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
@@ -246,6 +393,7 @@ return function(C, R, UI)
     local function fireHandoffCF(fire) return fireCenterCF(fire) + Vector3.new(0, 1.5, 0) end
 
     local function nudgeModelOut(model, fromPos)
+        Logger.log("nudge cooked away from fire")
         local mp = mainPart(model); if not mp then return end
         local dir = (mp.Position - fromPos)
         if dir.Magnitude < 0.1 then dir = (mp.CFrame.LookVector) end
@@ -275,42 +423,81 @@ return function(C, R, UI)
 
     local function burnFlow(model, campfire)
         resolveRemotes()
+        Logger.log("burnFlow for "..tostring(model and model.Name))
+        Logger.log("remotes BurnItem="..tostring(BurnItem~=nil).." StartDrag="..tostring(StartDrag~=nil))
         startDrag(model)
         moveModel(model, fireHandoffCF(campfire))
         local ok = false
-        if BurnItem then ok = pcall(function() BurnItem:FireServer(campfire, Instance.new("Model")) end) end
-        if not ok then pivotOverTarget(model, campfire) end
+        if BurnItem then
+            Logger.log("request BurnItem")
+            ok = pcall(function() BurnItem:FireServer(campfire, Instance.new("Model")) end)
+            Logger.log("request BurnItem sent: "..tostring(ok))
+        else
+            Logger.log("BurnItem remote missing")
+        end
+        if not ok then
+            Logger.log("fallback pivot over fire")
+            pivotOverTarget(model, campfire)
+        end
         stopDrag()
     end
 
     local function cookFlow(model, campfire)
         resolveRemotes()
         local cookedName = RAW_TO_COOKED[model.Name]
+        Logger.log("cookFlow for "..tostring(model and model.Name).." → "..tostring(cookedName))
+        Logger.log("remotes CookItem="..tostring(CookItem~=nil).." StartDrag="..tostring(StartDrag~=nil))
         startDrag(model)
         moveModel(model, fireHandoffCF(campfire))
         local ok = false
-        if CookItem then ok = pcall(function() CookItem:FireServer(campfire, Instance.new("Model")) end) end
-        if not ok then pivotOverTarget(model, campfire) end
+        if CookItem then
+            Logger.log("request CookItem")
+            ok = pcall(function() CookItem:FireServer(campfire, Instance.new("Model")) end)
+            Logger.log("request CookItem sent: "..tostring(ok))
+        else
+            Logger.log("CookItem remote missing")
+        end
+        if not ok then
+            Logger.log("fallback pivot over fire")
+            pivotOverTarget(model, campfire)
+        end
         stopDrag()
         task.delay(0.15, function()
             if cookedName then
                 local cooked = findCookedNearFire(campfire, cookedName)
-                if cooked then nudgeModelOut(cooked, fireCenterCF(campfire).Position) end
+                if cooked then
+                    Logger.log("cooked found, nudge out")
+                    nudgeModelOut(cooked, fireCenterCF(campfire).Position)
+                else
+                    Logger.log("no cooked result found near fire")
+                end
             end
         end)
     end
 
     local function scrapFlow(model, scrapper)
         resolveRemotes()
+        Logger.log("scrapFlow for "..tostring(model and model.Name))
+        Logger.log("remotes ScrapItem="..tostring(ScrapItem~=nil).." StartDrag="..tostring(StartDrag~=nil))
         startDrag(model)
         local ok = false
-        if ScrapItem then ok = pcall(function() ScrapItem:FireServer(scrapper, Instance.new("Model")) end) end
-        if not ok then pivotOverTarget(model, scrapper) end
+        if ScrapItem then
+            Logger.log("request ScrapItem")
+            ok = pcall(function() ScrapItem:FireServer(scrapper, Instance.new("Model")) end)
+            Logger.log("request ScrapItem sent: "..tostring(ok))
+        else
+            Logger.log("ScrapItem remote missing")
+        end
+        if not ok then
+            Logger.log("fallback pivot over scrapper")
+            pivotOverTarget(model, scrapper)
+        end
         stopDrag()
     end
 
     local function dropNearPlayer(model)
         local cf = computeForwardDropCF(); if not cf then return end
+        Logger.log("dropNearPlayer: "..tostring(model and model.Name))
         local snap = setCollide(model, false)
         zeroAssembly(model)
         if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
@@ -346,8 +533,9 @@ return function(C, R, UI)
     end
 
     local function burnNearby()
-        local camp = CAMPFIRE_PATH; if not camp then return end
-        local root = hrp(); if not root then return end
+        Logger.init(); Logger.log("BURN_NEARBY start")
+        local camp = CAMPFIRE_PATH; if not camp then Logger.log("campfire path missing"); return end
+        local root = hrp(); if not root then Logger.log("no HRP"); return end
         local orb2 = makeOrb(root.CFrame + Vector3.new(0, ORB_OFFSET_Y, 0), "orb2")
         local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
         local orb1 = makeOrb(campCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
@@ -356,17 +544,20 @@ return function(C, R, UI)
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
+                Logger.log("process "..m.Name)
                 if cookSet[m.Name] then cookFlow(m, camp) else burnFlow(m, camp) end
                 task.wait(PER_ITEM_DELAY)
             end
             task.wait(0)
         end
+        Logger.log("BURN_NEARBY done")
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
     local function scrapNearby()
-        local scr = SCRAPPER_PATH; if not scr then return end
-        local root = hrp(); if not root then return end
+        Logger.init(); Logger.log("SCRAP_NEARBY start")
+        local scr = SCRAPPER_PATH; if not scr then Logger.log("scrapper path missing"); return end
+        local root = hrp(); if not root then Logger.log("no HRP"); return end
         local orb2 = makeOrb(root.CFrame + Vector3.new(0, ORB_OFFSET_Y, 0), "orb2")
         local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
         local orb1 = makeOrb(scrCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
@@ -375,17 +566,20 @@ return function(C, R, UI)
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
+                Logger.log("process "..m.Name)
                 scrapFlow(m, scr)
                 task.wait(PER_ITEM_DELAY)
             end
             task.wait(0)
         end
+        Logger.log("SCRAP_NEARBY done")
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
     local function bringSelected(name, count)
+        Logger.init(); Logger.log("BRING_SELECTED "..tostring(name).." x"..tostring(count))
         local want = tonumber(count) or 0
-        if want <= 0 then return end
+        if want <= 0 then Logger.log("nothing requested"); return end
         local list
         if name == "Mossy Coin" then
             list = collectMossyCoins(want)
@@ -398,12 +592,13 @@ return function(C, R, UI)
         else
             list = collectByNameLoose(name, want)
         end
-        if #list == 0 then return end
+        if #list == 0 then Logger.log("no targets found"); return end
         for i,entry in ipairs(list) do
             if i > want then break end
             dropNearPlayer(entry.model)
             task.wait(PER_ITEM_DELAY)
         end
+        Logger.log("BRING_SELECTED done")
     end
 
     local function singleSelectDropdown(args)
