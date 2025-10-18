@@ -10,7 +10,7 @@ return function(C, R, UI)
 
     -- timing
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 0.5     -- steady global delay per item
+    local PER_ITEM_DELAY        = 0.25     -- steady global delay per item
     local COLLIDE_OFF_SEC       = 0.22
 
     -- placement
