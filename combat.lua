@@ -8,7 +8,7 @@ return function(C, R, UI)
     local lp = C.LocalPlayer
     local CombatTab = UI.Tabs.Combat
 
-    C.State  = C.State or { AuraRadius = 150, Toggles = {} }
+    C.State  = C.State or { AuraRadius = 100, Toggles = {} }
     C.Config = C.Config or {}
     -- Tunables (easy to adjust)
 -- Bind to shared config table for easy tuning from outside modules
@@ -270,7 +270,7 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then task.wait(0.2) break end
                 local origin = hrp.Position
-                local radius = tonumber(C.State.AuraRadius) or 150
+                local radius = tonumber(C.State.AuraRadius) or 100
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
                 if #targets > 0 then
                     chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
