@@ -10,11 +10,11 @@ return function(C, R, UI)
 
     -- timing
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 1.0     -- steady global delay per item
+    local PER_ITEM_DELAY        = 0.5     -- steady global delay per item
     local COLLIDE_OFF_SEC       = 0.22
 
     -- placement
-    local DROP_ABOVE_HEAD_STUDS = 5
+    local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 24
