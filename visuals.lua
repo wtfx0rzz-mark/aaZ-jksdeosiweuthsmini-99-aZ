@@ -14,7 +14,8 @@ return function(C, R, UI)
         return math.clamp(tonumber(C.State.AuraRadius) or 150, 0, 1_000_000)
     end
 
-    local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
+    -- include webby tree
+    local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
 
     local function bestPart(model)
         if not model or not model:IsA("Model") then return nil end
@@ -34,7 +35,7 @@ return function(C, R, UI)
         hl.Adornee = parent
         hl.FillTransparency = 1
         hl.OutlineTransparency = 0
-        hl.OutlineColor = Color3.fromRGB(255, 255, 0) -- yellow
+        hl.OutlineColor = Color3.fromRGB(255, 255, 0)
         hl.DepthMode = Enum.HighlightDepthMode.Occluded
         hl.Parent = parent
         return hl
@@ -49,20 +50,36 @@ return function(C, R, UI)
     local runningPlayers = false
     local PLAYER_HL_NAME = "__PlayerTrackerHL__"
 
+    local function trackPlayer(plr)
+        if plr == lp then return end
+        local function attach(ch)
+            if not ch then return end
+            local h = ensureHighlight(ch, PLAYER_HL_NAME)
+            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- maximize visibility
+            h.Enabled = true
+        end
+        if plr.Character then attach(plr.Character) end
+        plr.CharacterAdded:Connect(attach)
+    end
+
     local function startPlayerTracker()
         if runningPlayers then return end
         runningPlayers = true
+        for _, p in ipairs(Players:GetPlayers()) do trackPlayer(p) end
+        Players.PlayerAdded:Connect(trackPlayer)
         task.spawn(function()
             while runningPlayers do
                 for _, plr in ipairs(Players:GetPlayers()) do
                     if plr ~= lp then
                         local ch = plr.Character
                         if ch then
-                            ensureHighlight(ch, PLAYER_HL_NAME).Enabled = true
+                            local h = ensureHighlight(ch, PLAYER_HL_NAME)
+                            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                            h.Enabled = true
                         end
                     end
                 end
-                task.wait(0.5)
+                task.wait(0.25)
             end
             for _, plr in ipairs(Players:GetPlayers()) do
                 if plr ~= lp and plr.Character then
@@ -223,7 +240,7 @@ return function(C, R, UI)
     end
     local function stopCharHighlight() runningChars = false end
 
-    -- UI (no duplicate section titles)
+    -- UI
     VisualsTab:Toggle({
         Title = "Player Tracker",
         Value = C.State.Toggles.PlayerTracker or false,
