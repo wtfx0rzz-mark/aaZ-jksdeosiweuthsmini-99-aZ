@@ -11,11 +11,12 @@ return function(C, R, UI)
     -- timing
     local AMOUNT_TO_BRING       = 100
     local PER_ITEM_DELAY        = 1.0
-    local FEED_JITTER_ITEM      = 0
-    local FEED_JITTER_BATCH     = 0
     local COLLIDE_OFF_SEC       = 0.30
-    local PRE_BURN_WAIT         = 0.05
-    local ZONE_WAIT_MAX         = 0.20
+    local PRE_BURN_WAIT         = 0.20     -- wait after placing in zone before firing
+    local HOLD_AFTER_FIRE       = 0.60     -- keep dragging after FireServer
+    local ZONE_WAIT_MAX         = 0.40     -- time to wait until model overlaps zone
+    local RETRY_PAUSE           = 0.20
+    local MAX_RETRIES_PER_ITEM  = 2
 
     -- placement
     local DROP_ABOVE_HEAD_STUDS = 18
@@ -24,7 +25,7 @@ return function(C, R, UI)
     local NEARBY_RADIUS         = 24
     local ORB_OFFSET_Y          = 18
 
-    -- paths (best-effort default; we resolve dynamically each run)
+    -- default paths (still resolve dynamically each run)
     local CAMPFIRE_PATH = workspace:FindFirstChild("Map")
         and workspace.Map:FindFirstChild("Campground")
         and workspace.Map.Campground:FindFirstChild("MainFire")
@@ -32,7 +33,7 @@ return function(C, R, UI)
         and workspace.Map:FindFirstChild("Campground")
         and workspace.Map.Campground:FindFirstChild("Scrapper")
 
-    -- data
+    -- item sets
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -49,14 +50,13 @@ return function(C, R, UI)
     for _,n in ipairs(junkItems) do junkSet[n] = true end
     cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
     scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
-
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
     -- logger HUD
     local Logger = { gui=nil, box=nil, minimized=false }
     function Logger.rebuild()
         if Logger.gui and Logger.gui.Parent then Logger.gui:Destroy() end
-        local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
+        local pg = lp:FindChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local sg = Instance.new("ScreenGui")
         sg.Name = "BringLogHUD"
         sg.ResetOnSpawn = false
@@ -70,7 +70,7 @@ return function(C, R, UI)
         win.Name = "Window"
         win.AnchorPoint = Vector2.new(1,0)
         win.Position = UDim2.new(1, -10, 0, 10)
-        win.Size = UDim2.new(0, 520, 0, 300)
+        win.Size = UDim2.new(0, 540, 0, 320)
         win.BackgroundColor3 = Color3.fromRGB(20,20,20)
         win.BackgroundTransparency = 0.1
         win.BorderSizePixel = 0
@@ -79,8 +79,7 @@ return function(C, R, UI)
         Instance.new("UICorner", win).CornerRadius = UDim.new(0,10)
 
         local title = Instance.new("TextLabel")
-        title.Name = "Title"
-        title.Size = UDim2.new(1, -120, 0, 28)
+        title.Size = UDim2.new(1, -140, 0, 28)
         title.Position = UDim2.new(0, 10, 0, 0)
         title.BackgroundTransparency = 1
         title.Font = Enum.Font.Code
@@ -92,11 +91,9 @@ return function(C, R, UI)
         title.Parent = win
 
         local btnMin = Instance.new("TextButton")
-        btnMin.Name = "Min"
-        btnMin.Size = UDim2.new(0, 70, 0, 24)
-        btnMin.Position = UDim2.new(1, -150, 0, 2)
+        btnMin.Size = UDim2.new(0, 80, 0, 24)
+        btnMin.Position = UDim2.new(1, -160, 0, 2)
         btnMin.BackgroundColor3 = Color3.fromRGB(40,40,40)
-        btnMin.AutoButtonColor = true
         btnMin.TextColor3 = Color3.fromRGB(230,230,230)
         btnMin.Font = Enum.Font.Code
         btnMin.TextSize = 14
@@ -106,11 +103,9 @@ return function(C, R, UI)
         Instance.new("UICorner", btnMin).CornerRadius = UDim.new(0,6)
 
         local btnCopy = Instance.new("TextButton")
-        btnCopy.Name = "Copy"
-        btnCopy.Size = UDim2.new(0, 70, 0, 24)
-        btnCopy.Position = UDim2.new(1, -75, 0, 2)
+        btnCopy.Size = UDim2.new(0, 80, 0, 24)
+        btnCopy.Position = UDim2.new(1, -80, 0, 2)
         btnCopy.BackgroundColor3 = Color3.fromRGB(40,40,40)
-        btnCopy.AutoButtonColor = true
         btnCopy.TextColor3 = Color3.fromRGB(230,230,230)
         btnCopy.Font = Enum.Font.Code
         btnCopy.TextSize = 14
@@ -144,11 +139,11 @@ return function(C, R, UI)
             Logger.minimized = not Logger.minimized
             if Logger.minimized then
                 body.Visible = false
-                win.Size = UDim2.new(0, 520, 0, 30)
+                win.Size = UDim2.new(0, 540, 0, 30)
                 btnMin.Text = "Expand"
             else
                 body.Visible = true
-                win.Size = UDim2.new(0, 520, 0, 300)
+                win.Size = UDim2.new(0, 540, 0, 320)
                 btnMin.Text = "Minimize"
             end
         end)
@@ -156,13 +151,9 @@ return function(C, R, UI)
         btnCopy.MouseButton1Click:Connect(function()
             local text = body.Text
             local ok = pcall(function() setclipboard(text) end)
-            if ok then
-                Logger.log("copied to clipboard")
-            else
+            if ok then Logger.log("copied to clipboard") else
                 Logger.log("clipboard not available")
-                body:CaptureFocus()
-                body.CursorPosition = #body.Text + 1
-                body.SelectionStart = 1
+                body:CaptureFocus(); body.CursorPosition = #body.Text + 1; body.SelectionStart = 1
             end
         end)
 
@@ -170,25 +161,15 @@ return function(C, R, UI)
         Logger.box = body
         Logger.minimized = false
     end
-    function Logger.ensure()
-        if not (Logger.gui and Logger.gui.Parent) then Logger.rebuild() end
-        Logger.gui.Enabled = true
-        Logger.gui.DisplayOrder = 10000
-    end
+    function Logger.ensure() if not (Logger.gui and Logger.gui.Parent) then Logger.rebuild() end end
     function Logger.log(msg)
         Logger.ensure()
         local ts = os.date("%X")
         local line = "["..ts.."] "..tostring(msg)
-        if Logger.box.Text == "" then
-            Logger.box.Text = line
-        else
-            Logger.box.Text = Logger.box.Text .. "\n" .. line
-        end
+        Logger.box.Text = (Logger.box.Text == "" and line) or (Logger.box.Text.."\n"..line)
         Logger.box.CursorPosition = #Logger.box.Text + 1
     end
-    function Logger.clear()
-        Logger.rebuild()
-    end
+    function Logger.clear() Logger.rebuild() end
 
     -- helpers
     local function hrp()
@@ -251,9 +232,7 @@ return function(C, R, UI)
     local function setCollide(model, on, snapshot)
         local parts = getAllParts(model)
         if on and snapshot then
-            for part,can in pairs(snapshot) do
-                if part and part.Parent then part.CanCollide = can end
-            end
+            for part,can in pairs(snapshot) do if part and part.Parent then part.CanCollide = can end end
             return
         end
         local snap = {}
@@ -381,6 +360,106 @@ return function(C, R, UI)
         for _,p in ipairs(getAllParts(model)) do p.AssemblyLinearVelocity = Vector3.new(0,-8,0) end
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
+
+    -- campfire zone helpers
+    local function findFireZonePart(fire)
+        local priority = {"InnerTouchZone","BurnZone","AddItem","FireZone","Hitbox","TouchZone"}
+        for _,pname in ipairs(priority) do
+            local d = fire:FindFirstChild(pname, true)
+            if d and d:IsA("BasePart") then return d end
+        end
+        for _,d in ipairs(fire:GetDescendants()) do
+            if d:IsA("BasePart") then
+                local n = d.Name:lower()
+                if n:find("touch") or n:find("burn") or n:find("fire") then return d end
+            end
+        end
+        return mainPart(fire)
+    end
+    local function resolveCampfire()
+        local root = hrp(); if not root then return nil,nil end
+        local pool = {}
+        local function addFireModel(m)
+            if not (m and m:IsA("Model")) then return end
+            if isExcludedModel(m) then return end
+            local name = m.Name:lower()
+            if name:find("fire") or name:find("campfire") then
+                local mp = mainPart(m)
+                if mp then table.insert(pool, {model=m, dist=(mp.Position - root.Position).Magnitude}) end
+            end
+        end
+        if CAMPFIRE_PATH and CAMPFIRE_PATH.Parent then addFireModel(CAMPFIRE_PATH) end
+        for _,d in ipairs(workspace:GetDescendants()) do if d:IsA("Model") then addFireModel(d) end end
+        if #pool == 0 then return nil,nil end
+        table.sort(pool, function(a,b) return a.dist < b.dist end)
+        local fire = pool[1].model
+        local zone = findFireZonePart(fire)
+        return fire, zone
+    end
+    local function fireInfoStr(fire, zone)
+        local mp = mainPart(fire)
+        local fpos = mp and mp.Position or fire:GetPivot().Position
+        local zsz  = zone and zone.Size or Vector3.new()
+        local zpos = zone and zone.Position or Vector3.new()
+        return ("fire=%s  fpos=(%.1f,%.1f,%.1f)  zone=%s size=(%.1f,%.1f,%.1f) zpos=(%.1f,%.1f,%.1f)")
+            :format(fire:GetFullName(),
+                fpos.X,fpos.Y,fpos.Z,
+                zone and zone.Name or "nil",
+                zsz.X,zsz.Y,zsz.Z,
+                zpos.X,zpos.Y,zpos.Z)
+    end
+
+    -- overlap + fire state
+    local function modelOverlapsZone(model, zone)
+        if not (model and zone) then return false end
+        local parts = getAllParts(model)
+        if #parts == 0 then return false end
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Whitelist
+        params.FilterDescendantsInstances = parts
+        local hits = workspace:GetPartBoundsInBox(zone.CFrame, zone.Size * 0.94, params)
+        return #hits > 0
+    end
+    local function waitUntilInZone(model, zone, timeout)
+        local t0 = tick()
+        while tick() - t0 < (timeout or ZONE_WAIT_MAX) do
+            if modelOverlapsZone(model, zone) then return true end
+            task.wait(0.03)
+        end
+        return modelOverlapsZone(model, zone)
+    end
+    local function readFireState(fire)
+        local out = {}
+        for k,v in pairs(fire:GetAttributes()) do
+            if type(v)=="number" or type(v)=="boolean" then out["@"..k]=v end
+        end
+        for _,d in ipairs(fire:GetDescendants()) do
+            if d:IsA("NumberValue") or d:IsA("IntValue") or d:IsA("BoolValue") then out[d.Name] = d.Value end
+        end
+        return out
+    end
+    local function scoreDelta(before, after)
+        local keys = {"@FuelRemaining","FuelRemaining","@Fuel","Fuel","@Strength","Strength"}
+        local s = 0
+        for _,k in ipairs(keys) do
+            if type(after[k])=="number" and type(before[k])=="number" then s = s + (after[k]-before[k]) end
+        end
+        return s
+    end
+    local function diffMap(a,b)
+        local chg = {}
+        for k,v in pairs(b) do if a[k] ~= v then chg[k] = tostring(a[k]).."->"..tostring(v) end end
+        local keys = {}; for k,_ in pairs(chg) do keys[#keys+1]=k end; table.sort(keys)
+        local parts = {}; for _,k in ipairs(keys) do parts[#parts+1] = k..":"..chg[k] end
+        return "{"..table.concat(parts,", ").."}"
+    end
+    local function fmtCounts(map)
+        local keys = {}; for k,_ in pairs(map) do keys[#keys+1]=k end; table.sort(keys)
+        local parts = {}; for _,k in ipairs(keys) do parts[#parts+1] = k..":"..tostring(map[k]) end
+        return "{"..table.concat(parts, ", ").."}"
+    end
+
+    -- drag + move
     local function startDrag(model)
         resolveRemotes()
         Logger.log("startDrag: "..tostring(model and model.Name or "nil"))
@@ -409,116 +488,104 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    -- campfire: robust resolver + zone
-    local function findFireZonePart(fire)
-        local candidates = {}
-        local priority = {"InnerTouchZone","BurnZone","AddItem","FireZone","Hitbox","TouchZone"}
-        for _,pname in ipairs(priority) do
-            for _,d in ipairs(fire:GetDescendants()) do
-                if d:IsA("BasePart") and d.Name == pname then return d end
-            end
+    -- Best signature cache
+    local BestBurnSig = nil  -- 1..4
+    local function tryFireBurn(campfire, model, sig)
+        if not BurnItem then return false end
+        local ok=false
+        if sig==1 then ok = pcall(function() BurnItem:FireServer(campfire) end)
+        elseif sig==2 then ok = pcall(function() BurnItem:FireServer(campfire, model) end)
+        elseif sig==3 then ok = pcall(function() BurnItem:FireServer(model) end)
+        elseif sig==4 then ok = pcall(function() BurnItem:FireServer() end)
         end
-        for _,d in ipairs(fire:GetDescendants()) do
-            if d:IsA("BasePart") then
-                local n = d.Name:lower()
-                if n:find("touch") or n:find("burn") or n:find("fire") then
-                    table.insert(candidates, d)
-                end
-            end
-        end
-        if #candidates > 0 then return candidates[1] end
-        return mainPart(fire)
-    end
-    local function resolveCampfire()
-        local root = hrp(); if not root then return nil,nil end
-        local pool = {}
-        local function addFireModel(m)
-            if not (m and m:IsA("Model")) then return end
-            if isExcludedModel(m) then return end
-            local name = m.Name:lower()
-            if name:find("fire") or name:find("campfire") then
-                local mp = mainPart(m)
-                if mp then
-                    local d = (mp.Position - root.Position).Magnitude
-                    table.insert(pool, {model=m, dist=d})
-                end
-            end
-        end
-        if CAMPFIRE_PATH and CAMPFIRE_PATH.Parent then addFireModel(CAMPFIRE_PATH) end
-        for _,d in ipairs(workspace:GetDescendants()) do
-            if d:IsA("Model") then addFireModel(d) end
-        end
-        if #pool == 0 then return nil,nil end
-        table.sort(pool, function(a,b) return a.dist < b.dist end)
-        local fire = pool[1].model
-        local zone = findFireZonePart(fire)
-        return fire, zone
-    end
-    local function fireInfoStr(fire, zone)
-        local mp = mainPart(fire)
-        local fpos = mp and mp.Position or fire:GetPivot().Position
-        local zsz  = zone and zone.Size or Vector3.new()
-        local zpos = zone and zone.Position or Vector3.new()
-        return ("fire=%s  fpos=(%.1f,%.1f,%.1f)  zone=%s size=(%.1f,%.1f,%.1f) zpos=(%.1f,%.1f,%.1f)")
-            :format(fire:GetFullName(),
-                fpos.X,fpos.Y,fpos.Z,
-                zone and zone.Name or "nil",
-                zsz.X,zsz.Y,zsz.Z,
-                zpos.X,zpos.Y,zpos.Z)
+        Logger.log("FireServer sig"..tostring(sig).." sent:"..tostring(ok))
+        return ok
     end
 
-    -- zone overlap checks
-    local function modelOverlapsZone(model, zone)
-        if not (model and zone) then return false end
-        local parts = getAllParts(model)
-        if #parts == 0 then return false end
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Whitelist
-        params.FilterDescendantsInstances = parts
-        local hits = workspace:GetPartBoundsInBox(zone.CFrame, zone.Size * 0.92, params)
-        return #hits > 0
-    end
-    local function waitUntilInZone(model, zone, timeout)
-        local t0 = tick()
-        while tick() - t0 < (timeout or ZONE_WAIT_MAX) do
-            if modelOverlapsZone(model, zone) then return true end
-            task.wait(0.03)
-        end
-        return modelOverlapsZone(model, zone)
+    -- burn/cook flows with hold + arg trial + retry
+    local function placeIntoZone(model, zone, jitterIndex)
+        local yInset = math.clamp(zone.Size.Y * 0.20, 0.2, 1.0)
+        local offsets = {
+            Vector3.new(0, yInset, 0),
+            Vector3.new(0.25, yInset, 0.25),
+            Vector3.new(-0.25, yInset, 0.25),
+            Vector3.new(0.25, yInset, -0.25),
+            Vector3.new(-0.25, yInset, -0.25),
+        }
+        local off = offsets[(jitterIndex or 1)]
+        local targetCF = zone.CFrame * CFrame.new(off.X, off.Y, off.Z)
+        moveModel(model, targetCF)
+        local inside = waitUntilInZone(model, zone, ZONE_WAIT_MAX)
+        Logger.log("overlapInZone="..tostring(inside))
+        return inside
     end
 
-    -- fire state probe
-    local function readFireState(fire)
-        local out = {}
-        for k,v in pairs(fire:GetAttributes()) do
-            if type(v)=="number" or type(v)=="boolean" then out["@"..k]=v end
-        end
-        for _,d in ipairs(fire:GetDescendants()) do
-            if d:IsA("NumberValue") or d:IsA("IntValue") or d:IsA("BoolValue") then
-                out[d.Name] = d.Value
+    local function doBurnOrCook(kind, model, campfire, zone, stats)
+        resolveRemotes()
+        local before0 = readFireState(campfire)
+        local success = false
+        local usedSig = BestBurnSig
+        local whichRemote = (kind=="cook") and CookItem or BurnItem
+
+        Logger.log(kind.."Flow for "..tostring(model and model.Name))
+        startDrag(model)
+
+        -- Try up to MAX_RETRIES_PER_ITEM placements and signatures
+        for attempt = 1, 1 + MAX_RETRIES_PER_ITEM do
+            Logger.log("attempt "..attempt)
+            placeIntoZone(model, zone, attempt)
+            task.wait(PRE_BURN_WAIT)
+
+            local before = readFireState(campfire)
+
+            local sigList = (usedSig and {usedSig}) or {1,2,3,4}
+            local bestLocalSig = usedSig
+            local bestDelta = -1e9
+
+            for _,sig in ipairs(sigList) do
+                if whichRemote == BurnItem then
+                    tryFireBurn(campfire, model, sig)
+                else
+                    local ok=false
+                    if sig==1 then ok = pcall(function() CookItem:FireServer(campfire) end)
+                    elseif sig==2 then ok = pcall(function() CookItem:FireServer(campfire, model) end)
+                    elseif sig==3 then ok = pcall(function() CookItem:FireServer(model) end)
+                    elseif sig==4 then ok = pcall(function() CookItem:FireServer() end)
+                    end
+                    Logger.log("Cook FireServer sig"..tostring(sig).." sent:"..tostring(ok))
+                end
+
+                -- hold drag so server can finish consuming
+                task.wait(HOLD_AFTER_FIRE)
+                local after = readFireState(campfire)
+                local delta = scoreDelta(before, after)
+                Logger.log("stateΔ(sig"..sig..") "..diffMap(before, after).." score="..string.format("%.2f", delta))
+
+                if delta > bestDelta then
+                    bestDelta = delta; bestLocalSig = sig
+                end
+
+                if delta > 0.1 then
+                    success = true
+                    usedSig = bestLocalSig
+                    BestBurnSig = bestLocalSig
+                    break
+                end
             end
+
+            if success then break end
+            task.wait(RETRY_PAUSE)
         end
-        return out
-    end
-    local function diffMap(a,b)
-        local chg = {}
-        for k,v in pairs(b) do
-            if a[k] ~= v then chg[k] = tostring(a[k]).."->"..tostring(v) end
-        end
-        local keys = {}
-        for k,_ in pairs(chg) do keys[#keys+1]=k end
-        table.sort(keys)
-        local parts = {}
-        for _,k in ipairs(keys) do parts[#parts+1] = k..":"..chg[k] end
-        return "{"..table.concat(parts,", ").."}"
-    end
-    local function fmtCounts(map)
-        local keys = {}
-        for k,_ in pairs(map) do keys[#keys+1]=k end
-        table.sort(keys)
-        local parts = {}
-        for _,k in ipairs(keys) do parts[#parts+1] = k..":"..tostring(map[k]) end
-        return "{"..table.concat(parts, ", ").."}"
+
+        stopDrag()
+
+        stats.sent = stats.sent + 1
+        stats.sentByName[model.Name] = (stats.sentByName[model.Name] or 0) + 1
+        table.insert(stats.sentList, model.Name)
+
+        local after0 = readFireState(campfire)
+        Logger.log("postItemΔ "..diffMap(before0, after0).." BestSig="..tostring(BestBurnSig))
+        return success
     end
 
     -- orbs
@@ -532,15 +599,14 @@ return function(C, R, UI)
         return part
     end
 
-    -- nearby scanning
-    local function modelsNear(pos, radius, nameSet, seen)
+    -- scanning
+    local function modelsNear(pos, radius, nameSet)
         local out = {}
         for _,d in ipairs(WS:GetDescendants()) do
-            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] then
+            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] then
                 local mp = mainPart(d)
                 if mp and (mp.Position - pos).Magnitude <= radius then
                     out[#out+1] = d
-                    seen[d] = true
                 end
             end
         end
@@ -562,143 +628,62 @@ return function(C, R, UI)
         end
         return list, total, byName
     end
-    local function mergedSet(a, b)
-        local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
-    end
+    local function mergedSet(a, b) local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t end
 
-    -- flows
-    local function burnFlow(model, campfire, zone, stats, fromPos, fireStateBefore)
-        resolveRemotes()
-        Logger.log("burnFlow for "..tostring(model and model.Name))
-        Logger.log("zone="..tostring(zone and zone.Name).." size=("..(zone and string.format("%.1f,%.1f,%.1f",zone.Size.X,zone.Size.Y,zone.Size.Z) or "")..")")
-        startDrag(model)
-        local targetCF = zone and (zone.CFrame * CFrame.new(0, math.min(zone.Size.Y*0.25, 0.5), 0)) or (mainPart(campfire) and mainPart(campfire).CFrame or campfire:GetPivot())
-        moveModel(model, targetCF)
-        local inside = waitUntilInZone(model, zone, ZONE_WAIT_MAX)
-        Logger.log("overlapInZone="..tostring(inside))
-        task.wait(PRE_BURN_WAIT)
-        local ok = false
-        if BurnItem then
-            Logger.log("request BurnItem")
-            ok = pcall(function() BurnItem:FireServer(campfire, Instance.new("Model")) end)
-            Logger.log("request BurnItem sent: "..tostring(ok))
-        else
-            Logger.log("BurnItem remote missing")
-        end
-        stopDrag()
-        stats.sent = stats.sent + 1
-        stats.sentByName[model.Name] = (stats.sentByName[model.Name] or 0) + 1
-        table.insert(stats.sentList, model.Name)
-        task.delay(0.15, function()
-            local after = readFireState(campfire)
-            local delta = diffMap(fireStateBefore, after)
-            Logger.log("fireStateΔ "..delta)
-        end)
-    end
-
-    local function cookFlow(model, campfire, zone, stats, fromPos, fireStateBefore)
-        resolveRemotes()
-        local cookedName = RAW_TO_COOKED[model.Name]
-        Logger.log("cookFlow for "..tostring(model and model.Name).." -> "..tostring(cookedName))
-        startDrag(model)
-        local targetCF = zone and (zone.CFrame * CFrame.new(0, math.min(zone.Size.Y*0.25, 0.5), 0)) or (mainPart(campfire) and mainPart(campfire).CFrame or campfire:GetPivot())
-        moveModel(model, targetCF)
-        local inside = waitUntilInZone(model, zone, ZONE_WAIT_MAX)
-        Logger.log("overlapInZone="..tostring(inside))
-        task.wait(PRE_BURN_WAIT)
-        local ok = false
-        if CookItem then
-            Logger.log("request CookItem")
-            ok = pcall(function() CookItem:FireServer(campfire, Instance.new("Model")) end)
-            Logger.log("request CookItem sent: "..tostring(ok))
-        else
-            Logger.log("CookItem remote missing")
-        end
-        stopDrag()
-        stats.sent = stats.sent + 1
-        stats.sentByName[model.Name] = (stats.sentByName[model.Name] or 0) + 1
-        table.insert(stats.sentList, model.Name)
-        task.delay(0.15, function()
-            local after = readFireState(campfire)
-            local delta = diffMap(fireStateBefore, after)
-            Logger.log("fireStateΔ "..delta)
-            if cookedName then
-                local center = zone and zone.Position or (mainPart(campfire) and mainPart(campfire).Position or campfire:GetPivot().Position)
-                for _,m in ipairs(WS:GetDescendants()) do
-                    if m:IsA("Model") and m.Name == cookedName and not isExcludedModel(m) then
-                        local mp = mainPart(m)
-                        if mp and (mp.Position - center).Magnitude <= 10 then
-                            local dir = (mp.Position - center)
-                            if dir.Magnitude < 0.1 then dir = (mp.CFrame.LookVector) end
-                            dir = Vector3.new(dir.X, 0, dir.Z).Unit
-                            local offset = dir * 1.5 + Vector3.new(0, 0.35, 0)
-                            local vel    = dir * 16 + Vector3.new(0, 7, 0)
-                            local snap = setCollide(m, false)
-                            if m:IsA("Model") then m:PivotTo((m:GetPivot() + offset)) else mp.CFrame = mp.CFrame + offset end
-                            for _,p in ipairs(getAllParts(m)) do p.AssemblyLinearVelocity = vel end
-                            task.delay(0.15, function() setCollide(m, true, snap) end)
-                            Logger.log("nudged cooked out")
-                            break
-                        end
-                    end
-                end
-            end
-        end)
-    end
-
-    -- UI orbs + actions
+    -- actions
     local function burnNearby()
         Logger.clear(); Logger.log("BURN_NEARBY start")
         local camp, zone = resolveCampfire()
         if not camp or not zone then Logger.log("campfire/zone not found"); return end
         Logger.log("campfire resolved: "..fireInfoStr(camp, zone))
+
         local root = hrp(); if not root then Logger.log("no HRP"); return end
         local orbPlayer = makeOrb(root.CFrame + Vector3.new(0, ORB_OFFSET_Y, 0), "orb2")
         local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
         local orbCamp = makeOrb(campCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
 
-        local snapshotBefore = readFireState(camp)
-        Logger.log("fireState0 "..fmtCounts(snapshotBefore))
+        local snapshot0 = readFireState(camp)
+        Logger.log("fireState0 "..fmtCounts(snapshot0))
 
         local allInRadius, totalAll, countsAll = scanRadiusAll(orbPlayer.Position, NEARBY_RADIUS)
         Logger.log("radius scan total="..tostring(totalAll).." byName="..fmtCounts(countsAll))
 
         local targets = mergedSet(fuelSet, cookSet)
-        local eligibleCounts = {}
-        local eligibleTotal = 0
-        for _,m in ipairs(allInRadius) do
-            if targets[m.Name] then
-                eligibleCounts[m.Name] = (eligibleCounts[m.Name] or 0) + 1
-                eligibleTotal = eligibleTotal + 1
-            end
-        end
-        Logger.log("eligible total="..tostring(eligibleTotal).." eligibleByName="..fmtCounts(eligibleCounts))
+        local candidates = {}
+        for _,m in ipairs(allInRadius) do if targets[m.Name] then candidates[#candidates+1]=m end end
+        Logger.log("eligible total="..tostring(#candidates))
 
         local stats = { sent=0, sentByName={}, sentList={} }
-        local seen = {}
-        local iteration = 0
-        while true do
-            local list = modelsNear(orbPlayer.Position, NEARBY_RADIUS, targets, seen)
-            if #list == 0 then break end
-            iteration = iteration + 1
-            Logger.log("iteration "..iteration.." eligibleFound="..tostring(#list))
-            for _,m in ipairs(list) do
-                Logger.log("send "..m.Name)
-                if cookSet[m.Name] then
-                    cookFlow(m, camp, zone, stats, orbPlayer.Position, snapshotBefore)
-                else
-                    burnFlow(m, camp, zone, stats, orbPlayer.Position, snapshotBefore)
-                end
-                task.wait(PER_ITEM_DELAY)
+        local failures = {}
+
+        for _,m in ipairs(candidates) do
+            Logger.log("send "..m.Name)
+            local ok
+            if cookSet[m.Name] then
+                ok = doBurnOrCook("cook", m, camp, zone, stats)
+            else
+                ok = doBurnOrCook("burn", m, camp, zone, stats)
             end
-            task.wait(0)
+            if not ok then failures[#failures+1] = m end
+            task.wait(PER_ITEM_DELAY)
+        end
+
+        -- retry pass on failures
+        if #failures > 0 then
+            Logger.log("retry pass "..#failures.." items")
+            for _,m in ipairs(failures) do
+                if m and m.Parent then
+                    local ok = doBurnOrCook("burn", m, camp, zone, stats)
+                    task.wait(PER_ITEM_DELAY)
+                end
+            end
         end
 
         Logger.log("summary sentTotal="..tostring(stats.sent).." sentByName="..fmtCounts(stats.sentByName))
         task.delay(0.25, function()
             local after = readFireState(camp)
             Logger.log("fireStateFinal "..fmtCounts(after))
-            Logger.log("fireStateΔ total "..diffMap(snapshotBefore, after))
+            Logger.log("fireStateΔ total "..diffMap(snapshot0, after))
         end)
         Logger.log("BURN_NEARBY done")
         task.delay(1, function() if orbCamp then orbCamp:Destroy() end if orbPlayer then orbPlayer:Destroy() end end)
@@ -713,12 +698,8 @@ return function(C, R, UI)
             Logger.log("request ScrapItem")
             ok = pcall(function() ScrapItem:FireServer(scrapper, Instance.new("Model")) end)
             Logger.log("request ScrapItem sent: "..tostring(ok))
-        else
-            Logger.log("ScrapItem remote missing")
         end
-        if not ok then
-            pivotOverTarget(model, scrapper)
-        end
+        if not ok then pivotOverTarget(model, scrapper) end
         stopDrag()
     end
 
@@ -729,17 +710,9 @@ return function(C, R, UI)
         local orb2 = makeOrb(root.CFrame + Vector3.new(0, ORB_OFFSET_Y, 0), "orb2")
         local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
         local orb1 = makeOrb(scrCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
-        local seen, targets = {}, mergedSet(junkSet, scrapAlso)
-        while true do
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
-            if #list == 0 then break end
-            for _,m in ipairs(list) do
-                Logger.log("process "..m.Name)
-                scrapFlow(m, scr)
-                task.wait(PER_ITEM_DELAY)
-            end
-            task.wait(0)
-        end
+        local seenTargets = mergedSet(junkSet, scrapAlso)
+        local list = modelsNear(orb2.Position, NEARBY_RADIUS, seenTargets)
+        for _,m in ipairs(list) do scrapFlow(m, scr); task.wait(PER_ITEM_DELAY) end
         Logger.log("SCRAP_NEARBY done")
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
@@ -787,9 +760,7 @@ return function(C, R, UI)
             Values = args.values,
             Multi = false,
             AllowNone = false,
-            Callback = function(choice)
-                if choice and choice ~= "" then args.setter(choice) end
-            end
+            Callback = function(choice) if choice and choice ~= "" then args.setter(choice) end end
         })
     end
 
