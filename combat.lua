@@ -35,7 +35,7 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
 
     local running = { SmallTree = false, Character = false }
 
-    local TREE_NAMES     = { ["Small Tree"]=true, ["Snowy Small Tree"]=true }
+    local TREE_NAMES     = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
     local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
 
     local function findInInventory(name)
