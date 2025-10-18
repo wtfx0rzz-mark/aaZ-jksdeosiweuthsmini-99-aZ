@@ -10,33 +10,29 @@ return function(C, R, UI)
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
-    -- Tunables (easy to adjust)
--- Bind to shared config table for easy tuning from outside modules
-local TUNE = C.Config
--- Seconds to wait between waves of swings/hits
-TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
--- Default tree model name to target when unspecified
-TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
--- Suffix appended to per-hit IDs and attributes for uniqueness
-TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
--- Tool preference order used when auto-equipping
-TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
--- Upper bound of tree targets processed per wave
-TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 20
--- Upper bound of character targets processed per wave
-TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 20
--- Minimum seconds between hits on the same character (anti-spam)
-TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.4
--- Wait inserted between sequential character hits to reduce spikes
-TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.02
--- If true (default), sort characters by distance; set false to skip sort
-TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
 
+    -- Bind to shared config table for easy tuning from outside modules
+    local TUNE = C.Config
+    TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
+    TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
+    TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
+    TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }
+    TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 20
+    TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 20
+    TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.4
+    TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.02
+    TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
 
     local running = { SmallTree = false, Character = false }
 
-    local TREE_NAMES     = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
+    local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
     local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
+
+    local function isBigTreeName(n)
+        if BIG_TREE_NAMES[n] then return true end
+        -- Support WebbedTreeBig and WebbedTreeBig[0-9] variants
+        return type(n)=="string" and n:match("^WebbedTreeBig%d*$") ~= nil
+    end
 
     local function findInInventory(name)
         local inv = lp and lp:FindFirstChild("Inventory")
@@ -149,7 +145,7 @@ TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
         local out, n = {}, 0
         local function walk(node)
             if not node then return end
-            if node:IsA("Model") and (TREE_NAMES[node.Name] or (includeBig and BIG_TREE_NAMES[node.Name])) then
+            if node:IsA("Model") and (TREE_NAMES[node.Name] or (includeBig and isBigTreeName(node.Name))) then
                 local trunk = bestTreeHitPart(node)
                 if trunk then
                     local d = (trunk.Position - origin).Magnitude
