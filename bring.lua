@@ -42,23 +42,27 @@ return function(C, R, UI)
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
     local Logger = { gui=nil, box=nil, minimized=false }
-    function Logger.init()
-        if Logger.gui and Logger.gui.Parent then return end
-        local pg = lp:WaitForChild("PlayerGui")
+    function Logger.rebuild()
+        if Logger.gui and Logger.gui.Parent then Logger.gui:Destroy() end
+        local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local sg = Instance.new("ScreenGui")
         sg.Name = "BringLogHUD"
         sg.ResetOnSpawn = false
         sg.IgnoreGuiInset = true
+        sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
+        sg.DisplayOrder = 10000
+        sg.Enabled = true
         sg.Parent = pg
 
         local win = Instance.new("Frame")
         win.Name = "Window"
         win.AnchorPoint = Vector2.new(1,0)
         win.Position = UDim2.new(1, -10, 0, 10)
-        win.Size = UDim2.new(0, 480, 0, 260)
+        win.Size = UDim2.new(0, 500, 0, 280)
         win.BackgroundColor3 = Color3.fromRGB(20,20,20)
         win.BackgroundTransparency = 0.1
         win.BorderSizePixel = 0
+        win.ZIndex = 10000
         win.Parent = sg
         Instance.new("UICorner", win).CornerRadius = UDim.new(0,10)
 
@@ -72,6 +76,7 @@ return function(C, R, UI)
         title.TextXAlignment = Enum.TextXAlignment.Left
         title.TextColor3 = Color3.fromRGB(230,230,230)
         title.Text = "Bring Logger"
+        title.ZIndex = 10001
         title.Parent = win
 
         local btnMin = Instance.new("TextButton")
@@ -84,6 +89,7 @@ return function(C, R, UI)
         btnMin.Font = Enum.Font.Code
         btnMin.TextSize = 14
         btnMin.Text = "Minimize"
+        btnMin.ZIndex = 10001
         btnMin.Parent = win
         Instance.new("UICorner", btnMin).CornerRadius = UDim.new(0,6)
 
@@ -97,6 +103,7 @@ return function(C, R, UI)
         btnCopy.Font = Enum.Font.Code
         btnCopy.TextSize = 14
         btnCopy.Text = "Copy"
+        btnCopy.ZIndex = 10001
         btnCopy.Parent = win
         Instance.new("UICorner", btnCopy).CornerRadius = UDim.new(0,6)
 
@@ -117,6 +124,7 @@ return function(C, R, UI)
         body.Position = UDim2.new(0, 10, 0, 34)
         body.Size = UDim2.new(1, -20, 1, -44)
         body.Text = ""
+        body.ZIndex = 10000
         body.Parent = win
         Instance.new("UICorner", body).CornerRadius = UDim.new(0,6)
 
@@ -124,11 +132,11 @@ return function(C, R, UI)
             Logger.minimized = not Logger.minimized
             if Logger.minimized then
                 body.Visible = false
-                win.Size = UDim2.new(0, 480, 0, 30)
+                win.Size = UDim2.new(0, 500, 0, 30)
                 btnMin.Text = "Expand"
             else
                 body.Visible = true
-                win.Size = UDim2.new(0, 480, 0, 260)
+                win.Size = UDim2.new(0, 500, 0, 280)
                 btnMin.Text = "Minimize"
             end
         end)
@@ -148,9 +156,15 @@ return function(C, R, UI)
 
         Logger.gui = sg
         Logger.box = body
+        Logger.minimized = false
+    end
+    function Logger.ensure()
+        if not (Logger.gui and Logger.gui.Parent) then Logger.rebuild() end
+        Logger.gui.Enabled = true
+        Logger.gui.DisplayOrder = 10000
     end
     function Logger.log(msg)
-        Logger.init()
+        Logger.ensure()
         local ts = os.date("%X")
         local line = "["..ts.."] "..tostring(msg)
         if Logger.box.Text == "" then
@@ -161,8 +175,7 @@ return function(C, R, UI)
         Logger.box.CursorPosition = #Logger.box.Text + 1
     end
     function Logger.clear()
-        Logger.init()
-        Logger.box.Text = ""
+        Logger.rebuild()
     end
 
     local function hrp()
@@ -551,7 +564,6 @@ return function(C, R, UI)
     local function mergedSet(a, b)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
-
     local function fmtCounts(map)
         local parts = {}
         for k,v in pairs(map) do parts[#parts+1] = k..":"..tostring(v) end
@@ -607,7 +619,7 @@ return function(C, R, UI)
     end
 
     local function scrapNearby()
-        Logger.init(); Logger.log("SCRAP_NEARBY start")
+        Logger.clear(); Logger.log("SCRAP_NEARBY start")
         local scr = SCRAPPER_PATH; if not scr then Logger.log("scrapper path missing"); return end
         local root = hrp(); if not root then Logger.log("no HRP"); return end
         local orb2 = makeOrb(root.CFrame + Vector3.new(0, ORB_OFFSET_Y, 0), "orb2")
@@ -639,7 +651,7 @@ return function(C, R, UI)
     end
 
     local function bringSelected(name, count)
-        Logger.init(); Logger.log("BRING_SELECTED "..tostring(name).." x"..tostring(count))
+        Logger.clear(); Logger.log("BRING_SELECTED "..tostring(name).." x"..tostring(count))
         local want = tonumber(count) or 0
         if want <= 0 then Logger.log("nothing requested"); return end
         local list
