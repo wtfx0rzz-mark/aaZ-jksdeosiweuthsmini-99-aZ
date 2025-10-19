@@ -2,6 +2,7 @@
 -- 1337 Nights | Auto Tab • Edge Buttons + Lost Child Toggle + Instant Interact
 --  • Hard-stick teleports to ensure server-side position commit
 --  • New edge button: Teleport to Campfire
+--  • NEW: Load Defense — auto-uncheck any "DataHasLoaded" attribute/value
 --=====================================================
 return function(C, R, UI)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
@@ -310,7 +311,7 @@ return function(C, R, UI)
     end
     plantBtn.MouseButton1Click:Connect(function() plantNearestSaplingInFront() end)
 
-    -- ========= Lost Child (event-driven; no scanning loop) =========
+    -- ========= Lost Child =========
     local MAX_TO_SAVE   = 4
     local savedCount    = 0
     local autoLostEnabled = false
@@ -378,6 +379,70 @@ return function(C, R, UI)
     end
     lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
 
+    -- ========= Load Defense =========
+    local loadDefenseOn = false
+    local ldAttrConns   = setmetatable({}, {__mode="k"})
+    local ldBoolConns   = setmetatable({}, {__mode="k"})
+    local ldDescConn
+
+    local function forceOff_DataHasLoaded_attr(inst)
+        if not loadDefenseOn then return end
+        local ok, val = pcall(function() return inst:GetAttribute("DataHasLoaded") end)
+        if ok and val == true then pcall(function() inst:SetAttribute("DataHasLoaded", false) end) end
+    end
+    local function hookupAttr(inst)
+        if ldAttrConns[inst] then return end
+        if pcall(function() return inst:GetAttribute("DataHasLoaded") ~= nil end) then
+            forceOff_DataHasLoaded_attr(inst)
+            ldAttrConns[inst] = inst:GetAttributeChangedSignal("DataHasLoaded"):Connect(function()
+                forceOff_DataHasLoaded_attr(inst)
+            end)
+        end
+    end
+
+    local function forceOff_BoolValue(bv)
+        if not loadDefenseOn then return end
+        if bv.Name == "DataHasLoaded" and bv:IsA("BoolValue") and bv.Value == true then
+            pcall(function() bv.Value = false end)
+        end
+    end
+    local function hookupBool(bv)
+        if bv.Name ~= "DataHasLoaded" or not bv:IsA("BoolValue") then return end
+        if ldBoolConns[bv] then return end
+        forceOff_BoolValue(bv)
+        ldBoolConns[bv] = bv.Changed:Connect(function(prop)
+            if prop == "Value" then forceOff_BoolValue(bv) end
+        end)
+    end
+
+    local function scanAllForLoadFlags()
+        for _,inst in ipairs(WS:GetDescendants()) do
+            hookupAttr(inst)
+            if inst:IsA("BoolValue") then hookupBool(inst) end
+        end
+        for _,inst in ipairs(RS:GetDescendants()) do
+            hookupAttr(inst)
+            if inst:IsA("BoolValue") then hookupBool(inst) end
+        end
+    end
+
+    local function enableLoadDefense()
+        if loadDefenseOn then return end
+        loadDefenseOn = true
+        scanAllForLoadFlags()
+        if ldDescConn then ldDescConn:Disconnect() end
+        ldDescConn = WS.DescendantAdded:Connect(function(inst)
+            hookupAttr(inst)
+            if inst:IsA("BoolValue") then hookupBool(inst) end
+        end)
+    end
+
+    local function disableLoadDefense()
+        loadDefenseOn = false
+        if ldDescConn then ldDescConn:Disconnect(); ldDescConn = nil end
+        for inst,conn in pairs(ldAttrConns) do if conn then conn:Disconnect() end ldAttrConns[inst] = nil end
+        for bv,conn in pairs(ldBoolConns) do if conn then conn:Disconnect() end ldBoolConns[bv] = nil end
+    end
     -- ========= UI tab =========
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
 
@@ -408,6 +473,13 @@ return function(C, R, UI)
         Title = "Show Campfire button",
         Value = false,
         Callback = function(state) campBtn.Visible = state end
+    })
+    tab:Toggle({
+        Title = "Load Defense",
+        Value = false,
+        Callback = function(state)
+            if state then enableLoadDefense() else disableLoadDefense() end
+        end
     })
 
     -- Instant Interact
