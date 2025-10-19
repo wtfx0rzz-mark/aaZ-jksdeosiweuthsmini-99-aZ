@@ -16,7 +16,6 @@ return function(C, R, UI)
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
 
-    -- Bring taxonomy
     local junkItems    = {
         "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -39,21 +38,17 @@ return function(C, R, UI)
     }
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
 
-    -- Multi-select state per category (sets)
     local Selected = {
         Junk = {}, Fuel = {}, Food = {}, Medical = {}, WA = {}, Misc = {}, Pelts = {}
     }
-    -- Specials/patterns from Misc
     local wantMossy, wantCultist, wantSapling = false, false, false
     local wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
 
-    -- Tunables
     local hoverHeight    = 5
     local forwardDrop    = 10
     local upDrop         = 5
     local scanInterval   = 0.1
 
-    -- Pile drop tuning
     local PILE_RADIUS    = 1.25
     local LAYER_SIZE     = 14
     local LAYER_HEIGHT   = 0.35
@@ -61,14 +56,10 @@ return function(C, R, UI)
     local UNANCHOR_STEP  = 0.03
     local NUDGE_DOWN     = 4
 
-    -- Runtime
     local gatherOn = false
     local scanConn, hoverConn = nil, nil
     local gathered, list = {}, {}
 
-    ----------------------------------------------------------------------
-    -- Helpers
-    ----------------------------------------------------------------------
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -89,16 +80,15 @@ return function(C, R, UI)
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return true end
         local n = (m.Name or ""):lower()
+        if n:find("wall", 1, true) then return true end
         return n == "pelt trader" or n:find("trader",1,true) or n:find("shopkeeper",1,true)
     end
     local function hasHumanoid(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
 
-    -- Remotes
     local function getRemote(n) local f=RS:FindFirstChild("RemoteEvents"); return f and f:FindFirstChild(n) or nil end
     local function startDrag(m) local re=getRemote("RequestStartDraggingItem"); if re then pcall(function() re:FireServer(m) end) end end
     local function stopDrag(m)  local re=getRemote("StopDraggingItem");        if re then pcall(function() re:FireServer(m) end) end end
 
-    -- Physics toggles
     local function setNoCollideModel(m, on)
         for _,d in ipairs(m:GetDescendants()) do
             if d:IsA("BasePart") then
@@ -117,7 +107,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Track set
     local function addGather(m) if not gathered[m] then gathered[m]=true; list[#list+1]=m end end
     local function removeGather(m)
         if not gathered[m] then return end
@@ -136,20 +125,15 @@ return function(C, R, UI)
         return false
     end
 
-    ----------------------------------------------------------------------
-    -- Matching (union of all selected sets + specials)
-    ----------------------------------------------------------------------
     local function isSelectedModel(m)
         if not m or not m:IsA("Model") then return false end
         local name = m.Name or ""
         local nl   = name:lower()
 
-        -- specials
         if wantMossy and (name == "Mossy Coin" or name:match("^Mossy Coin%d+$")) then return true end
         if wantCultist and nl:find("cultist",1,true) and hasHumanoid(m) then return true end
         if wantSapling and name == "Sapling" then return true end
 
-        -- pattern selections
         if wantBlueprint and nl:find("blueprint", 1, true) then return true end
         if wantForestGem and (name == "Forest Gem" or nl:find("forest gem fragment", 1, true)) then return true end
         if wantKey then
@@ -167,15 +151,11 @@ return function(C, R, UI)
             return true
         end
 
-        -- regular category membership (exact)
         return Selected.Junk[name] or Selected.Fuel[name] or Selected.Food[name]
             or Selected.Medical[name] or Selected.WA[name] or Selected.Misc[name]
             or Selected.Pelts[name] or false
     end
 
-    ----------------------------------------------------------------------
-    -- Capture + Hover
-    ----------------------------------------------------------------------
     local lastScan = 0
     local function captureIfNear()
         local now = os.clock()
@@ -236,9 +216,6 @@ return function(C, R, UI)
         if hoverConn then pcall(function() hoverConn:Disconnect() end) end; hoverConn=nil
     end
 
-    ----------------------------------------------------------------------
-    -- Placement
-    ----------------------------------------------------------------------
     local function groundAheadCF()
         local root = hrp(); if not root then return nil end
         local forward = root.CFrame.LookVector
@@ -337,14 +314,10 @@ return function(C, R, UI)
         clearAll()
     end
 
-    -- Export small API
     C.Gather = C.Gather or {}
     C.Gather.IsOn      = function() return gatherOn end
     C.Gather.PlaceDown = placeDown
 
-    ----------------------------------------------------------------------
-    -- UI
-    ----------------------------------------------------------------------
     tab:Section({ Title = "Bring", Icon = "box" })
     tab:Button({ Title = "Drop Items", Callback = function() placeDown() end })
     tab:Divider()
@@ -422,9 +395,6 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts" })
     dropdownMulti({ title="Select Pelts", values=pelts, set=Selected.Pelts, kind="Pelts" })
 
-    ----------------------------------------------------------------------
-    -- Edge "Place" button (shared screen GUI)
-    ----------------------------------------------------------------------
     local function ensurePlaceEdge()
         local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
