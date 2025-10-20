@@ -5,7 +5,6 @@
 --  • One global "Gather Items" button captures union of selections
 --  • Pattern matches in Misc: Blueprint, Forest Gem(+Fragment), Key variants,
 --    Flashlight (old|strong), Taming flute (old|good|strong)
---  • Fix: post-drop drag-stuck hardening + tire/tyre matching
 --=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
@@ -126,11 +125,6 @@ return function(C, R, UI)
         return false
     end
 
-    -- tire/tyre helper
-    local function isTireLike(nl)
-        return nl:find("tire",1,true) or nl:find("tyre",1,true)
-    end
-
     local function isSelectedModel(m)
         if not m or not m:IsA("Model") then return false end
         local name = m.Name or ""
@@ -157,19 +151,14 @@ return function(C, R, UI)
             return true
         end
 
-        -- exact-name sets
-        if Selected.Junk[name] or Selected.Fuel[name] or Selected.Food[name]
+        -- Tire/tyre synonym support: selecting "Tire" in UI matches "tire" or "tyre" in-world
+        if Selected.Junk["Tire"] and (nl:find("tire",1,true) or nl:find("tyre",1,true)) then
+            return true
+        end
+
+        return Selected.Junk[name] or Selected.Fuel[name] or Selected.Food[name]
             or Selected.Medical[name] or Selected.WA[name] or Selected.Misc[name]
-            or Selected.Pelts[name] then
-            return true
-        end
-
-        -- special synonym: Tire UI selection should also match "tyre"
-        if Selected.Junk["Tire"] and isTireLike(nl) then
-            return true
-        end
-
-        return false
+            or Selected.Pelts[name] or false
     end
 
     local lastScan = 0
@@ -259,26 +248,36 @@ return function(C, R, UI)
         return baseCF * CFrame.new(x, y, z)
     end
 
-    -- Post-drop stabilization to prevent "stuck after drag"
     local function finalizePileDrop(items)
-        -- 1) keep no-collide ON during settle, zero velocities
         for _,m in ipairs(items) do
             if m and m.Parent then
+                setNoCollideModel(m, false)
                 for _,p in ipairs(m:GetDescendants()) do
                     if p:IsA("BasePart") then
                         p.AssemblyLinearVelocity  = Vector3.new()
                         p.AssemblyAngularVelocity = Vector3.new()
-                        -- ensure no-collide remains during settle
-                        p.CanCollide = false
-                        p.CanTouch   = false
-                        p.CanQuery   = false
+                    end
+                end
+            end
+        end
+
+        for _,m in ipairs(items) do
+            if m and m.Parent and m.Name == "Morsel" then
+                local mp = mainPart(m)
+                if mp then
+                    pcall(function() mp:SetNetworkOwner(nil) end)
+                    pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+                end
+                for _,p in ipairs(m:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.CollisionGroupId = 0
+                        p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
                         p.Massless   = false
                     end
                 end
             end
         end
 
-        -- 2) unanchor in batches and gently nudge down
         local n = #items
         local i = 1
         while i <= n do
@@ -297,37 +296,6 @@ return function(C, R, UI)
             task.wait(UNANCHOR_STEP)
             i = i + UNANCHOR_BATCH
         end
-
-        -- 3) return network ownership to server for ALL items
-        for _,m in ipairs(items) do
-            if m and m.Parent then
-                local mp = mainPart(m)
-                if mp then
-                    pcall(function() mp:SetNetworkOwner(nil) end)
-                    pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
-                end
-            end
-        end
-
-        -- 4) after a short settle, re-enable collisions and wake physics with a small impulse
-        task.delay(0.12, function()
-            for _,m in ipairs(items) do
-                if m and m.Parent then
-                    for _,p in ipairs(m:GetDescendants()) do
-                        if p:IsA("BasePart") then
-                            p.CanCollide = true
-                            p.CanTouch   = true
-                            p.CanQuery   = true
-                            -- wake assemblies
-                            local mass = p.AssemblyMass
-                            if typeof(mass) == "number" and mass > 0 then
-                                p:ApplyImpulse(Vector3.new(0, math.min(50, mass * 2), 0))
-                            end
-                        end
-                    end
-                end
-            end
-        end)
     end
 
     local function placeDown()
