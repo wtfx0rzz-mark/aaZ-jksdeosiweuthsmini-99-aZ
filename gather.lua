@@ -151,7 +151,6 @@ return function(C, R, UI)
             return true
         end
 
-        -- Tire/tyre synonym support: selecting "Tire" in UI matches "tire" or "tyre" in-world
         if Selected.Junk["Tire"] and (nl:find("tire",1,true) or nl:find("tyre",1,true)) then
             return true
         end
@@ -436,6 +435,12 @@ return function(C, R, UI)
     _G._PlaceEdgeBtn.MouseButton1Click:Connect(function()
         _G._PlaceEdgeBtn.Visible = false
         placeDown()
+    end)
+
+    task.defer(function()
+        Selected.Fuel["Log"] = true
+        clearAll()
+        startGather()
     end)
 
     lp.CharacterAdded:Connect(function()
