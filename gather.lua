@@ -151,7 +151,7 @@ return function(C, R, UI)
             return true
         end
 
-        -- Tire/tyre synonym support
+        -- Tire/tyre synonym support: selecting "Tire" in UI matches "tire" or "tyre" in-world
         if Selected.Junk["Tire"] and (nl:find("tire",1,true) or nl:find("tyre",1,true)) then
             return true
         end
@@ -159,43 +159,6 @@ return function(C, R, UI)
         return Selected.Junk[name] or Selected.Fuel[name] or Selected.Food[name]
             or Selected.Medical[name] or Selected.WA[name] or Selected.Misc[name]
             or Selected.Pelts[name] or false
-    end
-
-    -- central setter so programmatic and UI paths stay in sync
-    local function setFromOptions(kind, setTable, options)
-        -- clear existing for this set
-        for k,_ in pairs(setTable) do setTable[k] = nil end
-
-        if kind == "Misc" then
-            wantMossy, wantCultist, wantSapling = false, false, false
-            wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
-            for _,v in ipairs(options or {}) do
-                if v == "Mossy Coin" then
-                    wantMossy = true
-                elseif v == "Cultist" then
-                    wantCultist = true
-                elseif v == "Sapling" then
-                    wantSapling = true
-                elseif v == "Blueprint" then
-                    wantBlueprint = true
-                elseif v == "Forest Gem" then
-                    wantForestGem = true
-                elseif v == "Key" then
-                    wantKey = true
-                elseif v == "Flashlight" then
-                    wantFlashlight = true
-                elseif v == "Taming flute" then
-                    wantTamingFlute = true
-                else
-                    setTable[v] = true
-                end
-            end
-            return
-        end
-
-        for _,v in ipairs(options or {}) do
-            setTable[v] = true
-        end
     end
 
     local lastScan = 0
@@ -383,7 +346,35 @@ return function(C, R, UI)
             Multi = true,
             AllowNone = true,
             Callback = function(options)
-                setFromOptions(args.kind, args.set, options or {})
+                local set = args.set
+                for k,_ in pairs(set) do set[k] = nil end
+                if args.kind == "Misc" then
+                    wantMossy, wantCultist, wantSapling = false, false, false
+                    wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
+                    for _,v in ipairs(options) do
+                        if v == "Mossy Coin" then
+                            wantMossy = true
+                        elseif v == "Cultist" then
+                            wantCultist = true
+                        elseif v == "Sapling" then
+                            wantSapling = true
+                        elseif v == "Blueprint" then
+                            wantBlueprint = true
+                        elseif v == "Forest Gem" then
+                            wantForestGem = true
+                        elseif v == "Key" then
+                            wantKey = true
+                        elseif v == "Flashlight" then
+                            wantFlashlight = true
+                        elseif v == "Taming flute" then
+                            wantTamingFlute = true
+                        else
+                            set[v] = true
+                        end
+                    end
+                else
+                    for _,v in ipairs(options) do set[v] = true end
+                end
             end
         })
     end
@@ -392,7 +383,7 @@ return function(C, R, UI)
     dropdownMulti({ title="Select Junk Items", values=junkItems, set=Selected.Junk, kind="Junk" })
 
     tab:Section({ Title = "Fuel" })
-    local ddFuel = dropdownMulti({ title="Select Fuel Items", values=fuelItems, set=Selected.Fuel, kind="Fuel" })
+    dropdownMulti({ title="Select Fuel Items", values=fuelItems, set=Selected.Fuel, kind="Fuel" })
 
     tab:Section({ Title = "Food" })
     dropdownMulti({ title="Select Food Items", values=foodItems, set=Selected.Food, kind="Food" })
@@ -445,15 +436,6 @@ return function(C, R, UI)
     _G._PlaceEdgeBtn.MouseButton1Click:Connect(function()
         _G._PlaceEdgeBtn.Visible = false
         placeDown()
-    end)
-
-    -- Boot behavior: visually select Log in Fuel and start gather once.
-    task.defer(function()
-        setFromOptions("Fuel", Selected.Fuel, {"Log"})
-        pcall(function() if ddFuel and ddFuel.Set then ddFuel:Set({"Log"}) end end)
-        pcall(function() if ddFuel and ddFuel.SetValue then ddFuel:SetValue({"Log"}) end end)
-        clearAll()
-        startGather()
     end)
 
     lp.CharacterAdded:Connect(function()
