@@ -10,6 +10,7 @@ return function(C, R, UI)
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
     local PPS     = game:GetService("ProximityPromptService")
     local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
+    local UIS     = game:GetService("UserInputService")
 
     local lp = Players.LocalPlayer
     local Tabs = (UI and UI.Tabs) or {}
@@ -430,11 +431,9 @@ return function(C, R, UI)
         local ok, val = pcall(function() return inst:GetAttribute("DataHasLoaded") end)
         if ok and val == false then
             pcall(function() inst:SetAttribute("DataHasLoaded", true) end)
-            if logLoadDefense then print("[LD] Attr->true on", inst:GetFullName()) end
         end
         if inst:IsA("BoolValue") and inst.Name == "DataHasLoaded" and inst.Value == false then
             pcall(function() inst.Value = true end)
-            if logLoadDefense then print("[LD] Bool->true on", inst:GetFullName()) end
         end
     end
     local function hookOne(inst)
@@ -520,19 +519,68 @@ return function(C, R, UI)
         end
     })
 
-    --========================
-    -- Godmode
-    --========================
+    -- Godmode auto-reapply
+    local godOn = false
+    local godHB, godAcc = nil, 0
+    local GOD_INTERVAL = 0.5
+    local function fireGod()
+        local f = RS:FindFirstChild("RemoteEvents")
+        local ev = f and f:FindFirstChild("DamagePlayer")
+        if ev and ev:IsA("RemoteEvent") then
+            pcall(function() ev:FireServer(-math.huge) end)
+        end
+    end
+    local function enableGod()
+        if godOn then return end
+        godOn = true
+        fireGod()
+        if godHB then godHB:Disconnect() end
+        godAcc = 0
+        godHB = Run.Heartbeat:Connect(function(dt)
+            godAcc += dt
+            if godAcc >= GOD_INTERVAL then
+                godAcc = 0
+                fireGod()
+            end
+        end)
+    end
+    local function disableGod()
+        godOn = false
+        if godHB then godHB:Disconnect() godHB = nil end
+    end
     tab:Toggle({
         Title = "Godmode",
         Value = true,
         Callback = function(state)
-            if state then
-                local Event = game:GetService("ReplicatedStorage").RemoteEvents.DamagePlayer
-                Event:FireServer(-math.huge)
-            end
+            if state then enableGod() else disableGod() end
         end
     })
+
+    -- Infinite Jump: active immediately on load
+    local infJumpOn = true
+    local infConn
+    local function enableInfJump()
+        infJumpOn = true
+        if infConn then infConn:Disconnect() end
+        infConn = UIS.JumpRequest:Connect(function()
+            local h = getHumanoid()
+            if h then
+                pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            end
+        end)
+    end
+    local function disableInfJump()
+        infJumpOn = false
+        if infConn then infConn:Disconnect(); infConn = nil end
+    end
+    tab:Toggle({
+        Title = "Infinite Jump",
+        Value = true,
+        Callback = function(state)
+            if state then enableInfJump() else disableInfJump() end
+        end
+    })
+    enableInfJump() -- ensure it takes effect without needing a manual toggle
 
     local INSTANT_HOLD     = 0.2
     local TRIGGER_COOLDOWN = 0.4
@@ -619,6 +667,12 @@ return function(C, R, UI)
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if edgeGui.Parent ~= playerGui then
             edgeGui.Parent = playerGui
+        end
+        if godOn then
+            task.delay(0.2, fireGod)
+        end
+        if infJumpOn and not infConn then
+            enableInfJump()
         end
     end)
 end
