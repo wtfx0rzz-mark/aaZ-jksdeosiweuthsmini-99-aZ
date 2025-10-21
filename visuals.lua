@@ -9,12 +9,12 @@ return function(C, R, UI)
     local VisualsTab = UI.Tabs.Visuals
 
     C.State = C.State or { AuraRadius = 150, Toggles = {} }
+    C.State.Toggles.PlayerTracker = true
 
     local function auraRadius()
         return math.clamp(tonumber(C.State.AuraRadius) or 150, 0, 1_000_000)
     end
 
-    -- include webby tree
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
 
     local function bestPart(model)
@@ -46,7 +46,6 @@ return function(C, R, UI)
         if hl and hl:IsA("Highlight") then hl:Destroy() end
     end
 
-    -- Player Tracker
     local runningPlayers = false
     local PLAYER_HL_NAME = "__PlayerTrackerHL__"
 
@@ -55,7 +54,7 @@ return function(C, R, UI)
         local function attach(ch)
             if not ch then return end
             local h = ensureHighlight(ch, PLAYER_HL_NAME)
-            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- maximize visibility
+            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             h.Enabled = true
         end
         if plr.Character then attach(plr.Character) end
@@ -90,7 +89,6 @@ return function(C, R, UI)
     end
     local function stopPlayerTracker() runningPlayers = false end
 
-    -- Invisible (local only)
     local function setLocalInvisible(state)
         local ch = lp and lp.Character
         if not ch then return end
@@ -103,7 +101,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Highlight Trees In Aura
     local runningTrees = false
     local TREE_HL_NAME = "__TreeAuraHL__"
 
@@ -174,7 +171,6 @@ return function(C, R, UI)
     end
     local function stopTreeHighlight() runningTrees = false end
 
-    -- Highlight Characters In Aura
     local runningChars = false
     local CHAR_HL_NAME = "__CharAuraHL__"
 
@@ -240,7 +236,6 @@ return function(C, R, UI)
     end
     local function stopCharHighlight() runningChars = false end
 
-    -- UI
     VisualsTab:Toggle({
         Title = "Player Tracker",
         Value = C.State.Toggles.PlayerTracker or false,
@@ -276,4 +271,6 @@ return function(C, R, UI)
             if on then startCharHighlight() else stopCharHighlight() end
         end
     })
+
+    if C.State.Toggles.PlayerTracker then startPlayerTracker() end
 end
