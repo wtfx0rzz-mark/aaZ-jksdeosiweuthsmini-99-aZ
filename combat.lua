@@ -11,7 +11,9 @@ return function(C, R, UI)
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
 
-    -- Bind to shared config table for easy tuning from outside modules
+    C.State.AuraRadius = 100
+    C.State.Toggles.SmallTreeAura = true
+
     local TUNE = C.Config
     TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
     TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
@@ -30,7 +32,6 @@ return function(C, R, UI)
 
     local function isBigTreeName(n)
         if BIG_TREE_NAMES[n] then return true end
-        -- Support WebbedTreeBig and WebbedTreeBig[0-9] variants
         return type(n)=="string" and n:match("^WebbedTreeBig%d*$") ~= nil
     end
 
@@ -372,4 +373,6 @@ return function(C, R, UI)
             C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 500)
         end
     })
+
+    if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
 end
