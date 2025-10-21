@@ -89,7 +89,8 @@ return function(C, R, UI)
         renderConn = RunService.RenderStepped:Connect(function()
             local cam = workspace.CurrentCamera
             if not cam or not root then return end
-            hum.PlatformStand = true
+            local humCheck = humanoid()
+            if humCheck then humCheck.PlatformStand = true end
             bodyGyro.CFrame = cam.CFrame
 
             local moveVec = Vector3.new()
@@ -163,7 +164,8 @@ return function(C, R, UI)
             root = hrp()
             local cam = workspace.CurrentCamera
             if not root or not cam then return end
-            hum.PlatformStand = true
+            local humCheck = humanoid()
+            if humCheck then humCheck.PlatformStand = true end
             bodyGyro.CFrame = cam.CFrame
 
             local move = Vector3.new()
@@ -283,7 +285,6 @@ return function(C, R, UI)
         if hum then hum.WalkSpeed = val end
     end
 
-    -- Heartbeat reapply
     RunService.Heartbeat:Connect(function()
         if not speedEnabled then return end
         local hum = humanoid()
@@ -356,10 +357,9 @@ return function(C, R, UI)
     tab:Divider()
     tab:Section({ Title = "Walk Speed", Icon = "walk" })
 
-    -- Order-independent speed: slider applies live when toggle is on
     tab:Slider({
         Title = "Speed",
-        Value = { Min = 16, Max = 150, Default = 24 },
+        Value = { Min = 16, Max = 150, Default = 50 },
         Callback = function(v)
             walkSpeedValue = tonumber(v) or walkSpeedValue
             if speedEnabled then setWalkSpeed(walkSpeedValue) end
@@ -368,7 +368,7 @@ return function(C, R, UI)
 
     tab:Toggle({
         Title = "Enable Speed",
-        Value = false,
+        Value = true,
         Callback = function(state)
             speedEnabled = state
             if state then setWalkSpeed(walkSpeedValue) else setWalkSpeed(16) end
@@ -388,7 +388,7 @@ return function(C, R, UI)
 
     tab:Toggle({
         Title = "Infinite Jump",
-        Value = false,
+        Value = true,
         Callback = function(state)
             if state then startInfJump() else stopInfJump() end
         end
