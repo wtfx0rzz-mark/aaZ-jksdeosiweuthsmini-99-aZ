@@ -19,7 +19,6 @@ return function(C, R, UI)
         return
     end
 
-    -- ========= util =========
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -43,7 +42,6 @@ return function(C, R, UI)
         root.AssemblyAngularVelocity = Vector3.new(0,0,0)
     end
 
-    -- hard-stick teleport
     local STICK_DURATION    = 0.35
     local STICK_EXTRA_FR    = 2
     local STICK_CLEAR_VEL   = true
@@ -120,7 +118,6 @@ return function(C, R, UI)
         if STICK_CLEAR_VEL then zeroAssembly(root) end
     end
 
-    -- Dive-under workaround helpers
     local function diveBelowGround(depth, frames)
         local root = hrp(); if not root then return end
         local ch = lp.Character
@@ -166,7 +163,6 @@ return function(C, R, UI)
         setCollideAll(true, snap)
     end
 
-    -- campfire resolver + safe TP CF
     local function fireCenterPart(fire)
         return fire:FindFirstChild("Center")
             or fire:FindFirstChild("InnerTouchZone")
@@ -212,7 +208,6 @@ return function(C, R, UI)
 
     local PHASE_DIST = 10
 
-    -- ========= edge buttons UI =========
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -254,6 +249,7 @@ return function(C, R, UI)
     local plantBtn = makeEdgeBtn("PlantEdge",   3, "Plant")
     local lostBtn  = makeEdgeBtn("LostEdge",    4, "Lost Child")
     local campBtn  = makeEdgeBtn("CampEdge",    5, "Campfire")
+    campBtn.Visible = true
 
     phaseBtn.MouseButton1Click:Connect(function()
         local root = hrp()
@@ -262,7 +258,6 @@ return function(C, R, UI)
         teleportSticky(CFrame.new(dest, dest + root.CFrame.LookVector))
     end)
 
-    -- mark + teleport (now uses dive wrapper)
     local markedCF = nil
     local HOLD_THRESHOLD = 0.5
     local downAt, suppressClick = 0, false
@@ -297,7 +292,6 @@ return function(C, R, UI)
         if cf then teleportWithDive(cf) end
     end)
 
-    -- plant sapling ahead
     local AHEAD_DIST  = 3
     local RAY_HEIGHT  = 500
     local RAY_DEPTH   = 2000
@@ -361,10 +355,9 @@ return function(C, R, UI)
     end
     plantBtn.MouseButton1Click:Connect(function() plantNearestSaplingInFront() end)
 
-    -- ========= Lost Child =========
     local MAX_TO_SAVE   = 4
     local savedCount    = 0
-    local autoLostEnabled = false
+    local autoLostEnabled = true
     local lostEligible  = setmetatable({}, {__mode="k"})
 
     local function isLostChildModel(m)
@@ -429,7 +422,6 @@ return function(C, R, UI)
     end
     lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
 
-    -- ========= Load Defense (force TRUE) =========
     local loadDefenseOn = false
     local ldHB, ldConnWS, ldConnRS, ldConnPLR
     local logLoadDefense = false
@@ -490,7 +482,6 @@ return function(C, R, UI)
         if ldConnPLR then ldConnPLR:Disconnect() ldConnPLR = nil end
     end
 
-    -- ========= UI tab =========
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
 
     tab:Toggle({
@@ -510,7 +501,7 @@ return function(C, R, UI)
     })
     tab:Toggle({
         Title = "Auto Teleport to Lost Child",
-        Value = false,
+        Value = true,
         Callback = function(state)
             autoLostEnabled = state
             refreshLostBtn()
@@ -518,7 +509,7 @@ return function(C, R, UI)
     })
     tab:Toggle({
         Title = "Show Campfire button",
-        Value = false,
+        Value = true,
         Callback = function(state) campBtn.Visible = state end
     })
     tab:Toggle({
@@ -529,7 +520,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Instant Interact
     local INSTANT_HOLD     = 0.2
     local TRIGGER_COOLDOWN = 0.4
     local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
