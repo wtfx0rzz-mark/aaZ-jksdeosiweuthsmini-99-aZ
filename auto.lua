@@ -1,9 +1,3 @@
---=====================================================
--- 1337 Nights | Auto Tab • Edge Buttons + Lost Child Toggle + Instant Interact
---  • Hard-stick teleports to ensure server-side position commit
---  • Teleport + Campfire use noclip dive-under workaround before TP
---  • Load Defense: force any "DataHasLoaded" flag TRUE continuously
---=====================================================
 return function(C, R, UI)
     local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
     local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
@@ -519,7 +513,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Godmode auto-reapply
     local godOn = false
     local godHB, godAcc = nil, 0
     local GOD_INTERVAL = 0.5
@@ -556,7 +549,8 @@ return function(C, R, UI)
         end
     })
 
-    -- Infinite Jump: active immediately on load
+    task.defer(enableGod)
+
     local infJumpOn = true
     local infConn
     local function enableInfJump()
@@ -580,7 +574,7 @@ return function(C, R, UI)
             if state then enableInfJump() else disableInfJump() end
         end
     })
-    enableInfJump() -- ensure it takes effect without needing a manual toggle
+    enableInfJump()
 
     local INSTANT_HOLD     = 0.2
     local TRIGGER_COOLDOWN = 0.4
@@ -669,6 +663,7 @@ return function(C, R, UI)
             edgeGui.Parent = playerGui
         end
         if godOn then
+            if not godHB then enableGod() end
             task.delay(0.2, fireGod)
         end
         if infJumpOn and not infConn then
