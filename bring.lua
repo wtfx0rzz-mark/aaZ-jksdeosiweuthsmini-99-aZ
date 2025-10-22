@@ -11,7 +11,7 @@ return function(C, R, UI)
 
     -- timing
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 1.0
+    local PER_ITEM_DELAY        = 0.8
     local COLLIDE_OFF_SEC       = 0.22
 
     -- placement
