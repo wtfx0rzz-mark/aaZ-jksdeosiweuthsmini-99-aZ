@@ -9,19 +9,30 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
+    -- timing
     local AMOUNT_TO_BRING       = 100
     local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
 
+    -- placement
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 24
     local ORB_OFFSET_Y          = 20
 
+    -- chest bring/return
+    local RETURN_DELAY_SEC      = 20
+    local DIAMOND_SKIP_RADIUS   = 5
+    local broughtOnce    = setmetatable({}, {__mode="k"}) -- chests already brought at least once
+    local returningNow   = setmetatable({}, {__mode="k"}) -- chests currently out
+    local origCFByChest  = setmetatable({}, {__mode="k"}) -- original pivots
+
+    -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
+    -- data
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -41,6 +52,7 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
+    -- helpers
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -128,6 +140,7 @@ return function(C, R, UI)
         return list
     end
 
+    -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
@@ -219,6 +232,7 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
+    -- placement
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -257,6 +271,7 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
+    -- campfire helpers
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -291,6 +306,7 @@ return function(C, R, UI)
         return best
     end
 
+    -- flow timing
     local DRAG_SETTLE = 0.06
     local ACTION_HOLD = 0.12
     local CONSUME_WAIT = 1.0
@@ -307,6 +323,7 @@ return function(C, R, UI)
         return false
     end
 
+    -- flows
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -398,6 +415,58 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
+    -- chest helpers
+    local function isChestName(n)
+        n = string.lower(n or "")
+        return n:match("^item chest%d*$") or n:match("^snow chest%d*$")
+    end
+    local function getDiamondCenters()
+        local centers = {}
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") and string.lower(m.Name) == "stronghold diamond chest" then
+                local mp = mainPart(m)
+                if mp then centers[#centers+1] = mp.Position end
+            end
+        end
+        return centers
+    end
+    local function isNearAnyDiamond(pos, centers)
+        for _,p in ipairs(centers) do
+            if (p - pos).Magnitude <= DIAMOND_SKIP_RADIUS then return true end
+        end
+        return false
+    end
+    local function pickNextChest()
+        local root = hrp(); if not root then return nil end
+        local centers = getDiamondCenters()
+        local best, bestD
+        for _,m in ipairs(WS:GetDescendants()) do
+            if m:IsA("Model") and isChestName(m.Name) and not isExcludedModel(m) and not broughtOnce[m] and not returningNow[m] then
+                local mp = mainPart(m)
+                if mp and not isNearAnyDiamond(mp.Position, centers) then
+                    local d = (mp.Position - root.Position).Magnitude
+                    if not bestD or d < bestD then best, bestD = m, d end
+                end
+            end
+        end
+        return best
+    end
+    local function bringOneChest()
+        local chest = pickNextChest(); if not chest then return end
+        local dropCF = computeForwardDropCF(); if not dropCF then return end
+        origCFByChest[chest] = chest:GetPivot()
+        broughtOnce[chest]   = true
+        returningNow[chest]  = true
+        moveModel(chest, dropCF)
+        task.delay(RETURN_DELAY_SEC, function()
+            if chest and chest.Parent and origCFByChest[chest] then
+                moveModel(chest, origCFByChest[chest])
+            end
+            returningNow[chest] = nil
+        end)
+    end
+
+    -- actions
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -432,6 +501,7 @@ return function(C, R, UI)
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
+    -- per-dropdown bring to ground
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -455,6 +525,7 @@ return function(C, R, UI)
         end
     end
 
+    -- UI
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
@@ -498,4 +569,7 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts → Ground" })
     singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
     tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
+
+    -- bottom button
+    tab:Button({ Title = "Bring One Chest (20s)", Callback = bringOneChest })
 end
