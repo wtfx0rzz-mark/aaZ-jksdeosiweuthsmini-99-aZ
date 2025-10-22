@@ -21,12 +21,16 @@ return function(C, R, UI)
     local NEARBY_RADIUS         = 24
     local ORB_OFFSET_Y          = 20
 
+    -- sticky commit for server replication
+    local STICK_DURATION  = 0.35
+    local STICK_EXTRA_FR  = 2
+
     -- chest bring/return
-    local RETURN_DELAY_SEC      = 20
-    local DIAMOND_SKIP_RADIUS   = 5
-    local broughtOnce    = setmetatable({}, {__mode="k"}) -- chests already brought at least once
-    local returningNow   = setmetatable({}, {__mode="k"}) -- chests currently out
-    local origCFByChest  = setmetatable({}, {__mode="k"}) -- original pivots
+    local RETURN_DELAY_SEC    = 20
+    local DIAMOND_SKIP_RADIUS = 5
+    local broughtOnce   = setmetatable({}, {__mode="k"})
+    local returningNow  = setmetatable({}, {__mode="k"})
+    local origCFByChest = setmetatable({}, {__mode="k"})
 
     -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
@@ -140,6 +144,35 @@ return function(C, R, UI)
         return list
     end
 
+    -- ground helper for safe drop
+    local function groundBelow(pos, ignore)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = ignore or {lp.Character}
+        local rc = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
+        return rc and rc.Position or pos
+    end
+
+    -- sticky mover for whole models
+    local function pivotSticky(model, targetCF)
+        if not model or not model.Parent then return end
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        -- hard stick
+        local t0 = os.clock()
+        while os.clock() - t0 < STICK_DURATION do
+            if model.Parent then
+                pcall(function() model:PivotTo(targetCF) end)
+            end
+            Run.Heartbeat:Wait()
+        end
+        for _=1,STICK_EXTRA_FR do
+            if model.Parent then pcall(function() model:PivotTo(targetCF) end) end
+            Run.Heartbeat:Wait()
+        end
+        task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
+    end
+
     -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
@@ -240,6 +273,14 @@ return function(C, R, UI)
         local look = root.CFrame.LookVector
         local center = basePos + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0) + look * FALLBACK_AHEAD
         return CFrame.lookAt(center, center + look)
+    end
+
+    local function computeGroundDropCF()
+        local root = hrp(); if not root then return nil end
+        local ahead = root.Position + root.CFrame.LookVector * 3
+        local gpos  = groundBelow(ahead, {lp.Character})
+        local pos   = Vector3.new(ahead.X, gpos.Y + 2.5, ahead.Z)
+        return CFrame.new(pos, pos + root.CFrame.LookVector)
     end
 
     local function pivotOverTarget(model, target)
@@ -451,16 +492,17 @@ return function(C, R, UI)
         end
         return best
     end
+
     local function bringOneChest()
         local chest = pickNextChest(); if not chest then return end
-        local dropCF = computeForwardDropCF(); if not dropCF then return end
+        local dropCF = computeGroundDropCF() or computeForwardDropCF(); if not dropCF then return end
         origCFByChest[chest] = chest:GetPivot()
         broughtOnce[chest]   = true
         returningNow[chest]  = true
-        moveModel(chest, dropCF)
+        pivotSticky(chest, dropCF)
         task.delay(RETURN_DELAY_SEC, function()
             if chest and chest.Parent and origCFByChest[chest] then
-                moveModel(chest, origCFByChest[chest])
+                pivotSticky(chest, origCFByChest[chest])
             end
             returningNow[chest] = nil
         end)
