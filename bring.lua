@@ -2,29 +2,26 @@ return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
     local RS      = C.Services.RS
+    local Run     = C.Services.Run or game:GetService("RunService")
     local lp      = Players.LocalPlayer
 
     local Tabs = UI and UI.Tabs or {}
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- timing
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 1.0     -- steady global delay per item
+    local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
 
-    -- placement
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 24
     local ORB_OFFSET_Y          = 20
 
-    -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- data
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -36,7 +33,6 @@ return function(C, R, UI)
     local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
         junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
-    -- sets for top action buttons only
     local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
     for _,n in ipairs(junkItems) do junkSet[n] = true end
@@ -45,7 +41,6 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
-    -- helpers
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -58,8 +53,13 @@ return function(C, R, UI)
         if not (m and m:IsA("Model")) then return false end
         local n = m.Name:lower()
         if n == "pelt trader" then return true end
-        if n:find("trader") or n:find("shopkeeper") then return true end
+        if n:find("trader",1,true) or n:find("shopkeeper",1,true) then return true end
         return false
+    end
+    local function isWallVariant(m)
+        if not (m and m:IsA("Model")) then return false end
+        local n = (m.Name or ""):lower()
+        return n == "logwall" or n == "log wall" or (n:find("log",1,true) and n:find("wall",1,true))
     end
     local function hasHumanoid(model)
         if not (model and model:IsA("Model")) then return false end
@@ -92,13 +92,14 @@ return function(C, R, UI)
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
         return nil
     end
-    local StartDrag, BurnItem, CookItem, ScrapItem, StopDrag
     local function resolveRemotes()
-        StartDrag = StartDrag or getRemote("RequestStartDraggingItem","StartDraggingItem")
-        BurnItem  = BurnItem  or getRemote("RequestBurnItem","BurnItem","RequestFireAdd")
-        CookItem  = CookItem  or getRemote("RequestCookItem","CookItem")
-        ScrapItem = ScrapItem or getRemote("RequestScrapItem","ScrapItem","RequestWorkbenchScrap")
-        StopDrag  = StopDrag  or getRemote("StopDraggingItem","RequestStopDraggingItem")
+        return {
+            StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem"),
+            BurnItem  = getRemote("RequestBurnItem","BurnItem","RequestFireAdd"),
+            CookItem  = getRemote("RequestCookItem","CookItem"),
+            ScrapItem = getRemote("RequestScrapItem","ScrapItem","RequestWorkbenchScrap"),
+            StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
+        }
     end
 
     local function setCollide(model, on, snapshot)
@@ -127,18 +128,21 @@ return function(C, R, UI)
         return list
     end
 
-    -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) then
-                    local mp = mainPart(model)
-                    if mp then
-                        n = n + 1
-                        found[#found+1] = {model=model, part=mp}
-                        if limit and n >= limit then break end
+                    if name == "Log" and isWallVariant(model) then
+                        -- skip wall variants
+                    else
+                        local mp = mainPart(model)
+                        if mp then
+                            n += 1
+                            found[#found+1] = {model=model, part=mp}
+                            if limit and n >= limit then break end
+                        end
                     end
                 end
             end
@@ -153,7 +157,7 @@ return function(C, R, UI)
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
                     local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
                     if mp then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -169,7 +173,7 @@ return function(C, R, UI)
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
                     if mp then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -185,7 +189,7 @@ return function(C, R, UI)
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
                 local mp = mainPart(m)
                 if mp then
-                    n = n + 1
+                    n += 1
                     out[#out+1] = {model=m, part=mp}
                     if limit and n >= limit then break end
                 end
@@ -200,13 +204,13 @@ return function(C, R, UI)
                 local nm, ok = m.Name, false
                 ok = ok or (which=="Bunny Foot" and nm=="Bunny Foot")
                 ok = ok or (which=="Wolf Pelt" and nm=="Wolf Pelt")
-                ok = ok or (which=="Alpha Wolf Pelt" and nm:lower():find("alpha") and nm:lower():find("wolf"))
-                ok = ok or (which=="Bear Pelt" and nm:lower():find("bear") and not nm:lower():find("polar"))
+                ok = ok or (which=="Alpha Wolf Pelt" and nm:lower():find("alpha",1,true) and nm:lower():find("wolf",1,true))
+                ok = ok or (which=="Bear Pelt" and nm:lower():find("bear",1,true) and not nm:lower():find("polar",1,true))
                 ok = ok or (which=="Polar Bear Pelt" and nm=="Polar Bear Pelt")
                 if ok then
                     local mp = mainPart(m)
                     if mp then
-                        n = n + 1
+                        n += 1
                         out[#out+1] = {model=m, part=mp}
                         if limit and n >= limit then break end
                     end
@@ -216,7 +220,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- placement
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -236,8 +239,12 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    local function startDrag(model) resolveRemotes(); if StartDrag then pcall(function() StartDrag:FireServer(model) end) end end
-    local function stopDrag()     resolveRemotes(); if StopDrag then pcall(function() StopDrag:FireServer(Instance.new("Model")) end) end end
+    local function startDragRemote(r, model)
+        if r.StartDrag then pcall(function() r.StartDrag:FireServer(model) end) end
+    end
+    local function stopDragRemote(r)
+        if r.StopDrag then pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end) end
+    end
 
     local function moveModel(model, cf)
         local snap = setCollide(model, false)
@@ -246,7 +253,6 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    -- campfire helpers kept for top buttons only
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -281,25 +287,48 @@ return function(C, R, UI)
         return best
     end
 
-    -- flows for top action buttons
-    -- NON-FOOD: drop-only into the fire (no burn remote)
-    local function burnFlow(model, campfire)
-        resolveRemotes()
-        startDrag(model)
-        pivotOverTarget(model, campfire)  -- simple drop
-        stopDrag()
+    local DRAG_SETTLE = 0.06
+    local ACTION_HOLD = 0.12
+    local CONSUME_WAIT = 1.0
+
+    local function awaitConsumedOrMoved(model, timeout)
+        local t0 = os.clock()
+        local p0 = model and model.Parent or nil
+        while os.clock() - t0 < (timeout or 1) do
+            if not model or not model.Parent then return true end
+            if model.Parent ~= p0 then return true end
+            if model:GetAttribute("Consumed") == true then return true end
+            Run.Heartbeat:Wait()
+        end
+        return false
     end
 
-    -- FOOD: keep remote cook flow unchanged
+    local function burnFlow(model, campfire)
+        local r = resolveRemotes()
+        startDragRemote(r, model)
+        Run.Heartbeat:Wait()
+        task.wait(DRAG_SETTLE)
+        local ok = false
+        if r.BurnItem then ok = pcall(function() r.BurnItem:FireServer(campfire, Instance.new("Model")) end) end
+        if not ok then pivotOverTarget(model, campfire) end
+        task.wait(ACTION_HOLD)
+        local _ = awaitConsumedOrMoved(model, CONSUME_WAIT)
+        stopDragRemote(r)
+    end
+
     local function cookFlow(model, campfire)
-        resolveRemotes()
-        local cookedName = RAW_TO_COOKED[model.Name]
-        startDrag(model)
+        local r = resolveRemotes()
+        startDragRemote(r, model)
+        Run.Heartbeat:Wait()
+        task.wait(DRAG_SETTLE)
         moveModel(model, fireHandoffCF(campfire))
         local ok = false
-        if CookItem then ok = pcall(function() CookItem:FireServer(campfire, Instance.new("Model")) end) end
+        if r.CookItem then ok = pcall(function() r.CookItem:FireServer(campfire, Instance.new("Model")) end) end
         if not ok then pivotOverTarget(model, campfire) end
-        stopDrag()
+        task.wait(ACTION_HOLD)
+        local cookedName = RAW_TO_COOKED[model.Name]
+        local _ = awaitConsumedOrMoved(model, CONSUME_WAIT)
+        stopDragRemote(r)
         task.delay(0.15, function()
             if cookedName then
                 local cooked = findCookedNearFire(campfire, cookedName)
@@ -309,12 +338,16 @@ return function(C, R, UI)
     end
 
     local function scrapFlow(model, scrapper)
-        resolveRemotes()
-        startDrag(model)
+        local r = resolveRemotes()
+        startDragRemote(r, model)
+        Run.Heartbeat:Wait()
+        task.wait(DRAG_SETTLE)
         local ok = false
-        if ScrapItem then ok = pcall(function() ScrapItem:FireServer(scrapper, Instance.new("Model")) end) end
+        if r.ScrapItem then ok = pcall(function() r.ScrapItem:FireServer(scrapper, Instance.new("Model")) end) end
         if not ok then pivotOverTarget(model, scrapper) end
-        stopDrag()
+        task.wait(ACTION_HOLD)
+        local _ = awaitConsumedOrMoved(model, CONSUME_WAIT)
+        stopDragRemote(r)
     end
 
     local function dropNearPlayer(model)
@@ -340,10 +373,13 @@ return function(C, R, UI)
         local out = {}
         for _,d in ipairs(WS:GetDescendants()) do
             if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] then
-                local mp = mainPart(d)
-                if mp and (mp.Position - pos).Magnitude <= radius then
-                    out[#out+1] = d
-                    seen[d] = true
+                if d.Name == "Log" and isWallVariant(d) then
+                else
+                    local mp = mainPart(d)
+                    if mp and (mp.Position - pos).Magnitude <= radius then
+                        out[#out+1] = d
+                        seen[d] = true
+                    end
                 end
             end
         end
@@ -353,7 +389,6 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- top buttons: feed to machines (steady 1/sec, no jitter)
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -364,14 +399,9 @@ return function(C, R, UI)
             local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
             if #list == 0 then break end
             for _,m in ipairs(list) do
-                if cookSet[m.Name] then
-                    cookFlow(m, camp)   -- food: use remote cook
-                else
-                    burnFlow(m, camp)   -- non-food: drop-only
-                end
+                if cookSet[m.Name] then cookFlow(m, camp) else burnFlow(m, camp) end
                 task.wait(PER_ITEM_DELAY)
             end
-            -- no batch pause, keep steady cadence
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
@@ -389,12 +419,10 @@ return function(C, R, UI)
                 scrapFlow(m, scr)
                 task.wait(PER_ITEM_DELAY)
             end
-            -- no batch pause
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    -- per-dropdown button: ONLY drop near player. No routing.
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -418,7 +446,6 @@ return function(C, R, UI)
         end
     end
 
-    -- UI
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
