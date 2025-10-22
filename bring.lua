@@ -1,3 +1,4 @@
+```lua
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -25,12 +26,17 @@ return function(C, R, UI)
     local STICK_DURATION  = 0.35
     local STICK_EXTRA_FR  = 2
 
+    -- cluster move
+    local CLUSTER_RADIUS       = 8      -- include nearby siblings that carry inventory logic
+    local BIG_PART_MAX_EDGE    = 60     -- skip huge map parts
+
     -- chest bring/return
-    local RETURN_DELAY_SEC    = 20
-    local DIAMOND_SKIP_RADIUS = 5
-    local broughtOnce   = setmetatable({}, {__mode="k"})
-    local returningNow  = setmetatable({}, {__mode="k"})
-    local origCFByChest = setmetatable({}, {__mode="k"})
+    local RETURN_DELAY_SEC     = 20
+    local DIAMOND_SKIP_RADIUS  = 5
+    local broughtOnce    = setmetatable({}, {__mode="k"})
+    local returningNow   = setmetatable({}, {__mode="k"})
+    local origCFByChest  = setmetatable({}, {__mode="k"}) -- chest pivot only
+    local clusterByChest = setmetatable({}, {__mode="k"}) -- {inst->origCF}
 
     -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
@@ -144,7 +150,6 @@ return function(C, R, UI)
         return list
     end
 
-    -- ground helper for safe drop
     local function groundBelow(pos, ignore)
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -153,24 +158,83 @@ return function(C, R, UI)
         return rc and rc.Position or pos
     end
 
-    -- sticky mover for whole models
-    local function pivotSticky(model, targetCF)
-        if not model or not model.Parent then return end
-        local snap = setCollide(model, false)
-        zeroAssembly(model)
-        -- hard stick
+    -- cluster move
+    local function getPivotCF(inst)
+        if inst:IsA("Model") then return inst:GetPivot() end
+        if inst:IsA("BasePart") then return inst.CFrame end
+        return nil
+    end
+    local function setPivotCF(inst, cf)
+        if inst:IsA("Model") then pcall(function() inst:PivotTo(cf) end)
+        elseif inst:IsA("BasePart") then pcall(function() inst.CFrame = cf end) end
+    end
+    local function partSizeMaxEdge(p)
+        if not p or not p:IsA("BasePart") then return 0 end
+        return math.max(p.Size.X, math.max(p.Size.Y, p.Size.Z))
+    end
+    local function buildChestCluster(chest)
+        local mp = mainPart(chest); if not mp then return nil, nil end
+        local center = mp.Position
+        local cluster = {}
+        cluster[chest] = getPivotCF(chest)
+
+        for _,d in ipairs(WS:GetDescendants()) do
+            if d ~= chest and (d:IsA("Model") or d:IsA("BasePart")) and d.Parent then
+                local p = d:IsA("Model") and mainPart(d) or (d:IsA("BasePart") and d or nil)
+                if p then
+                    local dist = (p.Position - center).Magnitude
+                    if dist <= CLUSTER_RADIUS then
+                        if p:IsA("BasePart") and partSizeMaxEdge(p) > BIG_PART_MAX_EDGE then
+                            -- skip huge world pieces
+                        else
+                            cluster[d] = getPivotCF(d)
+                        end
+                    end
+                end
+            end
+        end
+        return cluster, cluster[chest]
+    end
+    local function stickyMoveCluster(cluster, chestOrigCF, targetChestCF)
+        if not (cluster and chestOrigCF and targetChestCF) then return end
+        local delta = targetChestCF * chestOrigCF:Inverse()
+
+        local collideSnap = {}
+        for inst,_ in pairs(cluster) do
+            if inst:IsA("Model") then
+                for _,p in ipairs(getAllParts(inst)) do
+                    collideSnap[p] = p.CanCollide
+                    p.CanCollide = false
+                    p.AssemblyLinearVelocity  = Vector3.new()
+                    p.AssemblyAngularVelocity = Vector3.new()
+                end
+            elseif inst:IsA("BasePart") then
+                collideSnap[inst] = inst.CanCollide
+                inst.CanCollide = false
+                inst.AssemblyLinearVelocity  = Vector3.new()
+                inst.AssemblyAngularVelocity = Vector3.new()
+            end
+        end
+
         local t0 = os.clock()
         while os.clock() - t0 < STICK_DURATION do
-            if model.Parent then
-                pcall(function() model:PivotTo(targetCF) end)
+            for inst, origCF in pairs(cluster) do
+                setPivotCF(inst, delta * origCF)
             end
             Run.Heartbeat:Wait()
         end
         for _=1,STICK_EXTRA_FR do
-            if model.Parent then pcall(function() model:PivotTo(targetCF) end) end
+            for inst, origCF in pairs(cluster) do
+                setPivotCF(inst, delta * origCF)
+            end
             Run.Heartbeat:Wait()
         end
-        task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
+
+        task.delay(COLLIDE_OFF_SEC, function()
+            for p,can in pairs(collideSnap) do
+                if p and p.Parent then p.CanCollide = can end
+            end
+        end)
     end
 
     -- collectors
@@ -274,7 +338,6 @@ return function(C, R, UI)
         local center = basePos + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0) + look * FALLBACK_AHEAD
         return CFrame.lookAt(center, center + look)
     end
-
     local function computeGroundDropCF()
         local root = hrp(); if not root then return nil end
         local ahead = root.Position + root.CFrame.LookVector * 3
@@ -496,13 +559,19 @@ return function(C, R, UI)
     local function bringOneChest()
         local chest = pickNextChest(); if not chest then return end
         local dropCF = computeGroundDropCF() or computeForwardDropCF(); if not dropCF then return end
-        origCFByChest[chest] = chest:GetPivot()
-        broughtOnce[chest]   = true
-        returningNow[chest]  = true
-        pivotSticky(chest, dropCF)
+
+        -- build a cluster so inventory-hitboxes/logic move with the shell
+        local cluster, chestOrigCF = buildChestCluster(chest); if not cluster then return end
+        origCFByChest[chest]  = chestOrigCF
+        clusterByChest[chest] = cluster
+        broughtOnce[chest]    = true
+        returningNow[chest]   = true
+
+        stickyMoveCluster(cluster, chestOrigCF, dropCF)
+
         task.delay(RETURN_DELAY_SEC, function()
-            if chest and chest.Parent and origCFByChest[chest] then
-                pivotSticky(chest, origCFByChest[chest])
+            if chest and chest.Parent and origCFByChest[chest] and clusterByChest[chest] then
+                stickyMoveCluster(clusterByChest[chest], clusterByChest[chest][chest], origCFByChest[chest])
             end
             returningNow[chest] = nil
         end)
@@ -615,3 +684,4 @@ return function(C, R, UI)
     -- bottom button
     tab:Button({ Title = "Bring One Chest (20s)", Callback = bringOneChest })
 end
+```
