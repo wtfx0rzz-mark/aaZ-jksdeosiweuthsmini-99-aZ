@@ -21,13 +21,6 @@ return function(C, R, UI)
     local NEARBY_RADIUS         = 24
     local ORB_OFFSET_Y          = 20
 
-    -- chest bring/return
-    local RETURN_DELAY_SEC      = 20
-    local DIAMOND_SKIP_RADIUS   = 5
-    local broughtOnce    = setmetatable({}, {__mode="k"}) -- chests already brought at least once
-    local returningNow   = setmetatable({}, {__mode="k"}) -- chests currently out
-    local origCFByChest  = setmetatable({}, {__mode="k"}) -- original pivots
-
     -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
@@ -148,6 +141,7 @@ return function(C, R, UI)
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) then
                     if name == "Log" and isWallVariant(model) then
+                        -- skip walls
                     else
                         local mp = mainPart(model)
                         if mp then
@@ -307,8 +301,8 @@ return function(C, R, UI)
     end
 
     -- flow timing
-    local DRAG_SETTLE = 0.06
-    local ACTION_HOLD = 0.12
+    local DRAG_SETTLE  = 0.06
+    local ACTION_HOLD  = 0.12
     local CONSUME_WAIT = 1.0
 
     local function awaitConsumedOrMoved(model, timeout)
@@ -400,6 +394,7 @@ return function(C, R, UI)
         for _,d in ipairs(WS:GetDescendants()) do
             if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] then
                 if d.Name == "Log" and isWallVariant(d) then
+                    -- skip LogWall variants
                 else
                     local mp = mainPart(d)
                     if mp and (mp.Position - pos).Magnitude <= radius then
@@ -413,57 +408,6 @@ return function(C, R, UI)
     end
     local function mergedSet(a, b)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
-    end
-
-    -- chest helpers
-    local function isChestName(n)
-        n = string.lower(n or "")
-        return n:match("^item chest%d*$") or n:match("^snow chest%d*$")
-    end
-    local function getDiamondCenters()
-        local centers = {}
-        for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and string.lower(m.Name) == "stronghold diamond chest" then
-                local mp = mainPart(m)
-                if mp then centers[#centers+1] = mp.Position end
-            end
-        end
-        return centers
-    end
-    local function isNearAnyDiamond(pos, centers)
-        for _,p in ipairs(centers) do
-            if (p - pos).Magnitude <= DIAMOND_SKIP_RADIUS then return true end
-        end
-        return false
-    end
-    local function pickNextChest()
-        local root = hrp(); if not root then return nil end
-        local centers = getDiamondCenters()
-        local best, bestD
-        for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and isChestName(m.Name) and not isExcludedModel(m) and not broughtOnce[m] and not returningNow[m] then
-                local mp = mainPart(m)
-                if mp and not isNearAnyDiamond(mp.Position, centers) then
-                    local d = (mp.Position - root.Position).Magnitude
-                    if not bestD or d < bestD then best, bestD = m, d end
-                end
-            end
-        end
-        return best
-    end
-    local function bringOneChest()
-        local chest = pickNextChest(); if not chest then return end
-        local dropCF = computeForwardDropCF(); if not dropCF then return end
-        origCFByChest[chest] = chest:GetPivot()
-        broughtOnce[chest]   = true
-        returningNow[chest]  = true
-        moveModel(chest, dropCF)
-        task.delay(RETURN_DELAY_SEC, function()
-            if chest and chest.Parent and origCFByChest[chest] then
-                moveModel(chest, origCFByChest[chest])
-            end
-            returningNow[chest] = nil
-        end)
     end
 
     -- actions
@@ -569,7 +513,4 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts → Ground" })
     singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
     tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
-
-    -- bottom button
-    tab:Button({ Title = "Bring One Chest (20s)", Callback = bringOneChest })
 end
