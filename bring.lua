@@ -9,39 +9,19 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- timing
     local AMOUNT_TO_BRING       = 100
     local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
 
-    -- placement
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 24
     local ORB_OFFSET_Y          = 20
 
-    -- sticky commit for server replication
-    local STICK_DURATION  = 0.35
-    local STICK_EXTRA_FR  = 2
-
-    -- cluster move
-    local CLUSTER_RADIUS       = 8      -- include nearby siblings that carry inventory logic
-    local BIG_PART_MAX_EDGE    = 60     -- skip huge map parts
-
-    -- chest bring/return
-    local RETURN_DELAY_SEC     = 20
-    local DIAMOND_SKIP_RADIUS  = 5
-    local broughtOnce    = setmetatable({}, {__mode="k"})
-    local returningNow   = setmetatable({}, {__mode="k"})
-    local origCFByChest  = setmetatable({}, {__mode="k"}) -- chest pivot only
-    local clusterByChest = setmetatable({}, {__mode="k"}) -- {inst->origCF}
-
-    -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- data
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -61,7 +41,6 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
-    -- helpers
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -149,94 +128,6 @@ return function(C, R, UI)
         return list
     end
 
-    local function groundBelow(pos, ignore)
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = ignore or {lp.Character}
-        local rc = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
-        return rc and rc.Position or pos
-    end
-
-    -- cluster move
-    local function getPivotCF(inst)
-        if inst:IsA("Model") then return inst:GetPivot() end
-        if inst:IsA("BasePart") then return inst.CFrame end
-        return nil
-    end
-    local function setPivotCF(inst, cf)
-        if inst:IsA("Model") then pcall(function() inst:PivotTo(cf) end)
-        elseif inst:IsA("BasePart") then pcall(function() inst.CFrame = cf end) end
-    end
-    local function partSizeMaxEdge(p)
-        if not p or not p:IsA("BasePart") then return 0 end
-        return math.max(p.Size.X, math.max(p.Size.Y, p.Size.Z))
-    end
-    local function buildChestCluster(chest)
-        local mp = mainPart(chest); if not mp then return nil, nil end
-        local center = mp.Position
-        local cluster = {}
-        cluster[chest] = getPivotCF(chest)
-
-        for _,d in ipairs(WS:GetDescendants()) do
-            if d ~= chest and (d:IsA("Model") or d:IsA("BasePart")) and d.Parent then
-                local p = d:IsA("Model") and mainPart(d) or (d:IsA("BasePart") and d or nil)
-                if p then
-                    local dist = (p.Position - center).Magnitude
-                    if dist <= CLUSTER_RADIUS then
-                        if p:IsA("BasePart") and partSizeMaxEdge(p) > BIG_PART_MAX_EDGE then
-                            -- skip huge world pieces
-                        else
-                            cluster[d] = getPivotCF(d)
-                        end
-                    end
-                end
-            end
-        end
-        return cluster, cluster[chest]
-    end
-    local function stickyMoveCluster(cluster, chestOrigCF, targetChestCF)
-        if not (cluster and chestOrigCF and targetChestCF) then return end
-        local delta = targetChestCF * chestOrigCF:Inverse()
-
-        local collideSnap = {}
-        for inst,_ in pairs(cluster) do
-            if inst:IsA("Model") then
-                for _,p in ipairs(getAllParts(inst)) do
-                    collideSnap[p] = p.CanCollide
-                    p.CanCollide = false
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
-                end
-            elseif inst:IsA("BasePart") then
-                collideSnap[inst] = inst.CanCollide
-                inst.CanCollide = false
-                inst.AssemblyLinearVelocity  = Vector3.new()
-                inst.AssemblyAngularVelocity = Vector3.new()
-            end
-        end
-
-        local t0 = os.clock()
-        while os.clock() - t0 < STICK_DURATION do
-            for inst, origCF in pairs(cluster) do
-                setPivotCF(inst, delta * origCF)
-            end
-            Run.Heartbeat:Wait()
-        end
-        for _=1,STICK_EXTRA_FR do
-            for inst, origCF in pairs(cluster) do
-                setPivotCF(inst, delta * origCF)
-            end
-            Run.Heartbeat:Wait()
-        end
-
-        task.delay(COLLIDE_OFF_SEC, function()
-            for p,can in pairs(collideSnap) do
-                if p and p.Parent then p.CanCollide = can end
-            end
-        end)
-    end
-
-    -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
@@ -328,7 +219,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- placement
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -336,13 +226,6 @@ return function(C, R, UI)
         local look = root.CFrame.LookVector
         local center = basePos + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0) + look * FALLBACK_AHEAD
         return CFrame.lookAt(center, center + look)
-    end
-    local function computeGroundDropCF()
-        local root = hrp(); if not root then return nil end
-        local ahead = root.Position + root.CFrame.LookVector * 3
-        local gpos  = groundBelow(ahead, {lp.Character})
-        local pos   = Vector3.new(ahead.X, gpos.Y + 2.5, ahead.Z)
-        return CFrame.new(pos, pos + root.CFrame.LookVector)
     end
 
     local function pivotOverTarget(model, target)
@@ -374,7 +257,6 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    -- campfire helpers
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -409,7 +291,6 @@ return function(C, R, UI)
         return best
     end
 
-    -- flow timing
     local DRAG_SETTLE = 0.06
     local ACTION_HOLD = 0.12
     local CONSUME_WAIT = 1.0
@@ -426,7 +307,6 @@ return function(C, R, UI)
         return false
     end
 
-    -- flows
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -518,65 +398,6 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- chest helpers
-    local function isChestName(n)
-        n = string.lower(n or "")
-        return n:match("^item chest%d*$") or n:match("^snow chest%d*$")
-    end
-    local function getDiamondCenters()
-        local centers = {}
-        for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and string.lower(m.Name) == "stronghold diamond chest" then
-                local mp = mainPart(m)
-                if mp then centers[#centers+1] = mp.Position end
-            end
-        end
-        return centers
-    end
-    local function isNearAnyDiamond(pos, centers)
-        for _,p in ipairs(centers) do
-            if (p - pos).Magnitude <= DIAMOND_SKIP_RADIUS then return true end
-        end
-        return false
-    end
-    local function pickNextChest()
-        local root = hrp(); if not root then return nil end
-        local centers = getDiamondCenters()
-        local best, bestD
-        for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and isChestName(m.Name) and not isExcludedModel(m) and not broughtOnce[m] and not returningNow[m] then
-                local mp = mainPart(m)
-                if mp and not isNearAnyDiamond(mp.Position, centers) then
-                    local d = (mp.Position - root.Position).Magnitude
-                    if not bestD or d < bestD then best, bestD = m, d end
-                end
-            end
-        end
-        return best
-    end
-
-    local function bringOneChest()
-        local chest = pickNextChest(); if not chest then return end
-        local dropCF = computeGroundDropCF() or computeForwardDropCF(); if not dropCF then return end
-
-        -- build a cluster so inventory-hitboxes/logic move with the shell
-        local cluster, chestOrigCF = buildChestCluster(chest); if not cluster then return end
-        origCFByChest[chest]  = chestOrigCF
-        clusterByChest[chest] = cluster
-        broughtOnce[chest]    = true
-        returningNow[chest]   = true
-
-        stickyMoveCluster(cluster, chestOrigCF, dropCF)
-
-        task.delay(RETURN_DELAY_SEC, function()
-            if chest and chest.Parent and origCFByChest[chest] and clusterByChest[chest] then
-                stickyMoveCluster(clusterByChest[chest], clusterByChest[chest][chest], origCFByChest[chest])
-            end
-            returningNow[chest] = nil
-        end)
-    end
-
-    -- actions
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -611,7 +432,6 @@ return function(C, R, UI)
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    -- per-dropdown bring to ground
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -635,7 +455,6 @@ return function(C, R, UI)
         end
     end
 
-    -- UI
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
@@ -679,7 +498,4 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts → Ground" })
     singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
     tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
-
-    -- bottom button
-    tab:Button({ Title = "Bring One Chest (20s)", Callback = bringOneChest })
 end
