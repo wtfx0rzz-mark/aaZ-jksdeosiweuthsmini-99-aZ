@@ -135,7 +135,6 @@ return function(C, R, UI)
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) then
                     if name == "Log" and isWallVariant(model) then
-                        -- skip wall variants
                     else
                         local mp = mainPart(model)
                         if mp then
@@ -240,10 +239,15 @@ return function(C, R, UI)
     end
 
     local function startDragRemote(r, model)
-        if r.StartDrag then pcall(function() r.StartDrag:FireServer(model) end) end
+        if r.StartDrag then
+            pcall(function() r.StartDrag:FireServer(model) end)
+            pcall(function() r.StartDrag:FireServer(Instance.new("Model")) end)
+        end
     end
     local function stopDragRemote(r)
-        if r.StopDrag then pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end) end
+        if r.StopDrag then
+            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
+        end
     end
 
     local function moveModel(model, cf)
@@ -308,10 +312,9 @@ return function(C, R, UI)
         startDragRemote(r, model)
         Run.Heartbeat:Wait()
         task.wait(DRAG_SETTLE)
-        local ok = false
-        if r.BurnItem then ok = pcall(function() r.BurnItem:FireServer(campfire, Instance.new("Model")) end) end
-        if not ok then pivotOverTarget(model, campfire) end
+        pivotOverTarget(model, campfire)
         task.wait(ACTION_HOLD)
+        if r.BurnItem then pcall(function() r.BurnItem:FireServer(campfire, Instance.new("Model")) end) end
         local _ = awaitConsumedOrMoved(model, CONSUME_WAIT)
         stopDragRemote(r)
     end
@@ -337,11 +340,17 @@ return function(C, R, UI)
         end)
     end
 
+    local function scrCenterCF(scr)
+        local p = mainPart(scr) or scr.PrimaryPart
+        return (p and p.CFrame) or scr:GetPivot()
+    end
+
     local function scrapFlow(model, scrapper)
         local r = resolveRemotes()
         startDragRemote(r, model)
         Run.Heartbeat:Wait()
         task.wait(DRAG_SETTLE)
+        moveModel(model, scrCenterCF(scrapper) + Vector3.new(0, 1.5, 0))
         local ok = false
         if r.ScrapItem then ok = pcall(function() r.ScrapItem:FireServer(scrapper, Instance.new("Model")) end) end
         if not ok then pivotOverTarget(model, scrapper) end
