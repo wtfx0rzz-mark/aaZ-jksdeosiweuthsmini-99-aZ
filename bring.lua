@@ -1,4 +1,3 @@
-```lua
 return function(C, R, UI)
     local Players = C.Services.Players
     local WS      = C.Services.WS
@@ -684,4 +683,3 @@ return function(C, R, UI)
     -- bottom button
     tab:Button({ Title = "Bring One Chest (20s)", Callback = bringOneChest })
 end
-```
