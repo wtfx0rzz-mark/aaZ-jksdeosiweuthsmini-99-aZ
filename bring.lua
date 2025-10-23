@@ -11,14 +11,14 @@ return function(C, R, UI)
 
     -- timing
     local AMOUNT_TO_BRING       = 100
-    local PER_ITEM_DELAY        = 0.8
+    local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
 
     -- placement
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
-    local NEARBY_RADIUS         = 24
+    local NEARBY_RADIUS         = 20
     local ORB_OFFSET_Y          = 20
 
     -- paths
