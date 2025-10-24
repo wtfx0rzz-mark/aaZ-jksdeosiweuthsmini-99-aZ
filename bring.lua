@@ -30,9 +30,6 @@ return function(C, R, UI)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
-    local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
-        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
-
     local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
     for _,n in ipairs(junkItems) do junkSet[n] = true end
@@ -58,9 +55,6 @@ return function(C, R, UI)
         local cur = inst
         while cur and cur ~= WS do
             local nm = (cur.Name or ""):lower()
-            if nm == "structures" then
-                -- keep scanning; workspace.Structures is the typical container
-            end
             if nm == "logwall" or nm == "log wall" or (nm:find("log",1,true) and nm:find("wall",1,true)) then
                 return true
             end
@@ -471,14 +465,78 @@ return function(C, R, UI)
         end
     end
 
-    local function singleSelectDropdown(args)
+    -- === Multi-select + fast bring-to-ground (no change to top two buttons) ===
+    local function setFromChoice(choice)
+        local s = {}
+        if type(choice) == "table" then
+            for _,v in ipairs(choice) do if v and v ~= "" then s[v]=true end end
+        elseif choice and choice ~= "" then
+            s[choice] = true
+        end
+        return s
+    end
+
+    local function nameMatches(selectedSet, nm)
+        if selectedSet[nm] then return true end
+        local l = nm:lower()
+        if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
+        if selectedSet["Cultist"] and l:find("cultist",1,true) then return true end
+        if selectedSet["Sapling"] and nm == "Sapling" then return true end
+        if selectedSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then return true end
+        if selectedSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then return true end
+        if selectedSet["Wolf Pelt"] and nm == "Wolf Pelt" then return true end
+        if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
+        if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
+        return false
+    end
+
+    local function fastBringToGround(selectedSet)
+        if not selectedSet or next(selectedSet) == nil then return end
+        local root = hrp(); if not root then return end
+        local perNameCount = {}
+        local seenModel = {}
+        local queue = {}
+        for _,d in ipairs(WS:GetDescendants()) do
+            local m
+            if d:IsA("Model") then
+                m = d
+            elseif d:IsA("BasePart") and d.Parent and d.Parent:IsA("Model") then
+                m = d.Parent
+            end
+            if m and not seenModel[m] then
+                seenModel[m] = true
+                if not isExcludedModel(m) and not isUnderLogWall(m) then
+                    local nm = m.Name
+                    if not (nm == "Log" and isWallVariant(m)) then
+                        if nameMatches(selectedSet, nm) then
+                            perNameCount[nm] = (perNameCount[nm] or 0) + 1
+                            if perNameCount[nm] <= AMOUNT_TO_BRING then
+                                local mp = mainPart(m)
+                                if mp then queue[#queue+1] = m end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        for i=1,#queue do
+            dropNearPlayer(queue[i])
+            if i % 25 == 0 then Run.Heartbeat:Wait() end
+        end
+    end
+
+    local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
+        {},{},{},{},{},{},{}
+
+    local function multiSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
             Values = args.values,
-            Multi = false,
-            AllowNone = false,
+            Multi = true,
+            AllowNone = true,
             Callback = function(choice)
-                if choice and choice ~= "" then args.setter(choice) end
+                local s = setFromChoice(choice)
+                args.setter(s)
             end
         })
     end
@@ -487,31 +545,31 @@ return function(C, R, UI)
     tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
-    tab:Section({ Title = "Junk → Ground" })
-    singleSelectDropdown({ title = "Select Junk Item", values = junkItems, setter = function(v) selJunk = v end })
-    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selJunk, AMOUNT_TO_BRING) end })
+    tab:Section({ Title = "Junk → Ground (Multi)" })
+    multiSelectDropdown({ title = "Select Junk Items", values = junkItems, setter = function(s) selJunkMany = s end })
+    tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selJunkMany) end })
 
-    tab:Section({ Title = "Fuel → Ground" })
-    singleSelectDropdown({ title = "Select Fuel Item", values = fuelItems, setter = function(v) selFuel = v end })
-    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selFuel, AMOUNT_TO_BRING) end })
+    tab:Section({ Title = "Fuel → Ground (Multi)" })
+    multiSelectDropdown({ title = "Select Fuel Items", values = fuelItems, setter = function(s) selFuelMany = s end })
+    tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selFuelMany) end })
 
-    tab:Section({ Title = "Food → Ground" })
-    singleSelectDropdown({ title = "Select Food Item", values = foodItems, setter = function(v) selFood = v end })
-    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selFood, AMOUNT_TO_BRING) end })
+    tab:Section({ Title = "Food → Ground (Multi)" })
+    multiSelectDropdown({ title = "Select Food Items", values = foodItems, setter = function(s) selFoodMany = s end })
+    tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selFoodMany) end })
 
-    tab:Section({ Title = "Medical → Ground" })
-    singleSelectDropdown({ title = "Select Medical Item", values = medicalItems, setter = function(v) selMedical = v end })
-    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selMedical, AMOUNT_TO_BRING) end })
+    tab:Section({ Title = "Medical → Ground (Multi)" })
+    multiSelectDropdown({ title = "Select Medical Items", values = medicalItems, setter = function(s) selMedicalMany = s end })
+    tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selMedicalMany) end })
 
-    tab:Section({ Title = "Weapons/Armor → Ground" })
-    singleSelectDropdown({ title = "Select Weapon/Armor", values = weaponsArmor, setter = function(v) selWA = v end })
-    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selWA, AMOUNT_TO_BRING) end })
+    tab:Section({ Title = "Weapons/Armor → Ground (Multi)" })
+    multiSelectDropdown({ title = "Select Weapons/Armor", values = weaponsArmor, setter = function(s) selWAMany = s end })
+    tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selWAMany) end })
 
-    tab:Section({ Title = "Ammo & Misc → Ground" })
-    singleSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(v) selMisc = v end })
-    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
+    tab:Section({ Title = "Ammo & Misc → Ground (Multi)" })
+    multiSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(s) selMiscMany = s end })
+    tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selMiscMany) end })
 
-    tab:Section({ Title = "Pelts → Ground" })
-    singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
-    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
+    tab:Section({ Title = "Pelts → Ground (Multi)" })
+    multiSelectDropdown({ title = "Select Pelts", values = pelts, setter = function(s) selPeltMany = s end })
+    tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selPeltMany) end })
 end
