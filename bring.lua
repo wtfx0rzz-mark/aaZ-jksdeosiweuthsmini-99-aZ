@@ -372,36 +372,50 @@ return function(C, R, UI)
     local function ensureDynamic(model)
         for _,p in ipairs(getAllParts(model)) do
             p.Anchored = false
+            p.Massless = false
         end
     end
 
     local dropCounter = 0
-    local function nextSpiralCF()
-        local base = computeForwardDropCF(); if not base then return nil end
+    local function ringOffset()
         dropCounter += 1
         local i = dropCounter
-        local ang = i * 2.399963229728653
-        local r = 2.5 + 0.35 * i
-        return base * CFrame.new(math.cos(ang) * r, 0, math.sin(ang) * r)
+        local a = i * 2.399963229728653
+        local r = 4 + 0.45 * i
+        return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
+    end
+
+    local function groundCFAroundPlayer(model)
+        local root = hrp(); if not root then return nil end
+        local mp = mainPart(model); if not mp then return nil end
+        local offset = ringOffset()
+        local origin = root.Position + offset + Vector3.new(0, 60, 0)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local ignore = {lp.Character, model}
+        params.FilterDescendantsInstances = ignore
+        local res = WS:Raycast(origin, Vector3.new(0, -2000, 0), params)
+        local y = res and res.Position.Y or (root.Position.Y - 3)
+        local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.1) or 1
+        local pos = Vector3.new(origin.X, y + h, origin.Z)
+        local look = root.CFrame.LookVector
+        return CFrame.lookAt(pos, pos + look)
     end
 
     local function dropNearPlayer(model)
-        local cf = nextSpiralCF(); if not cf then return end
         ensureDynamic(model)
-        local snap = setCollide(model, false)
         zeroAssembly(model)
+        local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
+        local snap = setCollide(model, false)
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
             local p = mainPart(model); if p then p.CFrame = cf end
         end
-        local dv = -math.random(18,28)
-        local hx = math.random(-4,4)
-        local hz = math.random(-4,4)
         for _,p in ipairs(getAllParts(model)) do
-            p.AssemblyLinearVelocity = Vector3.new(hx, dv, hz)
+            p.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
         end
-        task.delay(0.08, function() setCollide(model, true, snap) end)
+        task.delay(0.03, function() setCollide(model, true, snap) end)
     end
 
     local function makeOrb(cf, name)
