@@ -19,10 +19,10 @@ return function(C, R, UI)
     local NEARBY_RADIUS         = 20
     local ORB_OFFSET_Y          = 20
 
-    -- tight cluster controls (keep items close every run)
-    local CLUSTER_RADIUS_MIN = 0.75     -- start radius in studs
-    local CLUSTER_RADIUS_STEP = 0.04    -- growth per item
-    local CLUSTER_RADIUS_MAX  = 2.25    -- cap radius
+    -- tight cluster around player
+    local CLUSTER_RADIUS_MIN  = 0.75
+    local CLUSTER_RADIUS_STEP = 0.04
+    local CLUSTER_RADIUS_MAX  = 2.25
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
@@ -143,9 +143,11 @@ return function(C, R, UI)
         return list
     end
 
+    -- search helpers (generic)
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
-        for _,d in ipairs(WS:GetDescendants()) do
+        local root = WS:FindFirstChild("Items") or WS
+        for _,d in ipairs(root:GetDescendants()) do
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) and not isUnderLogWall(model) then
@@ -165,7 +167,8 @@ return function(C, R, UI)
     end
     local function collectMossyCoins(limit)
         local out, n = {}, 0
-        for _,m in ipairs(WS:GetDescendants()) do
+        local root = WS:FindFirstChild("Items") or WS
+        for _,m in ipairs(root:GetDescendants()) do
             if m:IsA("Model") and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local nm = m.Name
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
@@ -182,7 +185,8 @@ return function(C, R, UI)
     end
     local function collectCultists(limit)
         local out, n = {}, 0
-        for _,m in ipairs(WS:GetDescendants()) do
+        local root = WS:FindFirstChild("Items") or WS
+        for _,m in ipairs(root:GetDescendants()) do
             if m:IsA("Model") and m.Name:lower():find("cultist",1,true) and not isExcludedModel(m) and not isUnderLogWall(m) then
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
@@ -213,7 +217,8 @@ return function(C, R, UI)
     end
     local function collectPelts(which, limit)
         local out, n = {}, 0
-        for _,m in ipairs(WS:GetDescendants()) do
+        local root = WS:FindFirstChild("Items") or WS
+        for _,m in ipairs(root:GetDescendants()) do
             if m:IsA("Model") and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local nm, ok = m.Name, false
                 ok = ok or (which=="Bunny Foot" and nm=="Bunny Foot")
@@ -322,6 +327,7 @@ return function(C, R, UI)
         return false
     end
 
+    -- campfire and scrapper flows (unchanged)
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -333,7 +339,6 @@ return function(C, R, UI)
         local _ = awaitConsumedOrMoved(model, CONSUME_WAIT)
         stopDragRemote(r)
     end
-
     local function cookFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -354,12 +359,10 @@ return function(C, R, UI)
             end
         end)
     end
-
     local function scrCenterCF(scr)
         local p = mainPart(scr) or scr.PrimaryPart
         return (p and p.CFrame) or scr:GetPivot()
     end
-
     local function scrapFlow(model, scrapper)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -374,53 +377,57 @@ return function(C, R, UI)
         stopDragRemote(r)
     end
 
-    local function ensureDynamic(model)
-        for _,p in ipairs(getAllParts(model)) do
-            p.Anchored = false
-            p.Massless = false
-        end
-    end
-
+    -- === Ground placement: direct-to-ground, no midair pause ===
     local dropCounter = 0
     local function ringOffset()
         dropCounter += 1
         local i = dropCounter
-        local a = i * 2.399963229728653 -- golden angle
+        local a = i * 2.399963229728653
         local r = math.min(CLUSTER_RADIUS_MIN + CLUSTER_RADIUS_STEP * (i - 1), CLUSTER_RADIUS_MAX)
         return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
     end
 
     local function groundCFAroundPlayer(model)
         local root = hrp(); if not root then return nil end
+        local head = headPart()
+        local basePos = head and head.Position or root.Position
         local mp = mainPart(model); if not mp then return nil end
         local offset = ringOffset()
-        local origin = root.Position + offset + Vector3.new(0, 30, 0)
+        local castFrom = basePos + offset
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
-        local ignore = {lp.Character, model}
-        params.FilterDescendantsInstances = ignore
-        local res = WS:Raycast(origin, Vector3.new(0, -2000, 0), params)
+        params.FilterDescendantsInstances = {lp.Character, model}
+        local res = WS:Raycast(castFrom, Vector3.new(0, -2000, 0), params)
         local y = res and res.Position.Y or (root.Position.Y - 3)
-        local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.1) or 1
-        local pos = Vector3.new(origin.X, y + h, origin.Z)
+        local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
+        local pos = Vector3.new(castFrom.X, y + h, castFrom.Z)
         local look = root.CFrame.LookVector
         return CFrame.lookAt(pos, pos + look)
+    end
+
+    local function ensureDynamic(model)
+        for _,p in ipairs(getAllParts(model)) do
+            p.Anchored = false
+            p.Massless = false
+            p.CanCollide = true
+        end
     end
 
     local function dropNearPlayer(model)
         ensureDynamic(model)
         zeroAssembly(model)
         local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
-        local snap = setCollide(model, false)
+        -- direct place on ground, keep collisions enabled, no delayed toggle
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
             local p = mainPart(model); if p then p.CFrame = cf end
         end
+        -- tiny outward nudge to reduce overlap
         for _,p in ipairs(getAllParts(model)) do
-            p.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
+            p.AssemblyLinearVelocity = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
         end
-        task.delay(0.03, function() setCollide(model, true, snap) end)
     end
 
     local function makeOrb(cf, name)
@@ -453,6 +460,7 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
+    -- top two actions unchanged
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -469,7 +477,6 @@ return function(C, R, UI)
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
-
     local function scrapNearby()
         local scr = SCRAPPER_PATH; if not scr then return end
         local root = hrp(); if not root then return end
@@ -488,7 +495,7 @@ return function(C, R, UI)
     end
 
     local function bringSelected(name, count)
-        dropCounter = 0 -- reset cluster each run
+        dropCounter = 0
         local want = tonumber(count) or 0
         if want <= 0 then return end
         local list
@@ -535,13 +542,18 @@ return function(C, R, UI)
         return false
     end
 
+    -- fast bring limited to workspace.Items only
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
-        dropCounter = 0 -- reset cluster each run
+        dropCounter = 0
         local perNameCount = {}
         local seenModel = {}
         local queue = {}
-        for _,d in ipairs(WS:GetDescendants()) do
+
+        local itemsFolder = WS:FindFirstChild("Items")
+        if not itemsFolder then return end
+
+        for _,d in ipairs(itemsFolder:GetDescendants()) do
             local m
             if d:IsA("Model") then
                 m = d
@@ -564,6 +576,7 @@ return function(C, R, UI)
                 end
             end
         end
+
         for i=1,#queue do
             dropNearPlayer(queue[i])
             if i % 25 == 0 then Run.Heartbeat:Wait() end
