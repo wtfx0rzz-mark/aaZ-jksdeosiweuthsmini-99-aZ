@@ -9,20 +9,24 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
+    -- timing
     local AMOUNT_TO_BRING        = 100
-    local PER_ITEM_DELAY         = 1.0
-    local BRING_PER_ITEM_DELAY   = 0.15
+    local PER_ITEM_DELAY         = 1.0         -- keep for campfire/scrapper flows
+    local BRING_PER_ITEM_DELAY   = 0.15        -- faster for bring-to-ground only
     local COLLIDE_OFF_SEC        = 0.22
 
+    -- placement
     local DROP_ABOVE_HEAD_STUDS  = 10
     local FALLBACK_UP            = 5
     local FALLBACK_AHEAD         = 2
     local NEARBY_RADIUS          = 20
     local ORB_OFFSET_Y           = 20
 
+    -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
+    -- data
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -31,11 +35,15 @@ return function(C, R, UI)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
+    -- multi-select holders
     local selJunkList, selFuelList, selFoodList, selMedicalList, selWAList, selMiscList, selPeltList =
         {}, {}, {}, {}, {}, {}, {}
 
+    local function resetList(t)
+        for i=#t,1,-1 do t[i] = nil end
+    end
     local function normalizeSelection(choice, listOut)
-        table.clear(listOut)
+        resetList(listOut)
         if type(choice) == "table" then
             for _,v in ipairs(choice) do if type(v) == "string" and v ~= "" then listOut[#listOut+1] = v end end
         elseif type(choice) == "string" and choice ~= "" then
@@ -51,6 +59,7 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
+    -- helpers
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -151,6 +160,7 @@ return function(C, R, UI)
         return list
     end
 
+    -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
@@ -158,6 +168,7 @@ return function(C, R, UI)
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) and not isUnderLogWall(model) then
                     if name == "Log" and isWallVariant(model) then
+                        -- skip wall variants
                     else
                         local mp = mainPart(model)
                         if mp then
@@ -185,7 +196,7 @@ return function(C, R, UI)
                     end
                 end
             end
-        end>
+        end
         return sortedFarthest(out)
     end
     local function collectCultists(limit)
@@ -242,6 +253,7 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
+    -- placement
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -261,6 +273,7 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
+    -- remotes
     local function startDragRemote(r, model)
         if r.StartDrag then
             pcall(function() r.StartDrag:FireServer(model) end)
@@ -280,6 +293,7 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
+    -- campfire helpers
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -314,6 +328,7 @@ return function(C, R, UI)
         return best
     end
 
+    -- flow timing
     local DRAG_SETTLE  = 0.06
     local ACTION_HOLD  = 0.12
     local CONSUME_WAIT = 1.0
@@ -330,6 +345,7 @@ return function(C, R, UI)
         return false
     end
 
+    -- flows to campfire/scrapper (unchanged cadence)
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -349,7 +365,7 @@ return function(C, R, UI)
         task.wait(DRAG_SETTLE)
         moveModel(model, fireHandoffCF(campfire))
         local ok = false
-        if r.CookItem then ok = pcall(function() r.CookItem:FireServer(campfire, Instance.new("Model")) end) end
+        if r.CookItem then ok = pcall(function() r.CCookItem:FireServer(campfire, Instance.new("Model")) end) end
         if not ok then pivotOverTarget(model, campfire) end
         task.wait(ACTION_HOLD)
         local cookedName = RAW_TO_COOKED[model.Name]
@@ -421,6 +437,7 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
+    -- nearby actions (unchanged cadence)
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -455,6 +472,7 @@ return function(C, R, UI)
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
+    -- bring-to-ground
     local function bringSelected(name, count, delayPer)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -485,6 +503,7 @@ return function(C, R, UI)
         end
     end
 
+    -- UI helpers
     local function multiDropdown(args)
         return tab:Dropdown({
             Title = args.title,
@@ -497,6 +516,7 @@ return function(C, R, UI)
         })
     end
 
+    -- UI
     tab:Section({ Title = "Actions" })
     tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
