@@ -9,23 +9,19 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- timing
     local AMOUNT_TO_BRING       = 100
     local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
 
-    -- placement
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local NEARBY_RADIUS         = 20
     local ORB_OFFSET_Y          = 20
 
-    -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- data
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -45,7 +41,6 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
-    -- helpers
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -54,21 +49,37 @@ return function(C, R, UI)
         local ch = Players.LocalPlayer.Character
         return ch and ch:FindFirstChild("Head")
     end
-    local function isExcludedModel(m)
-        if not (m and m:IsA("Model")) then return false end
-        local n = m.Name:lower()
-        if n == "pelt trader" then return true end
-        if n:find("trader",1,true) or n:find("shopkeeper",1,true) then return true end
-        return false
-    end
     local function isWallVariant(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or ""):lower()
         return n == "logwall" or n == "log wall" or (n:find("log",1,true) and n:find("wall",1,true))
     end
+    local function isUnderLogWall(inst)
+        local cur = inst
+        while cur and cur ~= WS do
+            local nm = (cur.Name or ""):lower()
+            if nm == "structures" then
+                -- keep scanning; workspace.Structures is the typical container
+            end
+            if nm == "logwall" or nm == "log wall" or (nm:find("log",1,true) and nm:find("wall",1,true)) then
+                return true
+            end
+            cur = cur.Parent
+        end
+        return false
+    end
     local function hasHumanoid(model)
         if not (model and model:IsA("Model")) then return false end
         return model:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+    local function isExcludedModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local n = (m.Name or ""):lower()
+        if n == "pelt trader" then return true end
+        if n:find("trader",1,true) or n:find("shopkeeper",1,true) then return true end
+        if isWallVariant(m) then return true end
+        if isUnderLogWall(m) then return true end
+        return false
     end
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
@@ -133,15 +144,13 @@ return function(C, R, UI)
         return list
     end
 
-    -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
-                if model and model:IsA("Model") and not isExcludedModel(model) then
+                if model and model:IsA("Model") and not isExcludedModel(model) and not isUnderLogWall(model) then
                     if name == "Log" and isWallVariant(model) then
-                        -- skip walls
                     else
                         local mp = mainPart(model)
                         if mp then
@@ -158,7 +167,7 @@ return function(C, R, UI)
     local function collectMossyCoins(limit)
         local out, n = {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and not isExcludedModel(m) then
+            if m:IsA("Model") and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local nm = m.Name
                 if nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$") then
                     local mp = m:FindFirstChild("Main") or m:FindFirstChildWhichIsA("BasePart")
@@ -175,7 +184,7 @@ return function(C, R, UI)
     local function collectCultists(limit)
         local out, n = {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and m.Name:lower():find("cultist",1,true) and not isExcludedModel(m) then
+            if m:IsA("Model") and m.Name:lower():find("cultist",1,true) and not isExcludedModel(m) and not isUnderLogWall(m) then
                 if hasHumanoid(m) then
                     local mp = mainPart(m)
                     if mp then
@@ -192,7 +201,7 @@ return function(C, R, UI)
         local out, n = {}, 0
         local items = WS:FindFirstChild("Items"); if not items then return out end
         for _,m in ipairs(items:GetChildren()) do
-            if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) then
+            if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local mp = mainPart(m)
                 if mp then
                     n += 1
@@ -206,7 +215,7 @@ return function(C, R, UI)
     local function collectPelts(which, limit)
         local out, n = {}, 0
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and not isExcludedModel(m) then
+            if m:IsA("Model") and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local nm, ok = m.Name, false
                 ok = ok or (which=="Bunny Foot" and nm=="Bunny Foot")
                 ok = ok or (which=="Wolf Pelt" and nm=="Wolf Pelt")
@@ -226,7 +235,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- placement
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -265,7 +273,6 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    -- campfire helpers
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -289,7 +296,7 @@ return function(C, R, UI)
         local center = fireCenterCF(fire).Position
         local best, bestD
         for _,m in ipairs(WS:GetDescendants()) do
-            if m:IsA("Model") and m.Name == cookedName and not isExcludedModel(m) then
+            if m:IsA("Model") and m.Name == cookedName and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local mp = mainPart(m)
                 if mp then
                     local d = (mp.Position - center).Magnitude
@@ -300,7 +307,6 @@ return function(C, R, UI)
         return best
     end
 
-    -- flow timing
     local DRAG_SETTLE  = 0.06
     local ACTION_HOLD  = 0.12
     local CONSUME_WAIT = 1.0
@@ -317,7 +323,6 @@ return function(C, R, UI)
         return false
     end
 
-    -- flows
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -392,9 +397,8 @@ return function(C, R, UI)
     local function modelsNear(pos, radius, nameSet, seen)
         local out = {}
         for _,d in ipairs(WS:GetDescendants()) do
-            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] then
+            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] and not isUnderLogWall(d) then
                 if d.Name == "Log" and isWallVariant(d) then
-                    -- skip LogWall variants
                 else
                     local mp = mainPart(d)
                     if mp and (mp.Position - pos).Magnitude <= radius then
@@ -410,7 +414,6 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- actions
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -445,7 +448,6 @@ return function(C, R, UI)
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    -- per-dropdown bring to ground
     local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
@@ -469,7 +471,6 @@ return function(C, R, UI)
         end
     end
 
-    -- UI
     local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
