@@ -143,10 +143,14 @@ return function(C, R, UI)
         return list
     end
 
-    -- search helpers (generic)
+    -- === collectors limited to workspace.Items ===
+    local function itemsRoot()
+        return WS:FindFirstChild("Items")
+    end
+
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
-        local root = WS:FindFirstChild("Items") or WS
+        local root = itemsRoot(); if not root then return found end
         for _,d in ipairs(root:GetDescendants()) do
             if (d:IsA("Model") or d:IsA("BasePart")) and d.Name == name then
                 local model = d:IsA("Model") and d or d.Parent
@@ -167,7 +171,7 @@ return function(C, R, UI)
     end
     local function collectMossyCoins(limit)
         local out, n = {}, 0
-        local root = WS:FindFirstChild("Items") or WS
+        local root = itemsRoot(); if not root then return out end
         for _,m in ipairs(root:GetDescendants()) do
             if m:IsA("Model") and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local nm = m.Name
@@ -185,7 +189,7 @@ return function(C, R, UI)
     end
     local function collectCultists(limit)
         local out, n = {}, 0
-        local root = WS:FindFirstChild("Items") or WS
+        local root = itemsRoot(); if not root then return out end
         for _,m in ipairs(root:GetDescendants()) do
             if m:IsA("Model") and m.Name:lower():find("cultist",1,true) and not isExcludedModel(m) and not isUnderLogWall(m) then
                 if hasHumanoid(m) then
@@ -202,8 +206,8 @@ return function(C, R, UI)
     end
     local function collectSaplings(limit)
         local out, n = {}, 0
-        local items = WS:FindFirstChild("Items"); if not items then return out end
-        for _,m in ipairs(items:GetChildren()) do
+        local root = itemsRoot(); if not root then return out end
+        for _,m in ipairs(root:GetChildren()) do
             if m:IsA("Model") and m.Name == "Sapling" and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local mp = mainPart(m)
                 if mp then
@@ -217,7 +221,7 @@ return function(C, R, UI)
     end
     local function collectPelts(which, limit)
         local out, n = {}, 0
-        local root = WS:FindFirstChild("Items") or WS
+        local root = itemsRoot(); if not root then return out end
         for _,m in ipairs(root:GetDescendants()) do
             if m:IsA("Model") and not isExcludedModel(m) and not isUnderLogWall(m) then
                 local nm, ok = m.Name, false
@@ -259,13 +263,13 @@ return function(C, R, UI)
     end
 
     local function startDragRemote(r, model)
-        if r.StartDrag then
+        if r and r.StartDrag then
             pcall(function() r.StartDrag:FireServer(model) end)
             pcall(function() r.StartDrag:FireServer(Instance.new("Model")) end)
         end
     end
     local function stopDragRemote(r)
-        if r.StopDrag then
+        if r and r.StopDrag then
             pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
         end
     end
@@ -274,7 +278,7 @@ return function(C, R, UI)
         local snap = setCollide(model, false)
         zeroAssembly(model)
         if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
-        task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
+        setCollide(model, true, snap)
     end
 
     local function fireCenterCF(fire)
@@ -377,7 +381,7 @@ return function(C, R, UI)
         stopDragRemote(r)
     end
 
-    -- === Ground placement: direct-to-ground, no midair pause ===
+    -- === Ground placement: direct-to-ground, handshake to avoid server snap-back ===
     local dropCounter = 0
     local function ringOffset()
         dropCounter += 1
@@ -392,11 +396,19 @@ return function(C, R, UI)
         local head = headPart()
         local basePos = head and head.Position or root.Position
         local mp = mainPart(model); if not mp then return nil end
+
         local offset = ringOffset()
         local castFrom = basePos + offset
+
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = {lp.Character, model}
+        local itemsFolder = WS:FindFirstChild("Items")
+        if itemsFolder then
+            params.FilterDescendantsInstances = { lp.Character, model, itemsFolder }
+        else
+            params.FilterDescendantsInstances = { lp.Character, model }
+        end
+
         local res = WS:Raycast(castFrom, Vector3.new(0, -2000, 0), params)
         local y = res and res.Position.Y or (root.Position.Y - 3)
         local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
@@ -405,29 +417,21 @@ return function(C, R, UI)
         return CFrame.lookAt(pos, pos + look)
     end
 
-    local function ensureDynamic(model)
-        for _,p in ipairs(getAllParts(model)) do
-            p.Anchored = false
-            p.Massless = false
-            p.CanCollide = true
-        end
-    end
-
     local function dropNearPlayer(model)
-        ensureDynamic(model)
-        zeroAssembly(model)
+        local r = resolveRemotes()
+        startDragRemote(r, model)                 -- inform server
+        Run.Heartbeat:Wait()
         local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
-        -- direct place on ground, keep collisions enabled, no delayed toggle
+
+        local snap = setCollide(model, false)     -- safe reposition
+        zeroAssembly(model)
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
             local p = mainPart(model); if p then p.CFrame = cf end
         end
-        -- tiny outward nudge to reduce overlap
-        for _,p in ipairs(getAllParts(model)) do
-            p.AssemblyLinearVelocity = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-        end
+        setCollide(model, true, snap)             -- restore immediate
+        stopDragRemote(r)                         -- end drag state
     end
 
     local function makeOrb(cf, name)
@@ -550,8 +554,7 @@ return function(C, R, UI)
         local seenModel = {}
         local queue = {}
 
-        local itemsFolder = WS:FindFirstChild("Items")
-        if not itemsFolder then return end
+        local itemsFolder = itemsRoot(); if not itemsFolder then return end
 
         for _,d in ipairs(itemsFolder:GetDescendants()) do
             local m
