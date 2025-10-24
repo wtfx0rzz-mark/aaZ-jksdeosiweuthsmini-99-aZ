@@ -415,11 +415,6 @@ return function(C, R, UI)
             task.wait()
         end
     end
-
-    -- double-space before button
-    CombatTab:Section({ Title = " " })
-    CombatTab:Section({ Title = " " })
-
     CombatTab:Button({
         Title = "Kill Pulse",
         Callback = killPulse
