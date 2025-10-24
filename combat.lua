@@ -374,51 +374,5 @@ return function(C, R, UI)
         end
     })
 
-    -- === Kill Pulse ===
-    local function bestToolForPulse()
-        local name = equippedToolName()
-        if not name then
-            for _, n in ipairs(TUNE.ChopPrefer) do
-                if findInInventory(n) then name = n break end
-            end
-        end
-        return name and ensureEquipped(name) or nil
-    end
-
-    local function killPulse()
-        local ch = lp.Character or lp.CharacterAdded:Wait()
-        local hrp = ch and ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
-
-        local origin = hrp.Position
-        local radius = tonumber(C.State.AuraRadius) or 150
-        local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
-        if #targets == 0 then return end
-
-        local tool = bestToolForPulse()
-        local evs = RS:FindFirstChild("RemoteEvents")
-        local dmg = evs and evs:FindFirstChild("ToolDamageObject"); if not dmg then return end
-
-        for _, mdl in ipairs(targets) do
-            local hitPart = bestCharacterHitPart(mdl)
-            if hitPart then
-                local impactCF = hitPart.CFrame
-                local hitId = tostring(math.floor(os.clock()*1000)) .. "_" .. TUNE.UID_SUFFIX
-                local ok = pcall(function()
-                    dmg:InvokeServer(mdl, tool, hitId, impactCF, { WeaponDamage = 999 })
-                end)
-                if not ok then
-                    pcall(function()
-                        dmg:InvokeServer(mdl, tool, hitId, impactCF)
-                    end)
-                end
-            end
-            task.wait()
-        end
-    end
-    CombatTab:Button({
-        Title = "Kill Pulse",
-        Callback = killPulse
-    })
-
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
 end
