@@ -36,7 +36,7 @@ return function(C, R, UI)
         hl.FillTransparency = 1
         hl.OutlineTransparency = 0
         hl.OutlineColor = Color3.fromRGB(255, 255, 0)
-        hl.DepthMode = Enum.HighlightDepthMode.Occluded
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
         hl.Parent = parent
         return hl
     end
@@ -68,6 +68,9 @@ return function(C, R, UI)
         Players.PlayerAdded:Connect(trackPlayer)
         task.spawn(function()
             while runningPlayers do
+                local lch = lp.Character
+                local lhrp = lch and lch:FindFirstChild("HumanoidRootPart")
+                local R = auraRadius()
                 for _, plr in ipairs(Players:GetPlayers()) do
                     if plr ~= lp then
                         local ch = plr.Character
@@ -75,6 +78,16 @@ return function(C, R, UI)
                             local h = ensureHighlight(ch, PLAYER_HL_NAME)
                             h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                             h.Enabled = true
+                            if lhrp then
+                                local phrp = ch:FindFirstChild("HumanoidRootPart")
+                                local p0 = phrp and phrp.Position or (bestPart(ch) and bestPart(ch).Position)
+                                if p0 then
+                                    local d = (p0 - lhrp.Position).Magnitude
+                                    local t = math.clamp(d / math.max(R, 1), 0, 1)
+                                    h.FillTransparency   = 1 - (0.85 * t)   -- near: 1.0, far: 0.15
+                                    h.OutlineTransparency = 0.2 * (1 - t)    -- near: 0.2, far: 0.0
+                                end
+                            end
                         end
                     end
                 end
