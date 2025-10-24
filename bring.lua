@@ -369,13 +369,39 @@ return function(C, R, UI)
         stopDragRemote(r)
     end
 
+    local function ensureDynamic(model)
+        for _,p in ipairs(getAllParts(model)) do
+            p.Anchored = false
+        end
+    end
+
+    local dropCounter = 0
+    local function nextSpiralCF()
+        local base = computeForwardDropCF(); if not base then return nil end
+        dropCounter += 1
+        local i = dropCounter
+        local ang = i * 2.399963229728653
+        local r = 2.5 + 0.35 * i
+        return base * CFrame.new(math.cos(ang) * r, 0, math.sin(ang) * r)
+    end
+
     local function dropNearPlayer(model)
-        local cf = computeForwardDropCF(); if not cf then return end
+        local cf = nextSpiralCF(); if not cf then return end
+        ensureDynamic(model)
         local snap = setCollide(model, false)
         zeroAssembly(model)
-        if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
-        for _,p in ipairs(getAllParts(model)) do p.AssemblyLinearVelocity = Vector3.new(0, -6, 0) end
-        task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p = mainPart(model); if p then p.CFrame = cf end
+        end
+        local dv = -math.random(18,28)
+        local hx = math.random(-4,4)
+        local hz = math.random(-4,4)
+        for _,p in ipairs(getAllParts(model)) do
+            p.AssemblyLinearVelocity = Vector3.new(hx, dv, hz)
+        end
+        task.delay(0.08, function() setCollide(model, true, snap) end)
     end
 
     local function makeOrb(cf, name)
@@ -465,7 +491,6 @@ return function(C, R, UI)
         end
     end
 
-    -- === Multi-select + fast bring-to-ground (no change to top two buttons) ===
     local function setFromChoice(choice)
         local s = {}
         if type(choice) == "table" then
@@ -492,7 +517,6 @@ return function(C, R, UI)
 
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
-        local root = hrp(); if not root then return end
         local perNameCount = {}
         local seenModel = {}
         local queue = {}
