@@ -9,24 +9,19 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- timing
-    local AMOUNT_TO_BRING        = 100
-    local PER_ITEM_DELAY         = 1.0         -- keep for campfire/scrapper flows
-    local BRING_PER_ITEM_DELAY   = 0.15        -- faster for bring-to-ground only
-    local COLLIDE_OFF_SEC        = 0.22
+    local AMOUNT_TO_BRING       = 100
+    local PER_ITEM_DELAY        = 1.0
+    local COLLIDE_OFF_SEC       = 0.22
 
-    -- placement
-    local DROP_ABOVE_HEAD_STUDS  = 10
-    local FALLBACK_UP            = 5
-    local FALLBACK_AHEAD         = 2
-    local NEARBY_RADIUS          = 20
-    local ORB_OFFSET_Y           = 20
+    local DROP_ABOVE_HEAD_STUDS = 10
+    local FALLBACK_UP           = 5
+    local FALLBACK_AHEAD        = 2
+    local NEARBY_RADIUS         = 20
+    local ORB_OFFSET_Y          = 20
 
-    -- paths
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- data
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
@@ -35,21 +30,8 @@ return function(C, R, UI)
     local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
 
-    -- multi-select holders
-    local selJunkList, selFuelList, selFoodList, selMedicalList, selWAList, selMiscList, selPeltList =
-        {}, {}, {}, {}, {}, {}, {}
-
-    local function resetList(t)
-        for i=#t,1,-1 do t[i] = nil end
-    end
-    local function normalizeSelection(choice, listOut)
-        resetList(listOut)
-        if type(choice) == "table" then
-            for _,v in ipairs(choice) do if type(v) == "string" and v ~= "" then listOut[#listOut+1] = v end end
-        elseif type(choice) == "string" and choice ~= "" then
-            listOut[1] = choice
-        end
-    end
+    local selJunk, selFuel, selFood, selMedical, selWA, selMisc, selPelt =
+        junkItems[1], fuelItems[1], foodItems[1], medicalItems[1], weaponsArmor[1], ammoMisc[1], pelts[1]
 
     local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
@@ -59,7 +41,6 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
-    -- helpers
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -77,6 +58,9 @@ return function(C, R, UI)
         local cur = inst
         while cur and cur ~= WS do
             local nm = (cur.Name or ""):lower()
+            if nm == "structures" then
+                -- keep scanning; workspace.Structures is the typical container
+            end
             if nm == "logwall" or nm == "log wall" or (nm:find("log",1,true) and nm:find("wall",1,true)) then
                 return true
             end
@@ -160,7 +144,6 @@ return function(C, R, UI)
         return list
     end
 
-    -- collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         for _,d in ipairs(WS:GetDescendants()) do
@@ -168,7 +151,6 @@ return function(C, R, UI)
                 local model = d:IsA("Model") and d or d.Parent
                 if model and model:IsA("Model") and not isExcludedModel(model) and not isUnderLogWall(model) then
                     if name == "Log" and isWallVariant(model) then
-                        -- skip wall variants
                     else
                         local mp = mainPart(model)
                         if mp then
@@ -253,7 +235,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- placement
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -273,7 +254,6 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    -- remotes
     local function startDragRemote(r, model)
         if r.StartDrag then
             pcall(function() r.StartDrag:FireServer(model) end)
@@ -293,7 +273,6 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    -- campfire helpers
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -328,7 +307,6 @@ return function(C, R, UI)
         return best
     end
 
-    -- flow timing
     local DRAG_SETTLE  = 0.06
     local ACTION_HOLD  = 0.12
     local CONSUME_WAIT = 1.0
@@ -345,7 +323,6 @@ return function(C, R, UI)
         return false
     end
 
-    -- flows to campfire/scrapper (unchanged cadence)
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -365,7 +342,7 @@ return function(C, R, UI)
         task.wait(DRAG_SETTLE)
         moveModel(model, fireHandoffCF(campfire))
         local ok = false
-        if r.CookItem then ok = pcall(function() r.CCookItem:FireServer(campfire, Instance.new("Model")) end) end
+        if r.CookItem then ok = pcall(function() r.CookItem:FireServer(campfire, Instance.new("Model")) end) end
         if not ok then pivotOverTarget(model, campfire) end
         task.wait(ACTION_HOLD)
         local cookedName = RAW_TO_COOKED[model.Name]
@@ -437,7 +414,6 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- nearby actions (unchanged cadence)
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -472,8 +448,7 @@ return function(C, R, UI)
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    -- bring-to-ground
-    local function bringSelected(name, count, delayPer)
+    local function bringSelected(name, count)
         local want = tonumber(count) or 0
         if want <= 0 then return end
         local list
@@ -492,60 +467,51 @@ return function(C, R, UI)
         for i,entry in ipairs(list) do
             if i > want then break end
             dropNearPlayer(entry.model)
-            task.wait(delayPer)
+            task.wait(PER_ITEM_DELAY)
         end
     end
 
-    local function bringMany(selectedList, eachCount, delayPer)
-        if not selectedList or #selectedList == 0 then return end
-        for _,name in ipairs(selectedList) do
-            bringSelected(name, eachCount, delayPer)
-        end
-    end
-
-    -- UI helpers
-    local function multiDropdown(args)
+    local function singleSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
             Values = args.values,
-            Multi = true,
-            AllowNone = true,
+            Multi = false,
+            AllowNone = false,
             Callback = function(choice)
-                normalizeSelection(choice, args.selected)
+                if choice and choice ~= "" then args.setter(choice) end
             end
         })
     end
 
-    -- UI
     tab:Section({ Title = "Actions" })
     tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
-    tab:Section({ Title = "Junk → Ground (Multi-select)" })
-    multiDropdown({ title = "Select Junk Items", values = junkItems, selected = selJunkList })
-    tab:Button({ Title = "Bring Selected Junk (Drop)", Callback = function() bringMany(selJunkList, AMOUNT_TO_BRING, BRING_PER_ITEM_DELAY) end })
+    tab:Section({ Title = "Junk → Ground" })
+    singleSelectDropdown({ title = "Select Junk Item", values = junkItems, setter = function(v) selJunk = v end })
+    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selJunk, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Fuel → Ground (Multi-select)" })
-    multiDropdown({ title = "Select Fuel Items", values = fuelItems, selected = selFuelList })
-    tab:Button({ Title = "Bring Selected Fuel (Drop)", Callback = function() bringMany(selFuelList, AMOUNT_TO_BRING, BRING_PER_ITEM_DELAY) end })
+    tab:Section({ Title = "Fuel → Ground" })
+    singleSelectDropdown({ title = "Select Fuel Item", values = fuelItems, setter = function(v) selFuel = v end })
+    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selFuel, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Food → Ground (Multi-select)" })
-    multiDropdown({ title = "Select Food Items", values = foodItems, selected = selFoodList })
-    tab:Button({ Title = "Bring Selected Food (Drop)", Callback = function() bringMany(selFoodList, AMOUNT_TO_BRING, BRING_PER_ITEM_DELAY) end })
+    tab:Section({ Title = "Food → Ground" })
+    singleSelectDropdown({ title = "Select Food Item", values = foodItems, setter = function(v) selFood = v end })
+    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selFood, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Medical → Ground (Multi-select)" })
-    multiDropdown({ title = "Select Medical Items", values = medicalItems, selected = selMedicalList })
-    tab:Button({ Title = "Bring Selected Medical (Drop)", Callback = function() bringMany(selMedicalList, AMOUNT_TO_BRING, BRING_PER_ITEM_DELAY) end })
+    tab:Section({ Title = "Medical → Ground" })
+    singleSelectDropdown({ title = "Select Medical Item", values = medicalItems, setter = function(v) selMedical = v end })
+    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selMedical, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Weapons/Armor → Ground (Multi-select)" })
-    multiDropdown({ title = "Select Weapons/Armor", values = weaponsArmor, selected = selWAList })
-    tab:Button({ Title = "Bring Selected W/A (Drop)", Callback = function() bringMany(selWAList, AMOUNT_TO_BRING, BRING_PER_ITEM_DELAY) end })
+    tab:Section({ Title = "Weapons/Armor → Ground" })
+    singleSelectDropdown({ title = "Select Weapon/Armor", values = weaponsArmor, setter = function(v) selWA = v end })
+    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selWA, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Ammo & Misc → Ground (Multi-select)" })
-    multiDropdown({ title = "Select Ammo/Misc", values = ammoMisc, selected = selMiscList })
-    tab:Button({ Title = "Bring Selected Ammo/Misc (Drop)", Callback = function() bringMany(selMiscList, AMOUNT_TO_BRING, BRING_PER_ITEM_DELAY) end })
+    tab:Section({ Title = "Ammo & Misc → Ground" })
+    singleSelectDropdown({ title = "Select Ammo/Misc", values = ammoMisc, setter = function(v) selMisc = v end })
+    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selMisc, AMOUNT_TO_BRING) end })
 
-    tab:Section({ Title = "Pelts → Ground (Multi-select)" })
-    multiDropdown({ title = "Select Pelts", values = pelts, selected = selPeltList })
-    tab:Button({ Title = "Bring Selected Pelts (Drop)", Callback = function() bringMany(selPeltList, AMOUNT_TO_BRING, BRING_PER_ITEM_DELAY) end })
+    tab:Section({ Title = "Pelts → Ground" })
+    singleSelectDropdown({ title = "Select Pelt", values = pelts, setter = function(v) selPelt = v end })
+    tab:Button({ Title = "Bring (Drop)", Callback = function() bringSelected(selPelt, AMOUNT_TO_BRING) end })
 end
