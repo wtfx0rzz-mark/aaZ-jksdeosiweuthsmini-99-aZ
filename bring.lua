@@ -117,6 +117,32 @@ return function(C, R, UI)
         }
     end
 
+    -- original flows use these (unchanged semantics)
+    local function startDragRemote(r, model)
+        if r.StartDrag then
+            pcall(function() r.StartDrag:FireServer(model) end)
+            pcall(function() r.StartDrag:FireServer(Instance.new("Model")) end)
+        end
+    end
+    local function stopDragRemote(r)
+        if r.StopDrag then
+            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
+        end
+    end
+
+    -- ground-only handshake: release same model to avoid server lock
+    local function startDragGround(model)
+        local r = resolveRemotes()
+        if r and r.StartDrag then pcall(function() r.StartDrag:FireServer(model) end) end
+        return r
+    end
+    local function stopDragGround(r, model)
+        if r and r.StopDrag then
+            pcall(function() r.StopDrag:FireServer(model) end)         -- release exact model
+            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end) -- extra clear
+        end
+    end
+
     local function setCollide(model, on, snapshot)
         local parts = getAllParts(model)
         if on and snapshot then
@@ -143,11 +169,12 @@ return function(C, R, UI)
         return list
     end
 
-    -- === collectors limited to workspace.Items ===
+    -- items root
     local function itemsRoot()
         return WS:FindFirstChild("Items")
     end
 
+    -- collectors limited to Items
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         local root = itemsRoot(); if not root then return found end
@@ -262,18 +289,6 @@ return function(C, R, UI)
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
 
-    local function startDragRemote(r, model)
-        if r and r.StartDrag then
-            pcall(function() r.StartDrag:FireServer(model) end)
-            pcall(function() r.StartDrag:FireServer(Instance.new("Model")) end)
-        end
-    end
-    local function stopDragRemote(r)
-        if r and r.StopDrag then
-            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
-        end
-    end
-
     local function moveModel(model, cf)
         local snap = setCollide(model, false)
         zeroAssembly(model)
@@ -381,7 +396,7 @@ return function(C, R, UI)
         stopDragRemote(r)
     end
 
-    -- === Ground placement: direct-to-ground, handshake to avoid server snap-back ===
+    -- cluster offset
     local dropCounter = 0
     local function ringOffset()
         dropCounter += 1
@@ -391,6 +406,7 @@ return function(C, R, UI)
         return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
     end
 
+    -- direct-to-ground CF (raycast from head, excluding items so we hit terrain/ground)
     local function groundCFAroundPlayer(model)
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -417,21 +433,22 @@ return function(C, R, UI)
         return CFrame.lookAt(pos, pos + look)
     end
 
+    -- ground drop using ground-only handshake
     local function dropNearPlayer(model)
-        local r = resolveRemotes()
-        startDragRemote(r, model)                 -- inform server
+        local r = startDragGround(model)
         Run.Heartbeat:Wait()
-        local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
 
-        local snap = setCollide(model, false)     -- safe reposition
+        local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
+        local snap = setCollide(model, false)
         zeroAssembly(model)
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
             local p = mainPart(model); if p then p.CFrame = cf end
         end
-        setCollide(model, true, snap)             -- restore immediate
-        stopDragRemote(r)                         -- end drag state
+        setCollide(model, true, snap)
+
+        stopDragGround(r, model)
     end
 
     local function makeOrb(cf, name)
@@ -586,6 +603,7 @@ return function(C, R, UI)
         end
     end
 
+    -- UI (multi-select fast bring)
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
 
@@ -595,10 +613,7 @@ return function(C, R, UI)
             Values = args.values,
             Multi = true,
             AllowNone = true,
-            Callback = function(choice)
-                local s = setFromChoice(choice)
-                args.setter(s)
-            end
+            Callback = function(choice) args.setter(setFromChoice(choice)) end
         })
     end
 
