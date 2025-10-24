@@ -19,6 +19,11 @@ return function(C, R, UI)
     local NEARBY_RADIUS         = 20
     local ORB_OFFSET_Y          = 20
 
+    -- tight cluster controls (keep items close every run)
+    local CLUSTER_RADIUS_MIN = 0.75     -- start radius in studs
+    local CLUSTER_RADIUS_STEP = 0.04    -- growth per item
+    local CLUSTER_RADIUS_MAX  = 2.25    -- cap radius
+
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
@@ -380,8 +385,8 @@ return function(C, R, UI)
     local function ringOffset()
         dropCounter += 1
         local i = dropCounter
-        local a = i * 2.399963229728653
-        local r = 4 + 0.45 * i
+        local a = i * 2.399963229728653 -- golden angle
+        local r = math.min(CLUSTER_RADIUS_MIN + CLUSTER_RADIUS_STEP * (i - 1), CLUSTER_RADIUS_MAX)
         return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
     end
 
@@ -389,7 +394,7 @@ return function(C, R, UI)
         local root = hrp(); if not root then return nil end
         local mp = mainPart(model); if not mp then return nil end
         local offset = ringOffset()
-        local origin = root.Position + offset + Vector3.new(0, 60, 0)
+        local origin = root.Position + offset + Vector3.new(0, 30, 0)
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         local ignore = {lp.Character, model}
@@ -483,6 +488,7 @@ return function(C, R, UI)
     end
 
     local function bringSelected(name, count)
+        dropCounter = 0 -- reset cluster each run
         local want = tonumber(count) or 0
         if want <= 0 then return end
         local list
@@ -531,6 +537,7 @@ return function(C, R, UI)
 
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
+        dropCounter = 0 -- reset cluster each run
         local perNameCount = {}
         local seenModel = {}
         local queue = {}
