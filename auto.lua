@@ -658,19 +658,34 @@ return function(C, R, UI)
         end
     })
 
-    local FLASHLIGHT_NAME = "Strong Flashlight"
+    local FLASHLIGHT_PREF = { "Strong Flashlight", "Old Flashlight" }
     local STUN_RADIUS = 20
     local STUN_ON_WAIT = 0.06
     local STUN_OFF_WAIT = 0.06
     local deerStunOn, deerThread = false, nil
-    local lastFlash = false
+    local lastFlashState, lastFlashName = nil, nil
 
-    local function setFlashlight(state)
+    local function resolveFlashlightName()
+        local inv = lp and lp:FindFirstChild("Inventory")
+        if not inv then return nil end
+        for _,n in ipairs(FLASHLIGHT_PREF) do
+            if inv:FindFirstChild(n) then return n end
+        end
+        return nil
+    end
+    local function setFlashlight(state, name)
+        local ev = getRemote("FlashlightToggle")
+        if not ev or not name then return end
+        if lastFlashState == state and lastFlashName == name then return end
+        pcall(function() ev:FireServer(state, name) end)
+        lastFlashState, lastFlashName = state, name
+    end
+    local function forceFlashlightOffAll()
         local ev = getRemote("FlashlightToggle")
         if not ev then return end
-        if lastFlash == state then return end
-        pcall(function() ev:FireServer(state, FLASHLIGHT_NAME) end)
-        lastFlash = state
+        pcall(function() ev:FireServer(false, "Strong Flashlight") end)
+        pcall(function() ev:FireServer(false, "Old Flashlight") end)
+        lastFlashState, lastFlashName = nil, nil
     end
     local function nearestDeerWithin(radius)
         local chars = WS:FindFirstChild("Characters")
@@ -691,7 +706,9 @@ return function(C, R, UI)
     local function stunDeerTick()
         local deer = nearestDeerWithin(STUN_RADIUS)
         if not deer then return end
-        setFlashlight(true)
+        local fname = resolveFlashlightName()
+        if not fname then return end
+        setFlashlight(true, fname)
         local torch = getRemote("MonsterHitByTorch")
         if torch then
             pcall(function()
@@ -703,20 +720,19 @@ return function(C, R, UI)
             end)
         end
         task.wait(STUN_ON_WAIT)
-        setFlashlight(false)
+        setFlashlight(false, fname)
         task.wait(STUN_OFF_WAIT)
     end
     local function enableDeerStun()
         if deerStunOn then return end
         deerStunOn = true
         deerThread = task.spawn(function()
-            lastFlash = false
-            setFlashlight(false)
+            forceFlashlightOffAll()
             while deerStunOn do
                 stunDeerTick()
                 task.wait(0.05)
             end
-            setFlashlight(false)
+            forceFlashlightOffAll()
         end)
     end
     local function disableDeerStun()
