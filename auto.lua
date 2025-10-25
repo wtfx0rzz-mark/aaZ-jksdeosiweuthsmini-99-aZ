@@ -658,6 +658,79 @@ return function(C, R, UI)
         end
     })
 
+    local FLASHLIGHT_NAME = "Strong Flashlight"
+    local STUN_RADIUS = 20
+    local STUN_ON_WAIT = 0.06
+    local STUN_OFF_WAIT = 0.06
+    local deerStunOn, deerThread = false, nil
+    local lastFlash = false
+
+    local function setFlashlight(state)
+        local ev = getRemote("FlashlightToggle")
+        if not ev then return end
+        if lastFlash == state then return end
+        pcall(function() ev:FireServer(state, FLASHLIGHT_NAME) end)
+        lastFlash = state
+    end
+    local function nearestDeerWithin(radius)
+        local chars = WS:FindFirstChild("Characters")
+        local root = hrp()
+        if not (chars and root) then return nil end
+        local best, bestD = nil, radius
+        for _,m in ipairs(chars:GetChildren()) do
+            if m:IsA("Model") and m.Name == "Deer" then
+                local mp = mainPart(m)
+                if mp then
+                    local d = (mp.Position - root.Position).Magnitude
+                    if d <= bestD then bestD, best = d, m end
+                end
+            end
+        end
+        return best
+    end
+    local function stunDeerTick()
+        local deer = nearestDeerWithin(STUN_RADIUS)
+        if not deer then return end
+        setFlashlight(true)
+        local torch = getRemote("MonsterHitByTorch")
+        if torch then
+            pcall(function()
+                if torch:IsA("RemoteFunction") then
+                    torch:InvokeServer(deer)
+                else
+                    torch:FireServer(deer)
+                end
+            end)
+        end
+        task.wait(STUN_ON_WAIT)
+        setFlashlight(false)
+        task.wait(STUN_OFF_WAIT)
+    end
+    local function enableDeerStun()
+        if deerStunOn then return end
+        deerStunOn = true
+        deerThread = task.spawn(function()
+            lastFlash = false
+            setFlashlight(false)
+            while deerStunOn do
+                stunDeerTick()
+                task.wait(0.05)
+            end
+            setFlashlight(false)
+        end)
+    end
+    local function disableDeerStun()
+        deerStunOn = false
+    end
+
+    tab:Toggle({
+        Title = "Auto Stun Deer",
+        Value = false,
+        Callback = function(state)
+            if state then enableDeerStun() else disableDeerStun() end
+        end
+    })
+
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if edgeGui.Parent ~= playerGui then
             edgeGui.Parent = playerGui
@@ -668,6 +741,9 @@ return function(C, R, UI)
         end
         if infJumpOn and not infConn then
             enableInfJump()
+        end
+        if deerStunOn and not deerThread then
+            enableDeerStun()
         end
     end)
 end
