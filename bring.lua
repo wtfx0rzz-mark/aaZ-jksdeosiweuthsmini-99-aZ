@@ -19,6 +19,7 @@ return function(C, R, UI)
     local NEARBY_RADIUS         = 20
     local ORB_OFFSET_Y          = 20
 
+    -- tight cluster around player
     local CLUSTER_RADIUS_MIN  = 0.75
     local CLUSTER_RADIUS_STEP = 0.04
     local CLUSTER_RADIUS_MAX  = 2.25
@@ -116,6 +117,7 @@ return function(C, R, UI)
         }
     end
 
+    -- original flows use these (unchanged semantics)
     local function startDragRemote(r, model)
         if r.StartDrag then
             pcall(function() r.StartDrag:FireServer(model) end)
@@ -125,6 +127,19 @@ return function(C, R, UI)
     local function stopDragRemote(r)
         if r.StopDrag then
             pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
+        end
+    end
+
+    -- ground-only handshake: release same model to avoid server lock
+    local function startDragGround(model)
+        local r = resolveRemotes()
+        if r and r.StartDrag then pcall(function() r.StartDrag:FireServer(model) end) end
+        return r
+    end
+    local function stopDragGround(r, model)
+        if r and r.StopDrag then
+            pcall(function() r.StopDrag:FireServer(model) end)         -- release exact model
+            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end) -- extra clear
         end
     end
 
@@ -154,10 +169,12 @@ return function(C, R, UI)
         return list
     end
 
+    -- items root
     local function itemsRoot()
         return WS:FindFirstChild("Items")
     end
 
+    -- collectors limited to Items
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         local root = itemsRoot(); if not root then return found end
@@ -313,7 +330,7 @@ return function(C, R, UI)
         return best
     end
 
-    local DRAG_SETTLE  = 0.08
+    local DRAG_SETTLE  = 0.06
     local ACTION_HOLD  = 0.12
     local CONSUME_WAIT = 1.0
 
@@ -329,6 +346,7 @@ return function(C, R, UI)
         return false
     end
 
+    -- campfire and scrapper flows (unchanged)
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -378,6 +396,7 @@ return function(C, R, UI)
         stopDragRemote(r)
     end
 
+    -- cluster offset
     local dropCounter = 0
     local function ringOffset()
         dropCounter += 1
@@ -387,13 +406,16 @@ return function(C, R, UI)
         return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
     end
 
+    -- direct-to-ground CF (raycast from head, excluding items so we hit terrain/ground)
     local function groundCFAroundPlayer(model)
         local root = hrp(); if not root then return nil end
         local head = headPart()
         local basePos = head and head.Position or root.Position
         local mp = mainPart(model); if not mp then return nil end
+
         local offset = ringOffset()
         local castFrom = basePos + offset
+
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         local itemsFolder = WS:FindFirstChild("Items")
@@ -402,12 +424,31 @@ return function(C, R, UI)
         else
             params.FilterDescendantsInstances = { lp.Character, model }
         end
+
         local res = WS:Raycast(castFrom, Vector3.new(0, -2000, 0), params)
         local y = res and res.Position.Y or (root.Position.Y - 3)
         local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
         local pos = Vector3.new(castFrom.X, y + h, castFrom.Z)
         local look = root.CFrame.LookVector
         return CFrame.lookAt(pos, pos + look)
+    end
+
+    -- ground drop using ground-only handshake
+    local function dropNearPlayer(model)
+        local r = startDragGround(model)
+        Run.Heartbeat:Wait()
+
+        local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p = mainPart(model); if p then p.CFrame = cf end
+        end
+        setCollide(model, true, snap)
+
+        stopDragGround(r, model)
     end
 
     local function makeOrb(cf, name)
@@ -440,6 +481,7 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
+    -- top two actions unchanged
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -473,87 +515,6 @@ return function(C, R, UI)
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    local DRAG_RANGE        = 60
-    local HANDSHAKE_STAY    = 0.12
-    local RETURN_STABILIZE  = 0.06
-    local INTER_ITEM_DELAY  = 0.05
-    local BURST_YIELD_EVERY = 12
-
-    local function snapshotPlayerCollide()
-        local ch = lp.Character; if not ch then return {} end
-        local t = {}
-        for _,d in ipairs(ch:GetDescendants()) do
-            if d:IsA("BasePart") then t[d] = d.CanCollide end
-        end
-        return t
-    end
-    local function setPlayerCollide(on, snap)
-        local ch = lp.Character; if not ch then return end
-        if on and snap then
-            for p,can in pairs(snap) do if p and p.Parent then p.CanCollide = can end end
-            return
-        end
-        for _,d in ipairs(ch:GetDescendants()) do
-            if d:IsA("BasePart") then d.CanCollide = false end
-        end
-    end
-    local function zeroRoot()
-        local r = hrp(); if not r then return end
-        r.AssemblyLinearVelocity  = Vector3.new()
-        r.AssemblyAngularVelocity = Vector3.new()
-    end
-    local function tpPlayer(cf)
-        local ch = lp.Character; local r = hrp(); if not ch or not r then return end
-        pcall(function() ch:PivotTo(cf) end)
-        pcall(function() r.CFrame = cf end)
-        zeroRoot()
-    end
-
-    local function startDragGround(model)
-        local r = resolveRemotes()
-        r._returnCF = nil
-        if not r.StartDrag then return r end
-        local mp = mainPart(model); if not mp then return r end
-        local root = hrp(); if not root then return r end
-        local dist = (mp.Position - root.Position).Magnitude
-        if dist > DRAG_RANGE then
-            r._returnCF = root.CFrame
-            local snap = snapshotPlayerCollide()
-            setPlayerCollide(false)
-            local above = CFrame.new(mp.Position + Vector3.new(0, 4, 0), mp.Position)
-            tpPlayer(above); Run.Heartbeat:Wait(); task.wait(HANDSHAKE_STAY)
-            pcall(function() r.StartDrag:FireServer(model) end)
-            task.wait(DRAG_SETTLE)
-            tpPlayer(r._returnCF); task.wait(RETURN_STABILIZE)
-            setPlayerCollide(true, snap)
-        else
-            pcall(function() r.StartDrag:FireServer(model) end)
-            task.wait(DRAG_SETTLE)
-        end
-        return r
-    end
-    local function stopDragGround(r, model)
-        if r and r.StopDrag then
-            pcall(function() r.StopDrag:FireServer(model) end)
-            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
-        end
-    end
-
-    local function dropNearPlayer(model)
-        local r = startDragGround(model)
-        Run.Heartbeat:Wait()
-        local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
-        local snap = setCollide(model, false)
-        zeroAssembly(model)
-        if model:IsA("Model") then
-            model:PivotTo(cf)
-        else
-            local p = mainPart(model); if p then p.CFrame = cf end
-        end
-        setCollide(model, true, snap)
-        stopDragGround(r, model)
-    end
-
     local function bringSelected(name, count)
         dropCounter = 0
         local want = tonumber(count) or 0
@@ -574,7 +535,7 @@ return function(C, R, UI)
         for i,entry in ipairs(list) do
             if i > want then break end
             dropNearPlayer(entry.model)
-            task.wait(INTER_ITEM_DELAY)
+            task.wait(PER_ITEM_DELAY)
         end
     end
 
@@ -602,13 +563,16 @@ return function(C, R, UI)
         return false
     end
 
+    -- fast bring limited to workspace.Items only
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
         dropCounter = 0
         local perNameCount = {}
         local seenModel = {}
         local queue = {}
+
         local itemsFolder = itemsRoot(); if not itemsFolder then return end
+
         for _,d in ipairs(itemsFolder:GetDescendants()) do
             local m
             if d:IsA("Model") then
@@ -632,13 +596,14 @@ return function(C, R, UI)
                 end
             end
         end
+
         for i=1,#queue do
             dropNearPlayer(queue[i])
-            if i % BURST_YIELD_EVERY == 0 then Run.Heartbeat:Wait() end
-            task.wait(INTER_ITEM_DELAY)
+            if i % 25 == 0 then Run.Heartbeat:Wait() end
         end
     end
 
+    -- UI (multi-select fast bring)
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
 
