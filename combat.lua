@@ -65,6 +65,26 @@ return function(C, R, UI)
         return tool
     end
 
+    local function resolveToolInstanceExact(name)
+        local inv = lp and lp:FindFirstChild("Inventory")
+        if inv then
+            local t = inv:FindFirstChild(name)
+            if t then return t end
+        end
+        local ch = lp and lp.Character
+        if ch then
+            local t = ch:FindFirstChild(name)
+            if t then return t end
+        end
+        return nil
+    end
+
+    local function playerStrikeCF()
+        local ch = lp and lp.Character
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        return hrp and hrp.CFrame or CFrame.new()
+    end
+
     local function bestTreeHitPart(tree)
         if not tree or not tree:IsA("Model") then return nil end
         local hr = tree:FindFirstChild("HitRegisters")
@@ -115,6 +135,16 @@ return function(C, R, UI)
         local dmg = evs and evs:FindFirstChild("ToolDamageObject")
         if not dmg then return end
         dmg:InvokeServer(targetModel, tool, hitId, impactCF)
+    end
+
+    local function HitTarget_IceAxe(targetModel, hitId)
+        local tool = resolveToolInstanceExact("Ice Axe")
+        if not tool then
+            ensureEquipped("Ice Axe")
+            tool = resolveToolInstanceExact("Ice Axe")
+        end
+        if not tool then return end
+        HitTarget(targetModel, tool, hitId, playerStrikeCF())
     end
 
     local function attrBucket(treeModel)
@@ -224,19 +254,39 @@ return function(C, R, UI)
 
         if not isTree then
             local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
+            local useIce = (toolName == "Ice Axe")
             for i = 1, cap do
                 local mdl = targetModels[i]
                 local t0 = lastHitAt[mdl] or 0
                 if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
-                    local hitPart = hitPartGetter(mdl)
-                    if hitPart then
-                        local impactCF = hitPart.CFrame
+                    if useIce then
                         local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
-                        HitTarget(mdl, tool, hitId, impactCF)
-                        lastHitAt[mdl] = tick()
-                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                        HitTarget_IceAxe(mdl, hitId)
+                    else
+                        local hitPart = hitPartGetter(mdl)
+                        if hitPart then
+                            local impactCF = hitPart.CFrame
+                            local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                            HitTarget(mdl, tool, hitId, impactCF)
+                        end
                     end
+                    lastHitAt[mdl] = tick()
+                    task.wait(TUNE.CHAR_HIT_STEP_WAIT)
                 end
+            end
+            task.wait(swingDelay)
+            return
+        end
+
+        local useIce = (toolName == "Ice Axe")
+        if useIce then
+            for _, mdl in ipairs(targetModels) do
+                local hitId = nextPerTreeHitId(mdl)
+                pcall(function()
+                    local bucket = attrBucket(mdl)
+                    if bucket then bucket:SetAttribute(hitId, true) end
+                end)
+                HitTarget_IceAxe(mdl, hitId)
             end
             task.wait(swingDelay)
             return
