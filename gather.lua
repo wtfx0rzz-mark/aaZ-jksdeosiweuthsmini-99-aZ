@@ -38,9 +38,7 @@ return function(C, R, UI)
     }
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
 
-    local Selected = {
-        Junk = {}, Fuel = {}, Food = {}, Medical = {}, WA = {}, Misc = {}, Pelts = {}
-    }
+    local Selected = { Junk = {}, Fuel = {}, Food = {}, Medical = {}, WA = {}, Misc = {}, Pelts = {} }
     local wantMossy, wantCultist, wantSapling = false, false, false
     local wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
 
@@ -151,7 +149,6 @@ return function(C, R, UI)
             return true
         end
 
-        -- Tire/tyre synonym support: selecting "Tire" in UI matches "tire" or "tyre" in-world
         if Selected.Junk["Tire"] and (nl:find("tire",1,true) or nl:find("tyre",1,true)) then
             return true
         end
@@ -400,6 +397,7 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts" })
     dropdownMulti({ title="Select Pelts", values=pelts, set=Selected.Pelts, kind="Pelts" })
 
+    -- PATCH: use shared EdgeStack so Place button does not overlap top buttons
     local function ensurePlaceEdge()
         local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
@@ -410,21 +408,39 @@ return function(C, R, UI)
             edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
             edgeGui.Parent = playerGui
         end
-        local btn = edgeGui:FindFirstChild("PlaceEdge")
+        -- shared vertical stack
+        local stack = edgeGui:FindFirstChild("EdgeStack")
+        if not stack then
+            stack = Instance.new("Frame")
+            stack.Name = "EdgeStack"
+            stack.AnchorPoint = Vector2.new(1, 0)
+            stack.Position = UDim2.new(1, -6, 0, 6)
+            stack.Size = UDim2.new(0, 130, 1, -12)
+            stack.BackgroundTransparency = 1
+            stack.BorderSizePixel = 0
+            stack.Parent = edgeGui
+            local list = Instance.new("UIListLayout")
+            list.Name = "VList"
+            list.FillDirection = Enum.FillDirection.Vertical
+            list.SortOrder = Enum.SortOrder.LayoutOrder
+            list.Padding = UDim.new(0, 6)
+            list.HorizontalAlignment = Enum.HorizontalAlignment.Right
+            list.Parent = stack
+        end
+        local btn = stack:FindFirstChild("PlaceEdge")
         if not btn then
             btn = Instance.new("TextButton")
             btn.Name = "PlaceEdge"
-            btn.AnchorPoint = Vector2.new(1, 0)
-            btn.Position    = UDim2.new(1, -6, 0, 6)
-            btn.Size        = UDim2.new(0, 120, 0, 30)
-            btn.Text        = "Place"
-            btn.TextSize    = 12
-            btn.Font        = Enum.Font.GothamBold
+            btn.Size = UDim2.new(1, 0, 0, 30)
+            btn.Text = "Place"
+            btn.TextSize = 12
+            btn.Font = Enum.Font.GothamBold
             btn.BackgroundColor3 = Color3.fromRGB(30,30,35)
             btn.TextColor3  = Color3.new(1,1,1)
             btn.BorderSizePixel = 0
             btn.Visible     = false
-            btn.Parent      = edgeGui
+            btn.LayoutOrder = 1000
+            btn.Parent      = stack
             local corner  = Instance.new("UICorner")
             corner.CornerRadius = UDim.new(0, 8)
             corner.Parent = btn
