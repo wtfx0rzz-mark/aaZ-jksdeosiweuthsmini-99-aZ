@@ -292,13 +292,28 @@ return function(C, R, UI)
             if cf then teleportWithDive(cf) end
         end)
 
-        local AHEAD_DIST, RAY_HEIGHT, RAY_DEPTH = 3, 500, 2000
+        -- head-level forward cast then down
+        local AHEAD_DIST, RAY_DEPTH = 3, 2000
         local function groundAhead(root)
-            local base   = root.Position + root.CFrame.LookVector * AHEAD_DIST
-            local start  = base + Vector3.new(0, RAY_HEIGHT, 0)
-            local result = WS:Raycast(start, Vector3.new(0, -RAY_DEPTH, 0))
-            return result and result.Position or base
+            if not root then return nil end
+            local ch   = lp.Character
+            local head = ch and ch:FindFirstChild("Head")
+            if not head then return root.Position end
+
+            local castFrom = head.Position + root.CFrame.LookVector * AHEAD_DIST
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local itemsFolder = WS:FindFirstChild("Items")
+            if itemsFolder then
+                params.FilterDescendantsInstances = { lp.Character, itemsFolder }
+            else
+                params.FilterDescendantsInstances = { lp.Character }
+            end
+
+            local hit = WS:Raycast(castFrom, Vector3.new(0, -RAY_DEPTH, 0), params)
+            return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
         end
+
         local function findClosestSapling()
             local items = WS:FindFirstChild("Items")
             local root  = hrp()
