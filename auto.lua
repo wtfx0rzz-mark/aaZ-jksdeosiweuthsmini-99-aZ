@@ -211,47 +211,56 @@ return function(C, R, UI)
             edgeGui.Parent = playerGui
         end
 
-        local function makeEdgeBtn(name, label)
-            local b = edgeGui:FindFirstChild(name)
+        local stack = edgeGui:FindFirstChild("EdgeStack")
+        if not stack then
+            stack = Instance.new("Frame")
+            stack.Name = "EdgeStack"
+            stack.AnchorPoint = Vector2.new(1, 0)
+            stack.Position = UDim2.new(1, -6, 0, 6)
+            stack.Size = UDim2.new(0, 130, 1, -12)
+            stack.BackgroundTransparency = 1
+            stack.BorderSizePixel = 0
+            stack.Parent = edgeGui
+            local list = Instance.new("UIListLayout")
+            list.Name = "VList"
+            list.FillDirection = Enum.FillDirection.Vertical
+            list.SortOrder = Enum.SortOrder.LayoutOrder
+            list.Padding = UDim.new(0, 6)
+            list.HorizontalAlignment = Enum.HorizontalAlignment.Right
+            list.Parent = stack
+        end
+
+        local function makeEdgeBtn(name, label, order)
+            local b = stack:FindFirstChild(name)
             if not b then
                 b = Instance.new("TextButton")
                 b.Name = name
-                b.AnchorPoint = Vector2.new(1, 0)
-                b.Size        = UDim2.new(0, 120, 0, 30)
-                b.Text        = label
-                b.TextSize    = 12
-                b.Font        = Enum.Font.GothamBold
+                b.Size = UDim2.new(1, 0, 0, 30)
+                b.Text = label
+                b.TextSize = 12
+                b.Font = Enum.Font.GothamBold
                 b.BackgroundColor3 = Color3.fromRGB(30,30,35)
-                b.TextColor3  = Color3.new(1,1,1)
+                b.TextColor3 = Color3.new(1,1,1)
                 b.BorderSizePixel = 0
-                b.Visible     = false
-                b.Parent      = edgeGui
-                local corner  = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = b
+                b.Visible = false
+                b.LayoutOrder = order or 1
+                b.Parent = stack
+                local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = b
             else
                 b.Text = label
+                b.LayoutOrder = order or b.LayoutOrder
                 b.Visible = false
             end
             return b
         end
 
-        local phaseBtn = makeEdgeBtn("Phase10Edge", "Phase 10")
-        local tpBtn    = makeEdgeBtn("TpEdge",      "Teleport")
-        local plantBtn = makeEdgeBtn("PlantEdge",   "Plant")
-        local lostBtn  = makeEdgeBtn("LostEdge",    "Lost Child")
-        local campBtn  = makeEdgeBtn("CampEdge",    "Campfire")
+        local phaseBtn = makeEdgeBtn("Phase10Edge", "Phase 10", 1)
+        local tpBtn    = makeEdgeBtn("TpEdge",      "Teleport", 2)
+        local plantBtn = makeEdgeBtn("PlantEdge",   "Plant",    3)
+        local lostBtn  = makeEdgeBtn("LostEdge",    "Lost Child", 4)
+        local campBtn  = makeEdgeBtn("CampEdge",    "Campfire", 5)
 
-        local EDGE_ORDER = { phaseBtn, tpBtn, plantBtn, lostBtn, campBtn }
-        local function layoutEdgeButtons()
-            local row = 0
-            for _,b in ipairs(EDGE_ORDER) do
-                if b and b.Visible then
-                    row += 1
-                    b.Position = UDim2.new(1, -6, 0, 6 + (row-1)*36)
-                end
-            end
-        end
         campBtn.Visible = true
-        layoutEdgeButtons()
 
         phaseBtn.MouseButton1Click:Connect(function()
             local root = hrp(); if not root then return end
@@ -330,7 +339,6 @@ return function(C, R, UI)
         local function refreshLostBtn()
             local anyEligible = next(lostEligible) ~= nil
             lostBtn.Visible = autoLostEnabled and (savedCount < MAX_TO_SAVE) and anyEligible
-            layoutEdgeButtons()
         end
         local function onLostAttrChange(m)
             local v = m:GetAttribute("Lost") == true
@@ -415,11 +423,11 @@ return function(C, R, UI)
         end
 
         tab:Section({ Title = "Quick Moves", Icon = "zap" })
-        tab:Toggle({ Title = "Show Phase 10 button", Value = false, Callback = function(state) phaseBtn.Visible = state; layoutEdgeButtons() end })
-        tab:Toggle({ Title = "Show Teleport button",   Value = false, Callback = function(state) tpBtn.Visible   = state; layoutEdgeButtons() end })
-        tab:Toggle({ Title = "Plant Saplings",         Value = false, Callback = function(state) plantBtn.Visible= state; layoutEdgeButtons() end })
+        tab:Toggle({ Title = "Show Phase 10 button", Value = false, Callback = function(state) phaseBtn.Visible = state end })
+        tab:Toggle({ Title = "Show Teleport button",   Value = false, Callback = function(state) tpBtn.Visible   = state end })
+        tab:Toggle({ Title = "Plant Saplings",         Value = false, Callback = function(state) plantBtn.Visible= state end })
         tab:Toggle({ Title = "Auto Teleport to Lost Child", Value = true, Callback = function(state) autoLostEnabled = state; refreshLostBtn() end })
-        tab:Toggle({ Title = "Show Campfire button",   Value = true,  Callback = function(state) campBtn.Visible  = state; layoutEdgeButtons() end })
+        tab:Toggle({ Title = "Show Campfire button",   Value = true,  Callback = function(state) campBtn.Visible  = state end })
 
         local godOn, godHB, godAcc = false, nil, 0
         local GOD_INTERVAL = 0.5
@@ -628,15 +636,11 @@ return function(C, R, UI)
 
         Players.LocalPlayer.CharacterAdded:Connect(function()
             if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
-            layoutEdgeButtons()
             if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
             if infJumpOn and not infConn then enableInfJump() end
             if autoStunOn and not autoStunThread then enableAutoStun() end
         end)
     end
-
     local ok, err = pcall(run)
-    if not ok then
-        warn("[Auto] module error: " .. tostring(err))
-    end
+    if not ok then warn("[Auto] module error: " .. tostring(err)) end
 end
