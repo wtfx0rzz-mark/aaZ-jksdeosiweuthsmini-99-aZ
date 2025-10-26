@@ -496,10 +496,10 @@ return function(C, R, UI)
 
     local FLASHLIGHT_PREF = { "Strong Flashlight", "Old Flashlight" }
     local MONSTER_NAMES   = { "Deer", "Ram", "Owl" }
-    local STUN_RADIUS     = 24
-    local HIT_BURST       = 2
-    local OFF_PULSE_EVERY = 1.5
-    local OFF_PULSE_LEN   = 1/90
+    local STUN_RADIUS     = 22
+    local STUN_ON_WAIT    = 0.06
+    local STUN_OFF_WAIT   = 0.06
+    local LOOP_WAIT       = 0.05
 
     local autoStunOn, autoStunThread = false, nil
     local lastFlashState, lastFlashName = nil, nil
@@ -568,32 +568,23 @@ return function(C, R, UI)
         end)
         return ok
     end
-
+    local function stunTick()
+        local fname = resolveFlashlightName(); if not fname then return end
+        local target = nearestMonsterWithin(STUN_RADIUS)
+        setFlashlight(true, fname)
+        torchHit(target)
+        task.wait(STUN_ON_WAIT)
+        setFlashlight(false, fname)
+        task.wait(STUN_OFF_WAIT)
+    end
     local function enableAutoStun()
         if autoStunOn then return end
         autoStunOn = true
         autoStunThread = task.spawn(function()
             forceFlashlightOffAll()
-            local fname = resolveFlashlightName()
-            local lastPulse = os.clock()
             while autoStunOn do
-                if not fname then fname = resolveFlashlightName() end
-                local target = nearestMonsterWithin(STUN_RADIUS)
-                if fname and target then
-                    setFlashlight(true, fname)
-                    for i=1,HIT_BURST do torchHit(target) end
-                    if os.clock() - lastPulse >= OFF_PULSE_EVERY then
-                        setFlashlight(false, fname)
-                        Run.Heartbeat:Wait()
-                        setFlashlight(true, fname)
-                        lastPulse = os.clock()
-                    end
-                else
-                    if fname then setFlashlight(false, fname) end
-                    lastPulse = os.clock()
-                    task.wait(0.15)
-                end
-                Run.Heartbeat:Wait()
+                stunTick()
+                task.wait(LOOP_WAIT)
             end
             forceFlashlightOffAll()
         end)
