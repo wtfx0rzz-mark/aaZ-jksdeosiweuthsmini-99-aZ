@@ -39,6 +39,7 @@ return function(C, R, UI)
         local STICK_EXTRA_FR    = 2
         local STICK_CLEAR_VEL   = true
         local TELEPORT_UP_NUDGE = 0.05
+        local SAFE_DROP_UP      = 4.0
 
         local function snapshotCollide()
             local ch = lp.Character
@@ -75,7 +76,7 @@ return function(C, R, UI)
             return (total > 0) and ((off / total) >= 0.9) or false
         end
 
-        local function teleportSticky(cf)
+        local function teleportSticky(cf, dropMode)
             local root = hrp(); if not root then return end
             local ch   = lp.Character
             local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
@@ -90,6 +91,11 @@ return function(C, R, UI)
             if ch then pcall(function() ch:PivotTo(targetCF) end) end
             pcall(function() root.CFrame = targetCF end)
             if STICK_CLEAR_VEL then zeroAssembly(root) end
+
+            if dropMode then
+                if not hadNoclip then setCollideAll(true, snap) end
+                return
+            end
 
             local t0 = os.clock()
             while (os.clock() - t0) < STICK_DURATION do
@@ -151,7 +157,8 @@ return function(C, R, UI)
             local snap = snapshotCollide()
             setCollideAll(false)
             diveBelowGround(DIVE_DEPTH, 4)
-            teleportSticky(targetCF)
+            local upCF = targetCF + Vector3.new(0, SAFE_DROP_UP, 0)
+            teleportSticky(upCF, true)
             waitUntilGroundedOrMoving(3)
             setCollideAll(true, snap)
         end
@@ -292,7 +299,6 @@ return function(C, R, UI)
             if cf then teleportWithDive(cf) end
         end)
 
-        -- head-level forward cast then down
         local AHEAD_DIST, RAY_DEPTH = 3, 2000
         local function groundAhead(root)
             if not root then return nil end
@@ -643,11 +649,12 @@ return function(C, R, UI)
 
         tab:Toggle({
             Title = "Auto Stun Monster",
-            Value = false,
+            Value = true,
             Callback = function(state)
                 if state then enableAutoStun() else disableAutoStun() end
             end
         })
+        task.defer(enableAutoStun)
 
         Players.LocalPlayer.CharacterAdded:Connect(function()
             if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
