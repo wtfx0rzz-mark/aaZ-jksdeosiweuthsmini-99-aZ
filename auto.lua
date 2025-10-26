@@ -210,13 +210,12 @@ return function(C, R, UI)
         edgeGui.Parent = playerGui
     end
 
-    local function makeEdgeBtn(name, row, label)
+    local function makeEdgeBtn(name, label)
         local b = edgeGui:FindFirstChild(name)
         if not b then
             b = Instance.new("TextButton")
             b.Name = name
             b.AnchorPoint = Vector2.new(1, 0)
-            b.Position    = UDim2.new(1, -6, 0, 6 + (row-1)*36)
             b.Size        = UDim2.new(0, 120, 0, 30)
             b.Text        = label
             b.TextSize    = 12
@@ -234,12 +233,24 @@ return function(C, R, UI)
         return b
     end
 
-    local phaseBtn = makeEdgeBtn("Phase10Edge", 1, "Phase 10")
-    local tpBtn    = makeEdgeBtn("TpEdge",      2, "Teleport")
-    local plantBtn = makeEdgeBtn("PlantEdge",   3, "Plant")
-    local lostBtn  = makeEdgeBtn("LostEdge",    4, "Lost Child")
-    local campBtn  = makeEdgeBtn("CampEdge",    5, "Campfire")
+    local phaseBtn = makeEdgeBtn("Phase10Edge", "Phase 10")
+    local tpBtn    = makeEdgeBtn("TpEdge",      "Teleport")
+    local plantBtn = makeEdgeBtn("PlantEdge",   "Plant")
+    local lostBtn  = makeEdgeBtn("LostEdge",    "Lost Child")
+    local campBtn  = makeEdgeBtn("CampEdge",    "Campfire")
+
+    local EDGE_ORDER = { phaseBtn, tpBtn, plantBtn, lostBtn, campBtn }
+    local function layoutEdgeButtons()
+        local row = 0
+        for _,b in ipairs(EDGE_ORDER) do
+            if b.Visible then
+                row += 1
+                b.Position = UDim2.new(1, -6, 0, 6 + (row-1)*36)
+            end
+        end
+    end
     campBtn.Visible = true
+    layoutEdgeButtons()
 
     phaseBtn.MouseButton1Click:Connect(function()
         local root = hrp(); if not root then return end
@@ -315,7 +326,11 @@ return function(C, R, UI)
     local autoLostEnabled = true
     local lostEligible  = setmetatable({}, {__mode="k"})
     local function isLostChildModel(m) return m and m:IsA("Model") and m.Name:match("^Lost Child") end
-    local function refreshLostBtn() local anyEligible = next(lostEligible) ~= nil; lostBtn.Visible = autoLostEnabled and (savedCount < MAX_TO_SAVE) and anyEligible end
+    local function refreshLostBtn()
+        local anyEligible = next(lostEligible) ~= nil
+        lostBtn.Visible = autoLostEnabled and (savedCount < MAX_TO_SAVE) and anyEligible
+        layoutEdgeButtons()
+    end
     local function onLostAttrChange(m)
         local v = m:GetAttribute("Lost") == true
         local was = lostEligible[m] == true
@@ -399,11 +414,11 @@ return function(C, R, UI)
     end
 
     tab:Section({ Title = "Quick Moves", Icon = "zap" })
-    tab:Toggle({ Title = "Show Phase 10 button", Value = false, Callback = function(state) phaseBtn.Visible = state end })
-    tab:Toggle({ Title = "Show Teleport button",   Value = false, Callback = function(state) tpBtn.Visible   = state end })
-    tab:Toggle({ Title = "Plant Saplings",         Value = false, Callback = function(state) plantBtn.Visible= state end })
+    tab:Toggle({ Title = "Show Phase 10 button", Value = false, Callback = function(state) phaseBtn.Visible = state; layoutEdgeButtons() end })
+    tab:Toggle({ Title = "Show Teleport button",   Value = false, Callback = function(state) tpBtn.Visible   = state; layoutEdgeButtons() end })
+    tab:Toggle({ Title = "Plant Saplings",         Value = false, Callback = function(state) plantBtn.Visible= state; layoutEdgeButtons() end })
     tab:Toggle({ Title = "Auto Teleport to Lost Child", Value = true, Callback = function(state) autoLostEnabled = state; refreshLostBtn() end })
-    tab:Toggle({ Title = "Show Campfire button",   Value = true,  Callback = function(state) campBtn.Visible  = state end })
+    tab:Toggle({ Title = "Show Campfire button",   Value = true,  Callback = function(state) campBtn.Visible  = state; layoutEdgeButtons() end })
 
     local godOn, godHB, godAcc = false, nil, 0
     local GOD_INTERVAL = 0.5
@@ -496,10 +511,10 @@ return function(C, R, UI)
 
     local FLASHLIGHT_PREF = { "Strong Flashlight", "Old Flashlight" }
     local MONSTER_NAMES   = { "Deer", "Ram", "Owl" }
-    local STUN_RADIUS     = 22
-    local STUN_ON_WAIT    = 0.06
-    local STUN_OFF_WAIT   = 0.06
-    local LOOP_WAIT       = 0.05
+    local STUN_RADIUS     = 24
+    local HIT_BURST       = 2
+    local OFF_PULSE_EVERY = 1.5
+    local OFF_PULSE_LEN   = 1/90
 
     local autoStunOn, autoStunThread = false, nil
     local lastFlashState, lastFlashName = nil, nil
@@ -568,23 +583,32 @@ return function(C, R, UI)
         end)
         return ok
     end
-    local function stunTick()
-        local fname = resolveFlashlightName(); if not fname then return end
-        local target = nearestMonsterWithin(STUN_RADIUS)
-        setFlashlight(true, fname)
-        torchHit(target)
-        task.wait(STUN_ON_WAIT)
-        setFlashlight(false, fname)
-        task.wait(STUN_OFF_WAIT)
-    end
+
     local function enableAutoStun()
         if autoStunOn then return end
         autoStunOn = true
         autoStunThread = task.spawn(function()
             forceFlashlightOffAll()
+            local fname = resolveFlashlightName()
+            local lastPulse = os.clock()
             while autoStunOn do
-                stunTick()
-                task.wait(LOOP_WAIT)
+                if not fname then fname = resolveFlashlightName() end
+                local target = nearestMonsterWithin(STUN_RADIUS)
+                if fname and target then
+                    setFlashlight(true, fname)
+                    for i=1,HIT_BURST do torchHit(target) end
+                    if os.clock() - lastPulse >= OFF_PULSE_EVERY then
+                        setFlashlight(false, fname)
+                        Run.Heartbeat:Wait()
+                        setFlashlight(true, fname)
+                        lastPulse = os.clock()
+                    end
+                else
+                    if fname then setFlashlight(false, fname) end
+                    lastPulse = os.clock()
+                    task.wait(0.15)
+                end
+                Run.Heartbeat:Wait()
             end
             forceFlashlightOffAll()
         end)
@@ -603,6 +627,7 @@ return function(C, R, UI)
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
+        layoutEdgeButtons()
         if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
         if infJumpOn and not infConn then enableInfJump() end
         if autoStunOn and not autoStunThread then enableAutoStun() end
