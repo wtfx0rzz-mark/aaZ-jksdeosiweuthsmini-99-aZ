@@ -16,6 +16,7 @@ return function(C, R, UI)
 
     local TUNE = C.Config
     TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
+    TUNE.CHAINSAW_COOLDOWN    = TUNE.CHAINSAW_COOLDOWN    or 0.25
     TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
     TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
     TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Ice Axe", "Good Axe", "Old Axe" }
@@ -110,13 +111,6 @@ return function(C, R, UI)
         return CFrame.new(pos) * rot
     end
 
-    local function HitTarget(targetModel, tool, hitId, impactCF)
-        local evs = RS:FindFirstChild("RemoteEvents")
-        local dmg = evs and evs:FindFirstChild("ToolDamageObject")
-        if not dmg then return end
-        dmg:InvokeServer(targetModel, tool, hitId, impactCF)
-    end
-
     local function attrBucket(treeModel)
         local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
         return (hr and hr:IsA("Instance")) and hr or treeModel
@@ -139,6 +133,26 @@ return function(C, R, UI)
         end
         local nextN = maxN + 1
         return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
+    end
+
+    C.State._chainsawSeq = C.State._chainsawSeq or 0
+    local function nextChainsawHitId()
+        C.State._chainsawSeq = C.State._chainsawSeq + 1
+        local suf = TUNE.UID_SUFFIX ~= "" and TUNE.UID_SUFFIX or tostring(lp and lp.UserId or 0)
+        return tostring(C.State._chainsawSeq) .. "_" .. suf
+    end
+
+    local function HitTarget(targetModel, tool, hitId, impactCF)
+        local evs = RS:FindFirstChild("RemoteEvents")
+        local dmg = evs and evs:FindFirstChild("ToolDamageObject")
+        if not dmg then return end
+        if tool and tool.Name == "Chainsaw" then
+            local dummy = Instance.new("Model")
+            dmg:InvokeServer(dummy, tool, hitId, impactCF)
+            dummy:Destroy()
+        else
+            dmg:InvokeServer(targetModel, tool, hitId, impactCF)
+        end
     end
 
     local function collectTreesInRadius(roots, origin, radius)
@@ -222,23 +236,27 @@ return function(C, R, UI)
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
 
+        local isSaw = (toolName == "Chainsaw")
+        local swing = isSaw and TUNE.CHAINSAW_COOLDOWN or swingDelay
+
         if not isTree then
             local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
+            local debounce = isSaw and math.min(TUNE.CHAINSAW_COOLDOWN, TUNE.CHAR_DEBOUNCE_SEC) or TUNE.CHAR_DEBOUNCE_SEC
             for i = 1, cap do
                 local mdl = targetModels[i]
                 local t0 = lastHitAt[mdl] or 0
-                if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
+                if (tick() - t0) >= debounce then
                     local hitPart = hitPartGetter(mdl)
                     if hitPart then
                         local impactCF = hitPart.CFrame
-                        local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                        local hitId = isSaw and nextChainsawHitId() or (tostring(tick()) .. "_" .. TUNE.UID_SUFFIX)
                         HitTarget(mdl, tool, hitId, impactCF)
                         lastHitAt[mdl] = tick()
                         task.wait(TUNE.CHAR_HIT_STEP_WAIT)
                     end
                 end
             end
-            task.wait(swingDelay)
+            task.wait(swing)
             return
         end
 
@@ -247,15 +265,17 @@ return function(C, R, UI)
                 local hitPart = hitPartGetter(mdl)
                 if not hitPart then return end
                 local impactCF = computeImpactCFrame(mdl, hitPart)
-                local hitId = nextPerTreeHitId(mdl)
-                pcall(function()
-                    local bucket = attrBucket(mdl)
-                    if bucket then bucket:SetAttribute(hitId, true) end
-                end)
+                local hitId = isSaw and nextChainsawHitId() or nextPerTreeHitId(mdl)
+                if not isSaw then
+                    pcall(function()
+                        local bucket = attrBucket(mdl)
+                        if bucket then bucket:SetAttribute(hitId, true) end
+                    end)
+                end
                 HitTarget(mdl, tool, hitId, impactCF)
             end)
         end
-        task.wait(swingDelay)
+        task.wait(swing)
     end
 
     local function startCharacterAura()
