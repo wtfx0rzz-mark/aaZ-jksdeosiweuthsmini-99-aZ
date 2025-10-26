@@ -37,22 +37,7 @@ return function(C, R, UI)
 
     local function findInInventory(name)
         local inv = lp and lp:FindFirstChild("Inventory")
-        if not inv then return nil end
-        local direct = inv:FindFirstChild(name)
-        if direct then return direct end
-        if name == "Ice Axe" then
-            local target = "iceaxe"
-            for _,child in ipairs(inv:GetChildren()) do
-                local norm = (child.Name or ""):lower():gsub("[%s%p_]+","")
-                if norm == target then return child end
-            end
-            local aliases = { "IceAxe", "Ice_Axe", "Ice axe", "Ice Hatchet", "Ice Pickaxe" }
-            for _,a in ipairs(aliases) do
-                local t = inv:FindFirstChild(a)
-                if t then return t end
-            end
-        end
-        return nil
+        return inv and inv:FindFirstChild(name) or nil
     end
     local function hasStrongAxe() return findInInventory("Strong Axe") ~= nil end
 
