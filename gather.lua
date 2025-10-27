@@ -53,10 +53,12 @@ return function(C, R, UI)
     local UNANCHOR_BATCH = 6
     local UNANCHOR_STEP  = 0.03
     local NUDGE_DOWN     = 4
+    local CULTIST_LIMIT  = 10
 
     local gatherOn = false
     local scanConn, hoverConn = nil, nil
     local gathered, list = {}, {}
+    local cultistCount = 0
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -82,6 +84,11 @@ return function(C, R, UI)
         return n == "pelt trader" or n:find("trader",1,true) or n:find("shopkeeper",1,true)
     end
     local function hasHumanoid(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
+    local function isCultist(m)
+        if not (m and m:IsA("Model")) then return false end
+        local nl = (m.Name or ""):lower()
+        return nl:find("cultist",1,true) and hasHumanoid(m)
+    end
 
     local function getRemote(n) local f=RS:FindFirstChild("RemoteEvents"); return f and f:FindFirstChild(n) or nil end
     local function startDrag(m) local re=getRemote("RequestStartDraggingItem"); if re then pcall(function() re:FireServer(m) end) end end
@@ -105,13 +112,23 @@ return function(C, R, UI)
         end
     end
 
-    local function addGather(m) if not gathered[m] then gathered[m]=true; list[#list+1]=m end end
+    local function addGather(m)
+        if gathered[m] then return end
+        gathered[m] = true
+        list[#list+1] = m
+        if isCultist(m) then cultistCount = cultistCount + 1 end
+    end
     local function removeGather(m)
         if not gathered[m] then return end
-        gathered[m]=nil
+        if isCultist(m) then cultistCount = math.max(0, cultistCount - 1) end
+        gathered[m] = nil
         for i=#list,1,-1 do if list[i]==m then table.remove(list,i) break end end
     end
-    local function clearAll() for m,_ in pairs(gathered) do gathered[m]=nil end; table.clear(list) end
+    local function clearAll()
+        for m,_ in pairs(gathered) do gathered[m]=nil end
+        table.clear(list)
+        cultistCount = 0
+    end
 
     local function anySelection()
         if wantMossy or wantCultist or wantSapling or wantBlueprint or wantForestGem or wantKey or wantFlashlight or wantTamingFlute then
@@ -176,6 +193,7 @@ return function(C, R, UI)
                 if not (d:IsA("Model") or d:IsA("BasePart")) then break end
                 local m = modelOf(d); if not m then break end
                 if gathered[m] or isExcludedModel(m) or not isSelectedModel(m) then break end
+                if isCultist(m) and cultistCount >= CULTIST_LIMIT then break end
                 local mp = mainPart(m); if not mp then break end
                 if (mp.Position - origin).Magnitude > rad then break end
 
@@ -397,7 +415,6 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts" })
     dropdownMulti({ title="Select Pelts", values=pelts, set=Selected.Pelts, kind="Pelts" })
 
-    -- PATCH: use shared EdgeStack so Place button does not overlap top buttons
     local function ensurePlaceEdge()
         local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
@@ -408,7 +425,6 @@ return function(C, R, UI)
             edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
             edgeGui.Parent = playerGui
         end
-        -- shared vertical stack
         local stack = edgeGui:FindFirstChild("EdgeStack")
         if not stack then
             stack = Instance.new("Frame")
