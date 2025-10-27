@@ -3,14 +3,16 @@ return function(C, R, UI)
     UI = UI or _G.UI
     assert(C and UI and UI.Tabs and UI.Tabs.Combat, "combat.lua: missing context or Combat tab")
 
-    local RS  = C.Services.RS
-    local WS  = C.Services.WS
-    local Run = C.Services.Run or game:GetService("RunService")
-    local lp  = C.LocalPlayer
+    local RS = C.Services.RS
+    local WS = C.Services.WS
+    local lp = C.LocalPlayer
     local CombatTab = UI.Tabs.Combat
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
+
+    C.State.AuraRadius = 100
+    C.State.Toggles.SmallTreeAura = false
 
     local TUNE = C.Config
     TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
@@ -22,16 +24,6 @@ return function(C, R, UI)
     TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.4
     TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.02
     TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
-    TUNE.AURA_TICK_SEC        = TUNE.AURA_TICK_SEC        or 0.16
-    TUNE.USE_FAST_IMPACT      = (TUNE.USE_FAST_IMPACT ~= false)
-    TUNE.USE_OVERLAP_QUERY    = (TUNE.USE_OVERLAP_QUERY ~= false)
-    TUNE.DEFAULT_AURA_RADIUS  = TUNE.DEFAULT_AURA_RADIUS  or 100
-
-    -- Single source of truth for default radius
-    local DEFAULT_RADIUS = tonumber(C.State.AuraRadius) or tonumber(TUNE.DEFAULT_AURA_RADIUS) or 100
-    C.State.AuraRadius = DEFAULT_RADIUS
-    -- Default ON/OFF Switch. Uncomment to turn on.
-    --C.State.Toggles.SmallTreeAura = true
 
     local running = { SmallTree = false, Character = false }
 
@@ -56,12 +48,11 @@ return function(C, R, UI)
         return t and t.Name or nil
     end
 
-    local evs = RS:FindFirstChild("RemoteEvents")
-    local EquipRemote  = evs and evs:FindFirstChild("EquipItemHandle")
-    local DamageRemote = evs and evs:FindFirstChild("ToolDamageObject")
-
     local function SafeEquip(tool)
-        if EquipRemote and tool then EquipRemote:FireServer("FireAllClients", tool) end
+        if not tool then return end
+        local ev = RS:FindFirstChild("RemoteEvents")
+        ev = ev and ev:FindFirstChild("EquipItemHandle")
+        if ev then ev:FireServer("FireAllClients", tool) end
     end
 
     local function ensureEquipped(wantedName)
@@ -74,23 +65,18 @@ return function(C, R, UI)
         return tool
     end
 
-    local trunkCache = setmetatable({}, {__mode="k"})
     local function bestTreeHitPart(tree)
-        local cached = trunkCache[tree]
-        if cached and cached.Parent then return cached end
         if not tree or not tree:IsA("Model") then return nil end
         local hr = tree:FindFirstChild("HitRegisters")
         if hr then
             local t = hr:FindFirstChild("Trunk")
-            if t and t:IsA("BasePart") then trunkCache[tree] = t return t end
+            if t and t:IsA("BasePart") then return t end
             local any = hr:FindFirstChildWhichIsA("BasePart")
-            if any then trunkCache[tree] = any return any end
+            if any then return any end
         end
         local t2 = tree:FindFirstChild("Trunk")
-        if t2 and t2:IsA("BasePart") then trunkCache[tree] = t2 return t2 end
-        local any2 = tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
-        trunkCache[tree] = any2
-        return any2
+        if t2 and t2:IsA("BasePart") then return t2 end
+        return tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
     end
 
     local hrpCache = setmetatable({}, {__mode="k"})
@@ -106,13 +92,7 @@ return function(C, R, UI)
         return hrp
     end
 
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Include
-
     local function computeImpactCFrame(model, hitPart)
-        if TUNE.USE_FAST_IMPACT then
-            return hitPart and hitPart.CFrame or CFrame.new()
-        end
         if not (model and hitPart and hitPart:IsA("BasePart")) then
             return hitPart and CFrame.new(hitPart.Position) or CFrame.new()
         end
@@ -121,94 +101,70 @@ return function(C, R, UI)
         outward = outward.Unit
         local origin  = hitPart.Position + outward * 1.0
         local dir     = -outward * 5.0
-        rayParams.FilterDescendantsInstances = {model}
-        local rc = WS:Raycast(origin, dir, rayParams)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Include
+        params.FilterDescendantsInstances = {model}
+        local rc = WS:Raycast(origin, dir, params)
         local pos = rc and (rc.Position + rc.Normal*0.02) or (origin + dir*0.6)
         local rot = hitPart.CFrame - hitPart.CFrame.Position
         return CFrame.new(pos) * rot
     end
 
     local function HitTarget(targetModel, tool, hitId, impactCF)
-        if not DamageRemote then return end
-        DamageRemote:InvokeServer(targetModel, tool, hitId, impactCF)
+        local evs = RS:FindFirstChild("RemoteEvents")
+        local dmg = evs and evs:FindFirstChild("ToolDamageObject")
+        if not dmg then return end
+        dmg:InvokeServer(targetModel, tool, hitId, impactCF)
     end
 
-    local perTreeCtr = setmetatable({}, {__mode="k"})
+    local function attrBucket(treeModel)
+        local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
+        return (hr and hr:IsA("Instance")) and hr or treeModel
+    end
+
+    local function parseHitAttrKey(k)
+        local n = string.match(k or "", "^(%d+)_" .. TUNE.UID_SUFFIX .. "$")
+        return n and tonumber(n) or nil
+    end
+
     local function nextPerTreeHitId(treeModel)
-        local n = (perTreeCtr[treeModel] or 0) + 1
-        perTreeCtr[treeModel] = n
-        return tostring(n) .. "_" .. TUNE.UID_SUFFIX
-    end
-
-    local overlapParams = OverlapParams.new()
-    overlapParams.FilterType = Enum.RaycastFilterType.Include
-    overlapParams.RespectCanCollide = false
-
-    local function treeRoots()
-        local roots = {}
-        local map = WS:FindFirstChild("Map")
-        if map then
-            local fol = map:FindFirstChild("Foliage")
-            if fol then roots[#roots+1] = fol end
+        local bucket = attrBucket(treeModel)
+        local maxN = 0
+        local attrs = bucket and bucket:GetAttributes() or nil
+        if attrs then
+            for k,_ in pairs(attrs) do
+                local n = parseHitAttrKey(k)
+                if n and n > maxN then maxN = n end
+            end
         end
-        local a = RS:FindFirstChild("Assets")
-        if a then roots[#roots+1] = a end
-        local cset = RS:FindFirstChild("CutsceneSets")
-        if cset then roots[#roots+1] = cset end
-        return roots
+        local nextN = maxN + 1
+        return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
     end
 
-    local function collectTreesInRadius(origin, radius)
-        if not TUNE.USE_OVERLAP_QUERY then
-            local out, n = {}, 0
-            local roots = treeRoots()
-            local function walk(node)
-                if not node then return end
-                if node:IsA("Model") and (TREE_NAMES[node.Name] or (C.State.Toggles.BigTreeAura and isBigTreeName(node.Name))) then
-                    local trunk = bestTreeHitPart(node)
-                    if trunk and (trunk.Position - origin).Magnitude <= radius then
-                        n += 1
+    local function collectTreesInRadius(roots, origin, radius)
+        local includeBig = C.State.Toggles.BigTreeAura == true
+        local out, n = {}, 0
+        local function walk(node)
+            if not node then return end
+            if node:IsA("Model") and (TREE_NAMES[node.Name] or (includeBig and isBigTreeName(node.Name))) then
+                local trunk = bestTreeHitPart(node)
+                if trunk then
+                    local d = (trunk.Position - origin).Magnitude
+                    if d <= radius then
+                        n = n + 1
                         out[n] = node
                     end
                 end
-                local ok, children = pcall(node.GetChildren, node)
-                if ok and children then
-                    for _, ch in ipairs(children) do
-                        walk(ch)
-                    end
+            end
+            local ok, children = pcall(node.GetChildren, node)
+            if ok and children then
+                for _, ch in ipairs(children) do
+                    walk(ch)
                 end
             end
-            for _, root in ipairs(roots) do walk(root) end
-            table.sort(out, function(a, b)
-                local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
-                local da = pa and (pa.Position - origin).Magnitude or math.huge
-                local db = pb and (pb.Position - origin).Magnitude or math.huge
-                if da == db then return (a.Name or "") < (b.Name or "") end
-                return da < db
-            end)
-            return out
         end
-
-        local roots = treeRoots()
-        if #roots == 0 then return {} end
-        overlapParams.FilterDescendantsInstances = roots
-        local parts = WS:GetPartBoundsInRadius(origin, radius, overlapParams)
-        local seen = {}
-        local out = {}
-        for i = 1, #parts do
-            local p = parts[i]
-            local mdl = p:FindFirstAncestorOfClass("Model")
-            if mdl and not seen[mdl] then
-                local nm = mdl.Name
-                local include = TREE_NAMES[nm] or (C.State.Toggles.BigTreeAura and isBigTreeName(nm))
-                if include then
-                    local trunk = bestTreeHitPart(mdl)
-                    if trunk and (trunk.Position - origin).Magnitude <= radius then
-                        seen[mdl] = true
-                        out[#out+1] = mdl
-                    end
-                end
-            end
+        for _, root in ipairs(roots) do
+            walk(root)
         end
         table.sort(out, function(a, b)
             local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
@@ -227,7 +183,8 @@ return function(C, R, UI)
             repeat
                 if not mdl:IsA("Model") then break end
                 local n = mdl.Name or ""
-                if n:lower():find("horse", 1, true) then break end
+                local nameLower = n:lower()
+                if string.find(nameLower, "horse", 1, true) then break end
                 local hit = bestCharacterHitPart(mdl)
                 if not hit then break end
                 if (hit.Position - origin).Magnitude > radius then break end
@@ -261,9 +218,9 @@ return function(C, R, UI)
                 if findInInventory(n) then toolName = n break end
             end
         end
-        if not toolName then task.wait(0.25) return end
+        if not toolName then task.wait(0.35) return end
         local tool = ensureEquipped(toolName)
-        if not tool then task.wait(0.25) return end
+        if not tool then task.wait(0.35) return end
 
         if not isTree then
             local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
@@ -285,14 +242,16 @@ return function(C, R, UI)
             return
         end
 
-        local n = #targetModels
-        for i = 1, n do
+        for _, mdl in ipairs(targetModels) do
             task.spawn(function()
-                local mdl = targetModels[i]
                 local hitPart = hitPartGetter(mdl)
                 if not hitPart then return end
                 local impactCF = computeImpactCFrame(mdl, hitPart)
                 local hitId = nextPerTreeHitId(mdl)
+                pcall(function()
+                    local bucket = attrBucket(mdl)
+                    if bucket then bucket:SetAttribute(hitId, true) end
+                end)
                 HitTarget(mdl, tool, hitId, impactCF)
             end)
         end
@@ -303,20 +262,17 @@ return function(C, R, UI)
         if running.Character then return end
         running.Character = true
         task.spawn(function()
-            local acc = 0
             while running.Character do
-                local dt = Run.Heartbeat:Wait()
-                acc += dt
-                if acc < TUNE.AURA_TICK_SEC then continue end
-                acc = 0
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then continue end
+                if not hrp then task.wait(0.2) break end
                 local origin = hrp.Position
-                local radius = tonumber(C.State.AuraRadius) or DEFAULT_RADIUS
+                local radius = tonumber(C.State.AuraRadius) or 150
                 local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
                 if #targets > 0 then
                     chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
+                else
+                    task.wait(0.3)
                 end
             end
         end)
@@ -328,18 +284,18 @@ return function(C, R, UI)
         if running.SmallTree then return end
         running.SmallTree = true
         task.spawn(function()
-            local acc = 0
             while running.SmallTree do
-                local dt = Run.Heartbeat:Wait()
-                acc += dt
-                if acc < TUNE.AURA_TICK_SEC then continue end
-                acc = 0
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then continue end
+                if not hrp then task.wait(0.2) break end
                 local origin = hrp.Position
-                local radius = tonumber(C.State.AuraRadius) or DEFAULT_RADIUS
-                local allTrees = collectTreesInRadius(origin, radius)
+                local radius = tonumber(C.State.AuraRadius) or 150
+                local roots = {
+                    WS,
+                    RS:FindFirstChild("Assets"),
+                    RS:FindFirstChild("CutsceneSets"),
+                }
+                local allTrees = collectTreesInRadius(roots, origin, radius)
                 local total = #allTrees
                 if total > 0 then
                     local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
@@ -351,6 +307,8 @@ return function(C, R, UI)
                     end
                     C.State._treeCursor = C.State._treeCursor + batchSize
                     chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                else
+                    task.wait(0.3)
                 end
             end
         end)
@@ -410,10 +368,9 @@ return function(C, R, UI)
 
     CombatTab:Slider({
         Title = "Distance",
-        Value = { Min = 0, Max = 500, Default = DEFAULT_RADIUS },
+        Value = { Min = 0, Max = 500, Default = C.State.AuraRadius or 100 },
         Callback = function(v)
-            local n = tonumber(v) or DEFAULT_RADIUS
-            C.State.AuraRadius = math.clamp(n, 0, 500)
+            C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 500)
         end
     })
 
