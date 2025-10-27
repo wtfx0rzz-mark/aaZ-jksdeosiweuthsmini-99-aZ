@@ -12,7 +12,7 @@ return function(C, R, UI)
     C.Config = C.Config or {}
 
     C.State.AuraRadius = 100
-    C.State.Toggles.SmallTreeAura = false
+    C.State.Toggles.SmallTreeAura = true
 
     local TUNE = C.Config
     TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
