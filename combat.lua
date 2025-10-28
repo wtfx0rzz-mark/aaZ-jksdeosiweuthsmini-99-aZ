@@ -24,7 +24,7 @@ return function(C, R, UI)
     TUNE.CHAR_SORT              = (TUNE.CHAR_SORT ~= false)
     TUNE.SCAN_BUDGET_TREES      = TUNE.SCAN_BUDGET_TREES      or 250
     TUNE.SCAN_BUDGET_CHARS      = TUNE.SCAN_BUDGET_CHARS      or 120
-    TUNE.TREE_HIT_CONCURRENCY   = TUNE.TREE_HIT_CONCURRENCY   or 5
+    TUNE.TREE_HIT_CONCURRENCY   = TUNE.TREE_HIT_CONCURRENCY   or 10
 
     local running = { SmallTree = false, Character = false }
 
