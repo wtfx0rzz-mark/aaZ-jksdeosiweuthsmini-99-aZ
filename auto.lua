@@ -656,6 +656,96 @@ return function(C, R, UI)
         })
         task.defer(enableAutoStun)
 
+        local function itemsFolder()
+            return WS:FindFirstChild("Items")
+        end
+        local function collectSaplingsSnapshot()
+            local items = itemsFolder(); if not items then return {} end
+            local list = {}
+            for _,m in ipairs(items:GetChildren()) do
+                if m:IsA("Model") and m.Name == "Sapling" then
+                    local mp = mainPart(m)
+                    if mp then list[#list+1] = m end
+                end
+            end
+            return list
+        end
+        local function groundAtFeetCF()
+            local root = hrp(); if not root then return nil end
+            local g = groundBelow(root.Position)
+            local look = root.CFrame.LookVector
+            local pos = Vector3.new(g.X, g.Y + 0.6, g.Z)
+            return CFrame.new(pos, pos + look)
+        end
+        local function dropModelAtFeet(m)
+            local startDrag = getRemote("RequestStartDraggingItem")
+            local stopDrag  = getRemote("StopDraggingItem")
+            if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
+            Run.Heartbeat:Wait()
+            local cf = groundAtFeetCF()
+            if cf then
+                pcall(function()
+                    if m:IsA("Model") then m:PivotTo(cf) else local p = mainPart(m); if p then p.CFrame = cf end end
+                end)
+            end
+            task.wait(0.05)
+            if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
+        end
+        local SAPLING_DROP_PER_SEC = 3
+        local function actionDropSaplings()
+            local snap = collectSaplingsSnapshot()
+            if #snap == 0 then return end
+            local interval = 1 / math.max(0.1, SAPLING_DROP_PER_SEC)
+            for i=1,#snap do
+                local m = snap[i]
+                if m and m.Parent then
+                    dropModelAtFeet(m)
+                    task.wait(interval)
+                end
+            end
+        end
+        local function plantModelInPlace(m)
+            local startDrag = getRemote("RequestStartDraggingItem")
+            local stopDrag  = getRemote("StopDraggingItem")
+            local plantRF   = getRemote("RequestPlantItem"); if not plantRF then return end
+            local mp = mainPart(m); if not mp then return end
+            local g = groundBelow(mp.Position)
+            local pos = Vector3.new(mp.Position.X, g.Y, mp.Position.Z)
+            if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
+            task.wait(0.05)
+            local ok = pcall(function()
+                if plantRF:IsA("RemoteFunction") then
+                    return plantRF:InvokeServer(m, pos)
+                else
+                    plantRF:FireServer(m, pos); return true
+                end
+            end)
+            if not ok then
+                local dummy = Instance.new("Model")
+                pcall(function()
+                    if plantRF:IsA("RemoteFunction") then
+                        return plantRF:InvokeServer(dummy, pos)
+                    else
+                        plantRF:FireServer(dummy, pos)
+                    end
+                end)
+            end
+            task.wait(0.05)
+            if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
+        end
+        local function actionPlantAllSaplings()
+            local snap = collectSaplingsSnapshot()
+            for i=1,#snap do
+                local m = snap[i]
+                if m and m.Parent then plantModelInPlace(m) end
+                Run.Heartbeat:Wait()
+            end
+        end
+
+        tab:Section({ Title = "Saplings" })
+        tab:Button({ Title = "Drop Saplings", Callback = actionDropSaplings })
+        tab:Button({ Title = "Plant All Saplings", Callback = actionPlantAllSaplings })
+
         Players.LocalPlayer.CharacterAdded:Connect(function()
             if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
             if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
