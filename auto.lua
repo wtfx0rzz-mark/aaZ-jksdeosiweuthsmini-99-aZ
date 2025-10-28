@@ -691,7 +691,7 @@ return function(C, R, UI)
             task.wait(0.05)
             if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
         end
-        local SAPLING_DROP_PER_SEC = 3
+        local SAPLING_DROP_PER_SEC = 20
         local function actionDropSaplings()
             local snap = collectSaplingsSnapshot()
             if #snap == 0 then return end
