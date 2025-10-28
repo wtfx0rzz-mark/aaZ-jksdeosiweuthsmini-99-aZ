@@ -184,13 +184,29 @@ return function(C, R, UI)
             end
             return nil
         end
+
+        -- UPDATED groundBelow: cast from player downward and exclude foliage/items/characters
         local function groundBelow(pos)
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = {lp.Character}
-            local rc = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
-            return rc and rc.Position or pos
+            local ex = { lp.Character }
+            local map = WS:FindFirstChild("Map")
+            if map then
+                local fol = map:FindFirstChild("Foliage")
+                if fol then table.insert(ex, fol) end
+            end
+            local items = WS:FindFirstChild("Items");      if items then table.insert(ex, items) end
+            local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
+            params.FilterDescendantsInstances = ex
+
+            local start = pos + Vector3.new(0, 5, 0)
+            local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
+            if hit then return hit.Position end
+
+            hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
+            return (hit and hit.Position) or pos
         end
+
         local function campfireTeleportCF()
             local fire = resolveCampfireModel(); if not fire then return nil end
             local center = fireCenterPart(fire); if not center then return fire:GetPivot() end
