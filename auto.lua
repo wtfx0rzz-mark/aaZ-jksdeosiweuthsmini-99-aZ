@@ -691,7 +691,7 @@ return function(C, R, UI)
             task.wait(0.05)
             if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
         end
-        local SAPLING_DROP_PER_SEC = 18
+        local SAPLING_DROP_PER_SEC = 3
         local function actionDropSaplings()
             local snap = collectSaplingsSnapshot()
             if #snap == 0 then return end
@@ -704,13 +704,21 @@ return function(C, R, UI)
                 end
             end
         end
+
+        local PLANT_START_DELAY = 1.0
+        local PLANT_Y_EPSILON   = 0.15
+        local function computePlantPosFromModel(m)
+            local mp = mainPart(m); if not mp then return nil end
+            local g  = groundBelow(mp.Position)
+            local baseY = mp.Position.Y - (mp.Size.Y * 0.5)
+            local y = math.min(g.Y, baseY) - PLANT_Y_EPSILON
+            return Vector3.new(mp.Position.X, y, mp.Position.Z)
+        end
         local function plantModelInPlace(m)
             local startDrag = getRemote("RequestStartDraggingItem")
             local stopDrag  = getRemote("StopDraggingItem")
             local plantRF   = getRemote("RequestPlantItem"); if not plantRF then return end
-            local mp = mainPart(m); if not mp then return end
-            local g = groundBelow(mp.Position)
-            local pos = Vector3.new(mp.Position.X, g.Y, mp.Position.Z)
+            local pos = computePlantPosFromModel(m); if not pos then return end
             if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
             task.wait(0.05)
             local ok = pcall(function()
@@ -734,6 +742,7 @@ return function(C, R, UI)
             if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
         end
         local function actionPlantAllSaplings()
+            task.wait(PLANT_START_DELAY)
             local snap = collectSaplingsSnapshot()
             for i=1,#snap do
                 local m = snap[i]
