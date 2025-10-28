@@ -1,11 +1,3 @@
---=====================================================
--- 1337 Nights | Gather Module (Multi-select + One "Gather Items" button)
---  • Top [Bring] and on-screen [Place] drop items in a compact pile
---  • Category dropdowns support MULTI select with tap-to-toggle entries
---  • One global "Gather Items" button captures union of selections
---  • Pattern matches in Misc: Blueprint, Forest Gem(+Fragment), Key variants,
---    Flashlight (old|strong), Taming flute (old|good|strong)
---=====================================================
 return function(C, R, UI)
     local Players = C.Services.Players
     local RS      = C.Services.RS
@@ -54,6 +46,9 @@ return function(C, R, UI)
     local UNANCHOR_STEP  = 0.03
     local NUDGE_DOWN     = 4
     local CULTIST_LIMIT  = 10
+
+    local PLACE_BATCH    = 12
+    local PLACE_YIELD_FN = function() Run.Heartbeat:Wait() end
 
     local gatherOn = false
     local scanConn, hoverConn = nil, nil
@@ -294,9 +289,11 @@ return function(C, R, UI)
         end
 
         local n = #items
-        local i = 1
+        local batch = math.clamp(math.floor(n / 24), 6, 30)
+        local step  = 0.02
+        local i     = 1
         while i <= n do
-            for j = i, math.min(i + UNANCHOR_BATCH - 1, n) do
+            for j = i, math.min(i + batch - 1, n) do
                 local m = items[j]
                 if m and m.Parent then
                     setAnchoredModel(m, false)
@@ -308,24 +305,33 @@ return function(C, R, UI)
                     end
                 end
             end
-            task.wait(UNANCHOR_STEP)
-            i = i + UNANCHOR_BATCH
+            task.wait(step)
+            i = i + batch
         end
     end
 
     local function placeDown()
         local baseCF = groundAheadCF(); if not baseCF then return end
-
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
         stopGather()
 
-        for i,m in ipairs(list) do
+        local n = #list
+        local cfs = table.create(n)
+        for i = 1, n do
+            cfs[i] = pileCF(i, baseCF)
+        end
+
+        local placed = 0
+        for i = 1, n do
+            local m = list[i]
             if m and m.Parent then
                 startDrag(m)
                 setAnchoredModel(m, true)
                 setNoCollideModel(m, true)
-                pivotModel(m, pileCF(i, baseCF))
+                pivotModel(m, cfs[i])
                 stopDrag(m)
+                placed += 1
+                if placed % PLACE_BATCH == 0 then PLACE_YIELD_FN() end
             end
         end
 
