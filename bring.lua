@@ -19,7 +19,6 @@ return function(C, R, UI)
     local NEARBY_RADIUS         = 20
     local ORB_OFFSET_Y          = 20
 
-    -- tight cluster around player
     local CLUSTER_RADIUS_MIN  = 0.75
     local CLUSTER_RADIUS_STEP = 0.04
     local CLUSTER_RADIUS_MAX  = 2.25
@@ -27,13 +26,26 @@ return function(C, R, UI)
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine"}
-    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
-    local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot"}
+    -- ADDED missing items from Gather
+    local junkItems    = {
+        "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
+        "UFO Junk","UFO Component"
+    }
+    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel"}
+    local foodItems    = {
+        "Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot",
+        "Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"
+    }
     local medicalItems = {"Bandage","MedKit"}
-    local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe"}
-    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling"}
-    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt"}
+    local weaponsArmor = {
+        "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe",
+        "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire"
+    }
+    local ammoMisc     = {
+        "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
+        "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute"
+    }
+    local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
 
     local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
@@ -117,7 +129,6 @@ return function(C, R, UI)
         }
     end
 
-    -- original flows use these (unchanged semantics)
     local function startDragRemote(r, model)
         if r.StartDrag then
             pcall(function() r.StartDrag:FireServer(model) end)
@@ -130,7 +141,6 @@ return function(C, R, UI)
         end
     end
 
-    -- ground-only handshake: release same model to avoid server lock
     local function startDragGround(model)
         local r = resolveRemotes()
         if r and r.StartDrag then pcall(function() r.StartDrag:FireServer(model) end) end
@@ -138,8 +148,8 @@ return function(C, R, UI)
     end
     local function stopDragGround(r, model)
         if r and r.StopDrag then
-            pcall(function() r.StopDrag:FireServer(model) end)         -- release exact model
-            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end) -- extra clear
+            pcall(function() r.StopDrag:FireServer(model) end)
+            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
         end
     end
 
@@ -169,12 +179,10 @@ return function(C, R, UI)
         return list
     end
 
-    -- items root
     local function itemsRoot()
         return WS:FindFirstChild("Items")
     end
 
-    -- collectors limited to Items
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         local root = itemsRoot(); if not root then return found end
@@ -257,6 +265,7 @@ return function(C, R, UI)
                 ok = ok or (which=="Alpha Wolf Pelt" and nm:lower():find("alpha",1,true) and nm:lower():find("wolf",1,true))
                 ok = ok or (which=="Bear Pelt" and nm:lower():find("bear",1,true) and not nm:lower():find("polar",1,true))
                 ok = ok or (which=="Polar Bear Pelt" and nm=="Polar Bear Pelt")
+                ok = ok or (which=="Arctic Fox Pelt" and nm=="Arctic Fox Pelt")
                 if ok then
                     local mp = mainPart(m)
                     if mp then
@@ -346,7 +355,6 @@ return function(C, R, UI)
         return false
     end
 
-    -- campfire and scrapper flows (unchanged)
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -396,7 +404,6 @@ return function(C, R, UI)
         stopDragRemote(r)
     end
 
-    -- cluster offset
     local dropCounter = 0
     local function ringOffset()
         dropCounter += 1
@@ -406,7 +413,6 @@ return function(C, R, UI)
         return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
     end
 
-    -- direct-to-ground CF (raycast from head, excluding items so we hit terrain/ground)
     local function groundCFAroundPlayer(model)
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -433,7 +439,6 @@ return function(C, R, UI)
         return CFrame.lookAt(pos, pos + look)
     end
 
-    -- ground drop using ground-only handshake
     local function dropNearPlayer(model)
         local r = startDragGround(model)
         Run.Heartbeat:Wait()
@@ -481,7 +486,6 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- top two actions unchanged
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -549,21 +553,23 @@ return function(C, R, UI)
         return s
     end
 
-    local function nameMatches(selectedSet, nm)
+    -- UPDATED: accept model to match Gather’s Cultist rule (name contains "cultist" AND Humanoid)
+    local function nameMatches(selectedSet, m)
+        local nm = m and m.Name or ""
         if selectedSet[nm] then return true end
         local l = nm:lower()
         if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
-        if selectedSet["Cultist"] and l:find("cultist",1,true) then return true end
+        if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then return true end
         if selectedSet["Sapling"] and nm == "Sapling" then return true end
         if selectedSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then return true end
         if selectedSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then return true end
         if selectedSet["Wolf Pelt"] and nm == "Wolf Pelt" then return true end
         if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
         if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
+        if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
         return false
     end
 
-    -- fast bring limited to workspace.Items only
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
         dropCounter = 0
@@ -585,7 +591,7 @@ return function(C, R, UI)
                 if not isExcludedModel(m) and not isUnderLogWall(m) then
                     local nm = m.Name
                     if not (nm == "Log" and isWallVariant(m)) then
-                        if nameMatches(selectedSet, nm) then
+                        if nameMatches(selectedSet, m) then
                             perNameCount[nm] = (perNameCount[nm] or 0) + 1
                             if perNameCount[nm] <= AMOUNT_TO_BRING then
                                 local mp = mainPart(m)
@@ -603,7 +609,6 @@ return function(C, R, UI)
         end
     end
 
-    -- UI (multi-select fast bring)
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
 
