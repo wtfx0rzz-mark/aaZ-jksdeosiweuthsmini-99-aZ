@@ -12,9 +12,7 @@ return function(C, R, UI)
         "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
-    local fuelItems    = {
-        "Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel"
-    }
+    local fuelItems    = { "Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel" }
     local foodItems    = {
         "Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot",
         "Chilli","Stew","Ribs","Pumpkin","Hearty Stew","Cooked Ribs","Corn","BBQ ribs","Apple","Mackerel"
@@ -85,9 +83,28 @@ return function(C, R, UI)
         return nl:find("cultist",1,true) and hasHumanoid(m)
     end
 
-    local function getRemote(n) local f=RS:FindFirstChild("RemoteEvents"); return f and f:FindFirstChild(n) or nil end
-    local function startDrag(m) local re=getRemote("RequestStartDraggingItem"); if re then pcall(function() re:FireServer(m) end) end end
-    local function stopDrag(m)  local re=getRemote("StopDraggingItem");        if re then pcall(function() re:FireServer(m) end) end end
+    local function getRemote(...)
+        local f = RS:FindFirstChild("RemoteEvents")
+        if not f then return nil end
+        for i=1,select("#", ...) do
+            local n = select(i, ...)
+            local x = f:FindFirstChild(n)
+            if x then return x end
+        end
+        return nil
+    end
+    local function startDrag(m)
+        local ev = getRemote("RequestStartDraggingItem","StartDraggingItem")
+        if not ev then return end
+        pcall(function() ev:FireServer(m) end)
+        pcall(function() ev:FireServer(Instance.new("Model")) end)
+    end
+    local function stopDrag(m)
+        local ev = getRemote("RequestStopDraggingItem","StopDraggingItem")
+        if not ev then return end
+        pcall(function() ev:FireServer(m or Instance.new("Model")) end)
+        pcall(function() ev:FireServer(Instance.new("Model")) end)
+    end
 
     local function setNoCollideModel(m, on)
         for _,d in ipairs(m:GetDescendants()) do
@@ -262,25 +279,16 @@ return function(C, R, UI)
         for _,m in ipairs(items) do
             if m and m.Parent then
                 setNoCollideModel(m, false)
-                for _,p in ipairs(m:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        p.AssemblyLinearVelocity  = Vector3.new()
-                        p.AssemblyAngularVelocity = Vector3.new()
-                    end
-                end
-            end
-        end
-
-        for _,m in ipairs(items) do
-            if m and m.Parent and m.Name == "Morsel" then
                 local mp = mainPart(m)
                 if mp then
                     pcall(function() mp:SetNetworkOwner(nil) end)
                     pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+                    pcall(function() mp.CollisionGroupId = 0 end)
                 end
                 for _,p in ipairs(m:GetDescendants()) do
                     if p:IsA("BasePart") then
-                        p.CollisionGroupId = 0
+                        p.AssemblyLinearVelocity  = Vector3.new()
+                        p.AssemblyAngularVelocity = Vector3.new()
                         p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
                         p.Massless   = false
                     end
@@ -289,11 +297,9 @@ return function(C, R, UI)
         end
 
         local n = #items
-        local batch = math.clamp(math.floor(n / 24), 6, 30)
-        local step  = 0.02
-        local i     = 1
+        local i = 1
         while i <= n do
-            for j = i, math.min(i + batch - 1, n) do
+            for j = i, math.min(i + UNANCHOR_BATCH - 1, n) do
                 local m = items[j]
                 if m and m.Parent then
                     setAnchoredModel(m, false)
@@ -305,8 +311,8 @@ return function(C, R, UI)
                     end
                 end
             end
-            task.wait(step)
-            i = i + batch
+            task.wait(UNANCHOR_STEP)
+            i = i + UNANCHOR_BATCH
         end
     end
 
@@ -317,9 +323,7 @@ return function(C, R, UI)
 
         local n = #list
         local cfs = table.create(n)
-        for i = 1, n do
-            cfs[i] = pileCF(i, baseCF)
-        end
+        for i = 1, n do cfs[i] = pileCF(i, baseCF) end
 
         local placed = 0
         for i = 1, n do
