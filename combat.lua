@@ -6,21 +6,24 @@ return function(C, R, UI)
     local RS = C.Services.RS
     local WS = C.Services.WS
     local lp = C.LocalPlayer
+    local Run = C.Services.Run or game:GetService("RunService")
     local CombatTab = UI.Tabs.Combat
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
 
     local TUNE = C.Config
-    TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
-    TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
-    TUNE.UID_SUFFIX           = TUNE.UID_SUFFIX           or "0000000000"
-    TUNE.ChopPrefer           = TUNE.ChopPrefer           or { "Chainsaw", "Strong Axe", "Ice Axe", "Good Axe", "Old Axe" }
-    TUNE.MAX_TARGETS_PER_WAVE = TUNE.MAX_TARGETS_PER_WAVE or 20
-    TUNE.CHAR_MAX_PER_WAVE    = TUNE.CHAR_MAX_PER_WAVE    or 20
-    TUNE.CHAR_DEBOUNCE_SEC    = TUNE.CHAR_DEBOUNCE_SEC    or 0.4
-    TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.02
-    TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
+    TUNE.CHOP_SWING_DELAY       = TUNE.CHOP_SWING_DELAY       or 0.50
+    TUNE.TREE_NAME              = TUNE.TREE_NAME              or "Small Tree"
+    TUNE.UID_SUFFIX             = TUNE.UID_SUFFIX             or "0000000000"
+    TUNE.ChopPrefer             = TUNE.ChopPrefer             or { "Chainsaw", "Strong Axe", "Ice Axe", "Good Axe", "Old Axe" }
+    TUNE.MAX_TARGETS_PER_WAVE   = TUNE.MAX_TARGETS_PER_WAVE   or 20
+    TUNE.CHAR_MAX_PER_WAVE      = TUNE.CHAR_MAX_PER_WAVE      or 20
+    TUNE.CHAR_DEBOUNCE_SEC      = TUNE.CHAR_DEBOUNCE_SEC      or 0.4
+    TUNE.CHAR_HIT_STEP_WAIT     = TUNE.CHAR_HIT_STEP_WAIT     or 0.02
+    TUNE.CHAR_SORT              = (TUNE.CHAR_SORT ~= false)
+    TUNE.SCAN_BUDGET_TREES      = TUNE.SCAN_BUDGET_TREES      or 250
+    TUNE.SCAN_BUDGET_CHARS      = TUNE.SCAN_BUDGET_CHARS      or 120
 
     local running = { SmallTree = false, Character = false }
 
@@ -147,61 +150,147 @@ return function(C, R, UI)
         return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
     end
 
-    local function collectTreesInRadius(roots, origin, radius)
+    local function dist2(a, b)
+        local v = a - b
+        return v.X*v.X + v.Y*v.Y + v.Z*v.Z
+    end
+
+    local Index = {
+        Trees = {}, TreePart = setmetatable({}, {__mode="k"}), TreeArr = {},
+        Chars = {}, CharArr = {},
+        treeCursor = 1, charCursor = 1
+    }
+
+    local function wantTreeName(n) return TREE_NAMES[n] or isBigTreeName(n) end
+
+    local function addTree(m)
+        if Index.Trees[m] then return end
+        Index.Trees[m] = true
+        Index.TreeArr[#Index.TreeArr+1] = m
+    end
+    local function remTree(m)
+        if not Index.Trees[m] then return end
+        Index.Trees[m] = nil
+        Index.TreePart[m] = nil
+    end
+
+    local function addChar(m)
+        if Index.Chars[m] then return end
+        Index.Chars[m] = true
+        Index.CharArr[#Index.CharArr+1] = m
+    end
+    local function remChar(m)
+        if not Index.Chars[m] then return end
+        Index.Chars[m] = nil
+        hrpCache[m] = nil
+    end
+
+    local function seedTrees(root)
+        if not root then return end
+        for _,d in ipairs(root:GetDescendants()) do
+            if d:IsA("Model") and wantTreeName(d.Name) then addTree(d) end
+        end
+    end
+
+    local function hookTreeRoot(root)
+        if not root then return end
+        seedTrees(root)
+        root.DescendantAdded:Connect(function(d)
+            if d:IsA("Model") and wantTreeName(d.Name) then addTree(d) end
+        end)
+        root.DescendantRemoving:Connect(function(d)
+            if d:IsA("Model") then remTree(d) end
+        end)
+    end
+
+    local function ensureWatchers()
+        hookTreeRoot(WS)
+        hookTreeRoot(RS:FindFirstChild("Assets"))
+        hookTreeRoot(RS:FindFirstChild("CutsceneSets"))
+        local cf = WS:FindFirstChild("Characters")
+        if cf then
+            for _,ch in ipairs(cf:GetChildren()) do if ch:IsA("Model") then addChar(ch) end end
+            cf.ChildAdded:Connect(function(m) if m:IsA("Model") then addChar(m) end end)
+            cf.ChildRemoved:Connect(function(m) if m:IsA("Model") then remChar(m) end end)
+        end
+    end
+
+    ensureWatchers()
+
+    local function collectTreesInRadius(_, origin, radius)
         local includeBig = C.State.Toggles.BigTreeAura == true
-        local out, n = {}, 0
-        local function walk(node)
-            if not node then return end
-            if node:IsA("Model") and (TREE_NAMES[node.Name] or (includeBig and isBigTreeName(node.Name))) then
-                local trunk = bestTreeHitPart(node)
-                if trunk then
-                    local d = (trunk.Position - origin).Magnitude
-                    if d <= radius then
-                        n = n + 1
-                        out[n] = node
+        local r2 = radius*radius
+        local out, taken, scanned = {}, 0, 0
+        local N = #Index.TreeArr
+        if N == 0 then return out end
+        local cur = Index.treeCursor
+        local budget = TUNE.SCAN_BUDGET_TREES
+        while scanned < N and taken < TUNE.MAX_TARGETS_PER_WAVE and budget > 0 do
+            local m = Index.TreeArr[cur]
+            scanned = scanned + 1
+            budget = budget - 1
+            cur = cur + 1
+            if cur > N then cur = 1 end
+            if m and m.Parent and m:IsA("Model") then
+                local nm = m.Name
+                if TREE_NAMES[nm] or (includeBig and isBigTreeName(nm)) then
+                    local part = Index.TreePart[m]
+                    if not part or not part.Parent then
+                        part = bestTreeHitPart(m)
+                        Index.TreePart[m] = part
+                    end
+                    if part then
+                        if dist2(part.Position, origin) <= r2 then
+                            out[#out+1] = m
+                            taken = taken + 1
+                        end
                     end
                 end
             end
-            local ok, children = pcall(node.GetChildren, node)
-            if ok and children then
-                for _, ch in ipairs(children) do
-                    walk(ch)
-                end
-            end
         end
-        for _, root in ipairs(roots) do
-            walk(root)
-        end
-        table.sort(out, function(a, b)
-            local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
-            local da = pa and (pa.Position - origin).Magnitude or math.huge
-            local db = pb and (pb.Position - origin).Magnitude or math.huge
-            if da == db then return (a.Name or "") < (b.Name or "") end
-            return da < db
-        end)
+        Index.treeCursor = cur
         return out
     end
 
     local function collectCharactersInRadius(charsFolder, origin, radius)
-        local out = {}
-        if not charsFolder then return out end
-        for _, mdl in ipairs(charsFolder:GetChildren()) do
-            repeat
-                if not mdl:IsA("Model") then break end
-                local n = mdl.Name or ""
-                local nameLower = n:lower()
-                if string.find(nameLower, "horse", 1, true) then break end
-                local distPart = charDistancePart(mdl)
-                if not distPart then break end
-                if (distPart.Position - origin).Magnitude > radius then break end
-                out[#out+1] = mdl
-            until true
+        local r2 = radius*radius
+        local out, taken, scanned = {}, 0, 0
+        local arr = Index.CharArr
+        local N = #arr
+        if N == 0 then
+            if charsFolder then
+                for _,m in ipairs(charsFolder:GetChildren()) do
+                    if m:IsA("Model") then addChar(m) end
+                end
+                arr = Index.CharArr
+                N = #arr
+            end
         end
-        if TUNE.CHAR_SORT then
+        local cur = Index.charCursor
+        local budget = TUNE.SCAN_BUDGET_CHARS
+        while scanned < N and taken < TUNE.CHAR_MAX_PER_WAVE and budget > 0 do
+            local mdl = arr[cur]
+            scanned = scanned + 1
+            budget = budget - 1
+            cur = cur + 1
+            if cur > N then cur = 1 end
+            if mdl and mdl.Parent and mdl:IsA("Model") then
+                local nameLower = (mdl.Name or ""):lower()
+                if not string.find(nameLower, "horse", 1, true) then
+                    local dp = charDistancePart(mdl)
+                    if dp and dist2(dp.Position, origin) <= r2 then
+                        out[#out+1] = mdl
+                        taken = taken + 1
+                    end
+                end
+            end
+        end
+        Index.charCursor = cur
+        if TUNE.CHAR_SORT and #out > 1 then
             table.sort(out, function(a, b)
                 local pa, pb = charDistancePart(a), charDistancePart(b)
-                local da = pa and (pa.Position - origin).Magnitude or math.huge
-                local db = pb and (pb.Position - origin).Magnitude or math.huge
+                local da = pa and dist2(pa.Position, origin) or math.huge
+                local db = pb and dist2(pb.Position, origin) or math.huge
                 if da == db then return (a.Name or "") < (b.Name or "") end
                 return da < db
             end)
@@ -288,7 +377,6 @@ return function(C, R, UI)
     end
     local function stopCharacterAura() running.Character = false end
 
-    C.State._treeCursor = C.State._treeCursor or 1
     local function startSmallTreeAura()
         if running.SmallTree then return end
         running.SmallTree = true
@@ -301,22 +389,8 @@ return function(C, R, UI)
                 else
                     local origin = hrp.Position
                     local radius = tonumber(C.State.AuraRadius) or 150
-                    local roots = {
-                        WS,
-                        RS:FindFirstChild("Assets"),
-                        RS:FindFirstChild("CutsceneSets"),
-                    }
-                    local allTrees = collectTreesInRadius(roots, origin, radius)
-                    local total = #allTrees
-                    if total > 0 then
-                        local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
-                        if C.State._treeCursor > total then C.State._treeCursor = 1 end
-                        local batch = table.create(batchSize)
-                        for i = 1, batchSize do
-                            local idx = ((C.State._treeCursor + i - 2) % total) + 1
-                            batch[i] = allTrees[idx]
-                        end
-                        C.State._treeCursor = C.State._treeCursor + batchSize
+                    local batch = collectTreesInRadius(nil, origin, radius)
+                    if #batch > 0 then
                         chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
                     else
                         task.wait(0.3)
