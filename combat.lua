@@ -17,8 +17,8 @@ return function(C, R, UI)
     TUNE.TREE_NAME              = TUNE.TREE_NAME              or "Small Tree"
     TUNE.UID_SUFFIX             = TUNE.UID_SUFFIX             or "0000000000"
     TUNE.ChopPrefer             = TUNE.ChopPrefer             or { "Chainsaw", "Strong Axe", "Ice Axe", "Good Axe", "Old Axe" }
-    TUNE.MAX_TARGETS_PER_WAVE   = TUNE.MAX_TARGETS_PER_WAVE   or 20
-    TUNE.CHAR_MAX_PER_WAVE      = TUNE.CHAR_MAX_PER_WAVE      or 20
+    TUNE.MAX_TARGETS_PER_WAVE   = TUNE.MAX_TARGETS_PER_WAVE   or 10
+    TUNE.CHAR_MAX_PER_WAVE      = TUNE.CHAR_MAX_PER_WAVE      or 10
     TUNE.CHAR_DEBOUNCE_SEC      = TUNE.CHAR_DEBOUNCE_SEC      or 0.4
     TUNE.CHAR_HIT_STEP_WAIT     = TUNE.CHAR_HIT_STEP_WAIT     or 0.02
     TUNE.CHAR_SORT              = (TUNE.CHAR_SORT ~= false)
