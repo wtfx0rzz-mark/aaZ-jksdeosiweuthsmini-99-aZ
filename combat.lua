@@ -3,10 +3,10 @@ return function(C, R, UI)
     UI = UI or _G.UI
     assert(C and UI and UI.Tabs and UI.Tabs.Combat, "combat.lua: missing context or Combat tab")
 
-    local RS = C.Services.RS
-    local WS = C.Services.WS
-    local lp = C.LocalPlayer
+    local RS  = C.Services.RS
+    local WS  = C.Services.WS
     local Run = C.Services.Run or game:GetService("RunService")
+    local lp  = C.LocalPlayer
     local CombatTab = UI.Tabs.Combat
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
@@ -24,6 +24,7 @@ return function(C, R, UI)
     TUNE.CHAR_SORT              = (TUNE.CHAR_SORT ~= false)
     TUNE.SCAN_BUDGET_TREES      = TUNE.SCAN_BUDGET_TREES      or 250
     TUNE.SCAN_BUDGET_CHARS      = TUNE.SCAN_BUDGET_CHARS      or 120
+    TUNE.TREE_HIT_CONCURRENCY   = TUNE.TREE_HIT_CONCURRENCY   or 5
 
     local running = { SmallTree = false, Character = false }
 
@@ -157,6 +158,8 @@ return function(C, R, UI)
 
     local Index = {
         Trees = {}, TreePart = setmetatable({}, {__mode="k"}), TreeArr = {},
+        TreeImpactCF = setmetatable({}, {__mode="k"}),
+        TreeHitSeed  = setmetatable({}, {__mode="k"}),
         Chars = {}, CharArr = {},
         treeCursor = 1, charCursor = 1
     }
@@ -172,6 +175,8 @@ return function(C, R, UI)
         if not Index.Trees[m] then return end
         Index.Trees[m] = nil
         Index.TreePart[m] = nil
+        Index.TreeImpactCF[m] = nil
+        Index.TreeHitSeed[m]  = nil
     end
 
     local function addChar(m)
@@ -239,11 +244,9 @@ return function(C, R, UI)
                         part = bestTreeHitPart(m)
                         Index.TreePart[m] = part
                     end
-                    if part then
-                        if dist2(part.Position, origin) <= r2 then
-                            out[#out+1] = m
-                            taken = taken + 1
-                        end
+                    if part and dist2(part.Position, origin) <= r2 then
+                        out[#out+1] = m
+                        taken = taken + 1
                     end
                 end
             end
@@ -298,7 +301,36 @@ return function(C, R, UI)
         return out
     end
 
+    local function jittered(cf, k)
+        local r = 0.05 + 0.015 * (k % 5)
+        local ang = k * 2.3999632297
+        local off = Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
+        local rot = cf - cf.Position
+        return CFrame.new(cf.Position + off) * rot
+    end
+
+    local function impactCFForTree(treeModel, hitPart)
+        local base = Index.TreeImpactCF[treeModel]
+        if not base then
+            base = computeImpactCFrame(treeModel, hitPart)
+            Index.TreeImpactCF[treeModel] = base
+        end
+        local k = (Index.TreeHitSeed[treeModel] or 0) + 1
+        Index.TreeHitSeed[treeModel] = k
+        return jittered(base, k)
+    end
+
     local lastHitAt = setmetatable({}, {__mode="k"})
+    local activeHits = 0
+    local function acquire()
+        while activeHits >= TUNE.TREE_HIT_CONCURRENCY do Run.Heartbeat:Wait() end
+        activeHits += 1
+    end
+    local function release()
+        activeHits -= 1
+        if activeHits < 0 then activeHits = 0 end
+    end
+
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         local toolName
         if isTree and C.State.Toggles.BigTreeAura then
@@ -338,16 +370,19 @@ return function(C, R, UI)
         end
 
         for _, mdl in ipairs(targetModels) do
+            acquire()
             task.spawn(function()
-                local hitPart = hitPartGetter(mdl)
-                if not hitPart then return end
-                local impactCF = computeImpactCFrame(mdl, hitPart)
-                local hitId = nextPerTreeHitId(mdl)
-                pcall(function()
-                    local bucket = attrBucket(mdl)
-                    if bucket then bucket:SetAttribute(hitId, true) end
-                end)
-                HitTarget(mdl, tool, hitId, impactCF)
+                local ok, hitPart = pcall(hitPartGetter, mdl)
+                if ok and hitPart then
+                    local impactCF = impactCFForTree(mdl, hitPart)
+                    local hitId = nextPerTreeHitId(mdl)
+                    pcall(function()
+                        local bucket = attrBucket(mdl)
+                        if bucket then bucket:SetAttribute(hitId, true) end
+                    end)
+                    HitTarget(mdl, tool, hitId, impactCF)
+                end
+                release()
             end)
         end
         task.wait(swingDelay)
