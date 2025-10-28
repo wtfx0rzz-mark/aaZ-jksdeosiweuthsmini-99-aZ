@@ -1,70 +1,19 @@
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
-    assert(C and UI and UI.Tabs and UI.Tabs.Combat, "combat.lua: missing context or Combat tab")
+    local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
+    local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
+    local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
+    local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
 
-    local RS  = C.Services.RS
-    local WS  = C.Services.WS
-    local Run = C.Services.Run or game:GetService("RunService")
-    local lp  = C.LocalPlayer
-    local CombatTab = UI.Tabs.Combat
+    local lp = Players.LocalPlayer
+    local function hrp()
+        local ch = lp.Character or lp.CharacterAdded:Wait()
+        return ch and ch:FindFirstChild("HumanoidRootPart")
+    end
 
-    C.State  = C.State or { AuraRadius = 150, Toggles = {} }
-    C.Config = C.Config or {}
-
-    local TUNE = C.Config
-    TUNE.CHOP_SWING_DELAY       = TUNE.CHOP_SWING_DELAY       or 0.50
-    TUNE.TREE_NAME              = TUNE.TREE_NAME              or "Small Tree"
-    TUNE.UID_SUFFIX             = TUNE.UID_SUFFIX             or "0000000000"
-    TUNE.ChopPrefer             = TUNE.ChopPrefer             or { "Chainsaw", "Strong Axe", "Ice Axe", "Good Axe", "Old Axe" }
-    TUNE.MAX_TARGETS_PER_WAVE   = TUNE.MAX_TARGETS_PER_WAVE   or 10
-    TUNE.CHAR_MAX_PER_WAVE      = TUNE.CHAR_MAX_PER_WAVE      or 10
-    TUNE.CHAR_DEBOUNCE_SEC      = TUNE.CHAR_DEBOUNCE_SEC      or 0.4
-    TUNE.CHAR_HIT_STEP_WAIT     = TUNE.CHAR_HIT_STEP_WAIT     or 0.01
-    TUNE.CHAR_SORT              = (TUNE.CHAR_SORT ~= false)
-    TUNE.SCAN_BUDGET_TREES      = TUNE.SCAN_BUDGET_TREES      or 250
-    TUNE.SCAN_BUDGET_CHARS      = TUNE.SCAN_BUDGET_CHARS      or 120
-    TUNE.TREE_HIT_CONCURRENCY   = TUNE.TREE_HIT_CONCURRENCY   or 10
-
-    local running = { SmallTree = false, Character = false }
-
+    local UID = (C and C.Config and C.Config.UID_SUFFIX) or "0000000000"
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
-    local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
-
-    local function isBigTreeName(n)
-        if BIG_TREE_NAMES[n] then return true end
-        return type(n)=="string" and n:match("^WebbedTreeBig%d*$") ~= nil
-    end
-
-    local function findInInventory(name)
-        local inv = lp and lp:FindFirstChild("Inventory")
-        return inv and inv:FindFirstChild(name) or nil
-    end
-    local function hasStrongAxe() return findInInventory("Strong Axe") ~= nil end
-
-    local function equippedToolName()
-        local ch = lp and lp.Character
-        if not ch then return nil end
-        local t = ch:FindFirstChildOfClass("Tool")
-        return t and t.Name or nil
-    end
-
-    local function SafeEquip(tool)
-        if not tool then return end
-        local ev = RS:FindFirstChild("RemoteEvents")
-        ev = ev and ev:FindFirstChild("EquipItemHandle")
-        if ev then ev:FireServer("FireAllClients", tool) end
-    end
-
-    local function ensureEquipped(wantedName)
-        if not wantedName then return nil end
-        if equippedToolName() == wantedName then
-            return findInInventory(wantedName)
-        end
-        local tool = findInInventory(wantedName)
-        if tool then SafeEquip(tool) end
-        return tool
-    end
 
     local function bestTreeHitPart(tree)
         if not tree or not tree:IsA("Model") then return nil end
@@ -80,427 +29,265 @@ return function(C, R, UI)
         return tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
     end
 
-    local hrpCache = setmetatable({}, {__mode="k"})
-    local function bestCharacterHitPart(model)
-        if not model or not model:IsA("Model") then return nil end
-        local hrp = hrpCache[model]
-        if hrp and hrp.Parent then return hrp end
-        hrp = model:FindFirstChild("HumanoidRootPart")
-        if hrp and hrp:IsA("BasePart") then hrpCache[model] = hrp return hrp end
-        if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then return model.PrimaryPart end
-        hrp = model:FindFirstChildWhichIsA("BasePart")
-        if hrp then hrpCache[model] = hrp end
-        return hrp
-    end
-
-    local function charDistancePart(m)
-        if not (m and m:IsA("Model")) then return nil end
-        local hrp = m:FindFirstChild("HumanoidRootPart")
-        if hrp and hrp:IsA("BasePart") then return hrp end
-        local pp = m.PrimaryPart
-        if pp and pp:IsA("BasePart") then return pp end
-        return nil
-    end
-
-    local function computeImpactCFrame(model, hitPart)
-        if not (model and hitPart and hitPart:IsA("BasePart")) then
-            return hitPart and CFrame.new(hitPart.Position) or CFrame.new()
-        end
-        local outward = hitPart.CFrame.LookVector
-        if outward.Magnitude == 0 then outward = Vector3.new(0,0,-1) end
-        outward = outward.Unit
-        local origin  = hitPart.Position + outward * 1.0
-        local dir     = -outward * 5.0
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Include
-        params.FilterDescendantsInstances = {model}
-        local rc = WS:Raycast(origin, dir, params)
-        local pos = rc and (rc.Position + rc.Normal*0.02) or (origin + dir*0.6)
-        local rot = hitPart.CFrame - hitPart.CFrame.Position
-        return CFrame.new(pos) * rot
-    end
-
-    local function HitTarget(targetModel, tool, hitId, impactCF)
-        local evs = RS:FindFirstChild("RemoteEvents")
-        local dmg = evs and evs:FindFirstChild("ToolDamageObject")
-        if not dmg then return end
-        dmg:InvokeServer(targetModel, tool, hitId, impactCF)
-    end
-
-    local function attrBucket(treeModel)
-        local hr = treeModel and treeModel:FindFirstChild("HitRegisters")
-        return (hr and hr:IsA("Instance")) and hr or treeModel
-    end
-
-    local function parseHitAttrKey(k)
-        local n = string.match(k or "", "^(%d+)_" .. TUNE.UID_SUFFIX .. "$")
-        return n and tonumber(n) or nil
-    end
-
-    local function nextPerTreeHitId(treeModel)
-        local bucket = attrBucket(treeModel)
-        local maxN = 0
-        local attrs = bucket and bucket:GetAttributes() or nil
-        if attrs then
-            for k,_ in pairs(attrs) do
-                local n = parseHitAttrKey(k)
-                if n and n > maxN then maxN = n end
-            end
-        end
-        local nextN = maxN + 1
-        return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
-    end
-
     local function dist2(a, b)
         local v = a - b
         return v.X*v.X + v.Y*v.Y + v.Z*v.Z
     end
 
-    local Index = {
-        Trees = {}, TreePart = setmetatable({}, {__mode="k"}), TreeArr = {},
-        TreeImpactCF = setmetatable({}, {__mode="k"}),
-        TreeHitSeed  = setmetatable({}, {__mode="k"}),
-        Chars = {}, CharArr = {},
-        treeCursor = 1, charCursor = 1
-    }
+    local pg = lp:WaitForChild("PlayerGui")
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "ChopDebugUI"
+    sg.ResetOnSpawn = false
+    sg.IgnoreGuiInset = true
+    sg.Parent = pg
 
-    local function wantTreeName(n) return TREE_NAMES[n] or isBigTreeName(n) end
+    local frame = Instance.new("Frame")
+    frame.Name = "Win"
+    frame.Size = UDim2.new(0, 360, 0, 220)
+    frame.Position = UDim2.new(1, -380, 0, 60)
+    frame.BackgroundColor3 = Color3.fromRGB(16,16,16)
+    frame.BackgroundTransparency = 0.25
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = sg
 
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(1, 0, 0, 28)
+    bar.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    bar.BorderSizePixel = 0
+    bar.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -140, 1, 0)
+    title.Position = UDim2.new(0, 8, 0, 0)
+    title.BackgroundTransparency = 1
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Font = Enum.Font.Code
+    title.TextSize = 14
+    title.TextColor3 = Color3.fromRGB(230,230,230)
+    title.Text = "Chop Debug"
+    title.Parent = bar
+
+    local countLbl = Instance.new("TextLabel")
+    countLbl.Size = UDim2.new(0, 120, 1, 0)
+    countLbl.Position = UDim2.new(1, -120, 0, 0)
+    countLbl.BackgroundTransparency = 1
+    countLbl.TextXAlignment = Enum.TextXAlignment.Right
+    countLbl.Font = Enum.Font.Code
+    countLbl.TextSize = 14
+    countLbl.TextColor3 = Color3.fromRGB(180,180,180)
+    countLbl.Text = "Range: 0"
+    countLbl.Parent = bar
+
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Size = UDim2.new(0, 52, 0, 24)
+    copyBtn.Position = UDim2.new(0, 6, 0, 30)
+    copyBtn.Text = "Copy"
+    copyBtn.Font = Enum.Font.Code
+    copyBtn.TextSize = 14
+    copyBtn.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    copyBtn.TextColor3 = Color3.fromRGB(235,235,235)
+    copyBtn.Parent = frame
+
+    local clearBtn = copyBtn:Clone()
+    clearBtn.Position = UDim2.new(0, 64, 0, 30)
+    clearBtn.Text = "Clear"
+    clearBtn.Parent = frame
+
+    local closeBtn = copyBtn:Clone()
+    closeBtn.Position = UDim2.new(0, 122, 0, 30)
+    closeBtn.Text = "Close"
+    closeBtn.Parent = frame
+
+    local box = Instance.new("TextBox")
+    box.MultiLine = true
+    box.ClearTextOnFocus = false
+    box.Size = UDim2.new(1, -12, 1, -60)
+    box.Position = UDim2.new(0, 6, 0, 58)
+    box.Font = Enum.Font.Code
+    box.TextSize = 13
+    box.TextXAlignment = Enum.TextXAlignment.Left
+    box.TextYAlignment = Enum.TextYAlignment.Top
+    box.TextWrapped = false
+    box.TextEditable = true
+    box.Text = ""
+    box.PlaceholderText = ""
+    box.RichText = false
+    box.BackgroundColor3 = Color3.fromRGB(18,18,18)
+    box.TextColor3 = Color3.fromRGB(220,220,220)
+    box.Parent = frame
+
+    local lines = {}
+    local maxChars = 120000
+    local function now()
+        local t = os.clock()
+        local s = math.floor(t % 60)
+        local m = math.floor((t/60) % 60)
+        return string.format("%02d:%02d", m, s)
+    end
+    local function push(msg)
+        lines[#lines+1] = "["..now().."] "..msg
+        if #lines > 4000 then
+            for i=1,1000 do table.remove(lines,1) end
+        end
+        local t = table.concat(lines, "\n")
+        if #t > maxChars then
+            t = string.sub(t, #t - maxChars + 1)
+        end
+        box.Text = t
+        box.CursorPosition = #box.Text + 1
+    end
+
+    copyBtn.MouseButton1Click:Connect(function()
+        local t = box.Text
+        local ok = false
+        if typeof(setclipboard) == "function" then
+            local s, e = pcall(setclipboard, t)
+            ok = s and e == nil
+        end
+        if not ok and getgenv then
+            local f = getgenv().setclipboard or getgenv().setrbxclipboard
+            if typeof(f) == "function" then pcall(f, t) end
+        end
+        box:CaptureFocus()
+        box.SelectionStart = 1
+        box.CursorPosition = #box.Text + 1
+    end)
+    clearBtn.MouseButton1Click:Connect(function()
+        lines = {}
+        box.Text = ""
+    end)
+    closeBtn.MouseButton1Click:Connect(function()
+        sg:Destroy()
+    end)
+
+    local Index = { TreesSet = {}, TreesArr = {} }
     local function addTree(m)
-        if Index.Trees[m] then return end
-        Index.Trees[m] = true
-        Index.TreeArr[#Index.TreeArr+1] = m
+        if Index.TreesSet[m] then return end
+        Index.TreesSet[m] = true
+        Index.TreesArr[#Index.TreesArr+1] = m
     end
     local function remTree(m)
-        if not Index.Trees[m] then return end
-        Index.Trees[m] = nil
-        Index.TreePart[m] = nil
-        Index.TreeImpactCF[m] = nil
-        Index.TreeHitSeed[m]  = nil
+        if not Index.TreesSet[m] then return end
+        Index.TreesSet[m] = nil
     end
 
-    local function addChar(m)
-        if Index.Chars[m] then return end
-        Index.Chars[m] = true
-        Index.CharArr[#Index.CharArr+1] = m
-    end
-    local function remChar(m)
-        if not Index.Chars[m] then return end
-        Index.Chars[m] = nil
-        hrpCache[m] = nil
-    end
-
-    local function seedTrees(root)
+    local function seed(root)
         if not root then return end
         for _,d in ipairs(root:GetDescendants()) do
-            if d:IsA("Model") and wantTreeName(d.Name) then addTree(d) end
+            if d:IsA("Model") and TREE_NAMES[d.Name] then addTree(d) end
         end
     end
-
-    local function hookTreeRoot(root)
+    local function hook(root)
         if not root then return end
-        seedTrees(root)
+        seed(root)
         root.DescendantAdded:Connect(function(d)
-            if d:IsA("Model") and wantTreeName(d.Name) then addTree(d) end
+            if d:IsA("Model") and TREE_NAMES[d.Name] then addTree(d) end
         end)
         root.DescendantRemoving:Connect(function(d)
             if d:IsA("Model") then remTree(d) end
         end)
     end
 
-    local function ensureWatchers()
-        hookTreeRoot(WS)
-        hookTreeRoot(RS:FindFirstChild("Assets"))
-        hookTreeRoot(RS:FindFirstChild("CutsceneSets"))
-        local cf = WS:FindFirstChild("Characters")
-        if cf then
-            for _,ch in ipairs(cf:GetChildren()) do if ch:IsA("Model") then addChar(ch) end end
-            cf.ChildAdded:Connect(function(m) if m:IsA("Model") then addChar(m) end end)
-            cf.ChildRemoved:Connect(function(m) if m:IsA("Model") then remChar(m) end end)
+    hook(WS)
+    hook(RS:FindFirstChild("Assets"))
+    hook(RS:FindFirstChild("CutsceneSets"))
+
+    local tracked = {}
+    local attrCache = setmetatable({}, {__mode="k"})
+
+    local function attrKeys(inst)
+        local t = {}
+        local attrs = inst and inst:GetAttributes() or nil
+        if attrs then
+            for k,_ in pairs(attrs) do
+                t[k] = true
+            end
         end
+        return t
     end
 
-    ensureWatchers()
+    local function bucketFor(tree)
+        local hr = tree and tree:FindFirstChild("HitRegisters")
+        return (hr and hr:IsA("Instance")) and hr or tree
+    end
 
-    local function collectTreesInRadius(_, origin, radius)
-        local includeBig = C.State.Toggles.BigTreeAura == true
+    local function inRangeList()
+        local r = hrp(); if not r then return {} end
+        local origin = r.Position
+        local radius = (C and C.State and tonumber(C.State.AuraRadius)) or 150
         local r2 = radius*radius
-        local out, taken, scanned = {}, 0, 0
-        local N = #Index.TreeArr
-        if N == 0 then return out end
-        local cur = Index.treeCursor
-        local budget = TUNE.SCAN_BUDGET_TREES
-        while scanned < N and taken < TUNE.MAX_TARGETS_PER_WAVE and budget > 0 do
-            local m = Index.TreeArr[cur]
-            scanned = scanned + 1
-            budget = budget - 1
-            cur = cur + 1
-            if cur > N then cur = 1 end
-            if m and m.Parent and m:IsA("Model") then
-                local nm = m.Name
-                if TREE_NAMES[nm] or (includeBig and isBigTreeName(nm)) then
-                    local part = Index.TreePart[m]
-                    if not part or not part.Parent then
-                        part = bestTreeHitPart(m)
-                        Index.TreePart[m] = part
-                    end
-                    if part and dist2(part.Position, origin) <= r2 then
-                        out[#out+1] = m
-                        taken = taken + 1
-                    end
+        local out = {}
+        for i=1,#Index.TreesArr do
+            local m = Index.TreesArr[i]
+            if m and Index.TreesSet[m] and m.Parent then
+                local part = bestTreeHitPart(m)
+                if part and dist2(part.Position, origin) <= r2 then
+                    out[#out+1] = m
                 end
             end
         end
-        Index.treeCursor = cur
+        table.sort(out, function(a,b)
+            local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
+            if not pa or not pb then return (a.Name or "") < (b.Name or "") end
+            return (pa.Position - origin).Magnitude < (pb.Position - origin).Magnitude
+        end)
         return out
     end
 
-    local function collectCharactersInRadius(charsFolder, origin, radius)
-        local r2 = radius*radius
-        local out, taken, scanned = {}, 0, 0
-        local arr = Index.CharArr
-        local N = #arr
-        if N == 0 then
-            if charsFolder then
-                for _,m in ipairs(charsFolder:GetChildren()) do
-                    if m:IsA("Model") then addChar(m) end
-                end
-                arr = Index.CharArr
-                N = #arr
-            end
-        end
-        local cur = Index.charCursor
-        local budget = TUNE.SCAN_BUDGET_CHARS
-        while scanned < N and taken < TUNE.CHAR_MAX_PER_WAVE and budget > 0 do
-            local mdl = arr[cur]
-            scanned = scanned + 1
-            budget = budget - 1
-            cur = cur + 1
-            if cur > N then cur = 1 end
-            if mdl and mdl.Parent and mdl:IsA("Model") then
-                local nameLower = (mdl.Name or ""):lower()
-                if not string.find(nameLower, "horse", 1, true) then
-                    local dp = charDistancePart(mdl)
-                    if dp and dist2(dp.Position, origin) <= r2 then
-                        out[#out+1] = mdl
-                        taken = taken + 1
-                    end
-                end
-            end
-        end
-        Index.charCursor = cur
-        if TUNE.CHAR_SORT and #out > 1 then
-            table.sort(out, function(a, b)
-                local pa, pb = charDistancePart(a), charDistancePart(b)
-                local da = pa and dist2(pa.Position, origin) or math.huge
-                local db = pb and dist2(pb.Position, origin) or math.huge
-                if da == db then return (a.Name or "") < (b.Name or "") end
-                return da < db
-            end)
-        end
-        return out
-    end
-
-    local function jittered(cf, k)
-        local r = 0.05 + 0.015 * (k % 5)
-        local ang = k * 2.3999632297
-        local off = Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
-        local rot = cf - cf.Position
-        return CFrame.new(cf.Position + off) * rot
-    end
-
-    local function impactCFForTree(treeModel, hitPart)
-        local base = Index.TreeImpactCF[treeModel]
-        if not base then
-            base = computeImpactCFrame(treeModel, hitPart)
-            Index.TreeImpactCF[treeModel] = base
-        end
-        local k = (Index.TreeHitSeed[treeModel] or 0) + 1
-        Index.TreeHitSeed[treeModel] = k
-        return jittered(base, k)
-    end
-
-    local lastHitAt = setmetatable({}, {__mode="k"})
-    local activeHits = 0
-    local function acquire()
-        while activeHits >= TUNE.TREE_HIT_CONCURRENCY do Run.Heartbeat:Wait() end
-        activeHits += 1
-    end
-    local function release()
-        activeHits -= 1
-        if activeHits < 0 then activeHits = 0 end
-    end
-
-    local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
-        local toolName
-        if isTree and C.State.Toggles.BigTreeAura then
-            if hasStrongAxe() then
-                toolName = "Strong Axe"
-            else
-                C.State.Toggles.BigTreeAura = false
-            end
-        end
-        if not toolName then
-            for _, n in ipairs(TUNE.ChopPrefer) do
-                if findInInventory(n) then toolName = n break end
-            end
-        end
-        if not toolName then task.wait(0.35) return end
-        local tool = ensureEquipped(toolName)
-        if not tool then task.wait(0.35) return end
-
-        if not isTree then
-            local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
-            for i = 1, cap do
-                local mdl = targetModels[i]
-                local t0 = lastHitAt[mdl] or 0
-                if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
-                    local hitPart = hitPartGetter(mdl)
-                    if hitPart then
-                        local impactCF = hitPart.CFrame
-                        local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
-                        HitTarget(mdl, tool, hitId, impactCF)
-                        lastHitAt[mdl] = tick()
-                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
-                    end
-                end
-            end
-            task.wait(swingDelay)
-            return
-        end
-
-        for _, mdl in ipairs(targetModels) do
-            acquire()
-            task.spawn(function()
-                local ok, hitPart = pcall(hitPartGetter, mdl)
-                if ok and hitPart then
-                    local impactCF = impactCFForTree(mdl, hitPart)
-                    local hitId = nextPerTreeHitId(mdl)
-                    pcall(function()
-                        local bucket = attrBucket(mdl)
-                        if bucket then bucket:SetAttribute(hitId, true) end
-                    end)
-                    HitTarget(mdl, tool, hitId, impactCF)
-                end
-                release()
-            end)
-        end
-        task.wait(swingDelay)
-    end
-
-    local function startCharacterAura()
-        if running.Character then return end
-        running.Character = true
-        task.spawn(function()
-            while running.Character do
-                local ch = lp.Character or lp.CharacterAdded:Wait()
-                local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then
-                    task.wait(0.2)
-                else
-                    local origin = hrp.Position
-                    local radius = tonumber(C.State.AuraRadius) or 150
-                    local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
-                    if #targets > 0 then
-                        chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
-                    else
-                        task.wait(0.3)
-                    end
-                end
-            end
-        end)
-    end
-    local function stopCharacterAura() running.Character = false end
-
-    local function startSmallTreeAura()
-        if running.SmallTree then return end
-        running.SmallTree = true
-        task.spawn(function()
-            while running.SmallTree do
-                local ch = lp.Character or lp.CharacterAdded:Wait()
-                local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then
-                    task.wait(0.2)
-                else
-                    local origin = hrp.Position
-                    local radius = tonumber(C.State.AuraRadius) or 150
-                    local batch = collectTreesInRadius(nil, origin, radius)
-                    if #batch > 0 then
-                        chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
-                    else
-                        task.wait(0.3)
-                    end
-                end
-            end
-        end)
-    end
-    local function stopSmallTreeAura() running.SmallTree = false end
-
-    CombatTab:Toggle({
-        Title = "Character Aura",
-        Value = C.State.Toggles.CharacterAura or false,
-        Callback = function(on)
-            C.State.Toggles.CharacterAura = on
-            if on then startCharacterAura() else stopCharacterAura() end
-        end
-    })
-
-    CombatTab:Toggle({
-        Title = "Small Tree Aura",
-        Value = C.State.Toggles.SmallTreeAura or false,
-        Callback = function(on)
-            C.State.Toggles.SmallTreeAura = on
-            if on then startSmallTreeAura() else stopSmallTreeAura() end
-        end
-    })
-
-    local bigToggle
-    bigToggle = CombatTab:Toggle({
-        Title = "Big Trees (requires Strong Axe)",
-        Value = C.State.Toggles.BigTreeAura or false,
-        Callback = function(on)
-            if on then
-                if hasStrongAxe() then
-                    C.State.Toggles.BigTreeAura = true
-                else
-                    C.State.Toggles.BigTreeAura = false
-                    pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
-                    pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
-                end
-            else
-                C.State.Toggles.BigTreeAura = false
-            end
-        end
-    })
-
+    local lastInRange = {}
     task.spawn(function()
-        local inv = lp:WaitForChild("Inventory", 10)
-        if not inv then return end
-        local function check()
-            if C.State.Toggles.BigTreeAura and not hasStrongAxe() then
-                C.State.Toggles.BigTreeAura = false
-                pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
-                pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
+        while sg.Parent do
+            local list = inRangeList()
+            countLbl.Text = "Range: "..tostring(#list)
+            local seen = {}
+            for _,m in ipairs(list) do
+                seen[m] = true
+                if not tracked[m] then
+                    tracked[m] = true
+                    local b = bucketFor(m)
+                    attrCache[m] = attrKeys(b)
+                    push("enter "..m:GetFullName())
+                end
             end
+            for m,_ in pairs(tracked) do
+                if not seen[m] or not m.Parent then
+                    tracked[m] = nil
+                    attrCache[m] = nil
+                    push("leave "..(m and m:GetFullName() or "nil"))
+                end
+            end
+            lastInRange = seen
+            task.wait(0.25)
         end
-        inv.ChildRemoved:Connect(check)
-        while true do task.wait(2.0) check() end
     end)
 
-    CombatTab:Slider({
-        Title = "Distance",
-        Value = { Min = 0, Max = 500, Default = C.State.AuraRadius or 100 },
-        Callback = function(v)
-            local nv = v
-            if type(v) == "table" then
-                nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max
-            end
-            nv = tonumber(nv)
-            if nv then
-                C.State.AuraRadius = math.clamp(nv, 0, 500)
-            end
-        end
-    })
+    local function equipped()
+        local ch = lp.Character
+        if not ch then return "" end
+        local t = ch:FindFirstChildOfClass("Tool")
+        return t and t.Name or ""
+    end
 
-    if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
+    task.spawn(function()
+        while sg.Parent do
+            for m,_ in pairs(tracked) do
+                local b = bucketFor(m)
+                local prev = attrCache[m] or {}
+                local cur = attrKeys(b)
+                for k,_ in pairs(cur) do
+                    if not prev[k] then
+                        local ok = string.match(k or "", "^(%d+)_"..UID.."$")
+                        if ok then
+                            local tool = equipped()
+                            push("attr "..m.Name.." +"..k.." tool="..(tool or ""))
+                        end
+                    end
+                end
+                attrCache[m] = cur
+            end
+            task.wait(0.15)
+        end
+    end)
 end
