@@ -11,9 +11,6 @@ return function(C, R, UI)
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
     C.Config = C.Config or {}
 
-    C.State.AuraRadius = 100
-    C.State.Toggles.SmallTreeAura = true
-
     local TUNE = C.Config
     TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
     TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
@@ -90,6 +87,15 @@ return function(C, R, UI)
         hrp = model:FindFirstChildWhichIsA("BasePart")
         if hrp then hrpCache[model] = hrp end
         return hrp
+    end
+
+    local function charDistancePart(m)
+        if not (m and m:IsA("Model")) then return nil end
+        local hrp = m:FindFirstChild("HumanoidRootPart")
+        if hrp and hrp:IsA("BasePart") then return hrp end
+        local pp = m.PrimaryPart
+        if pp and pp:IsA("BasePart") then return pp end
+        return nil
     end
 
     local function computeImpactCFrame(model, hitPart)
@@ -185,15 +191,15 @@ return function(C, R, UI)
                 local n = mdl.Name or ""
                 local nameLower = n:lower()
                 if string.find(nameLower, "horse", 1, true) then break end
-                local hit = bestCharacterHitPart(mdl)
-                if not hit then break end
-                if (hit.Position - origin).Magnitude > radius then break end
+                local distPart = charDistancePart(mdl)
+                if not distPart then break end
+                if (distPart.Position - origin).Magnitude > radius then break end
                 out[#out+1] = mdl
             until true
         end
         if TUNE.CHAR_SORT then
             table.sort(out, function(a, b)
-                local pa, pb = bestCharacterHitPart(a), bestCharacterHitPart(b)
+                local pa, pb = charDistancePart(a), charDistancePart(b)
                 local da = pa and (pa.Position - origin).Magnitude or math.huge
                 local db = pb and (pb.Position - origin).Magnitude or math.huge
                 if da == db then return (a.Name or "") < (b.Name or "") end
@@ -265,14 +271,17 @@ return function(C, R, UI)
             while running.Character do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then task.wait(0.2) break end
-                local origin = hrp.Position
-                local radius = tonumber(C.State.AuraRadius) or 150
-                local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
-                if #targets > 0 then
-                    chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
+                if not hrp then
+                    task.wait(0.2)
                 else
-                    task.wait(0.3)
+                    local origin = hrp.Position
+                    local radius = tonumber(C.State.AuraRadius) or 150
+                    local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
+                    if #targets > 0 then
+                        chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
+                    else
+                        task.wait(0.3)
+                    end
                 end
             end
         end)
@@ -287,28 +296,31 @@ return function(C, R, UI)
             while running.SmallTree do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
-                if not hrp then task.wait(0.2) break end
-                local origin = hrp.Position
-                local radius = tonumber(C.State.AuraRadius) or 150
-                local roots = {
-                    WS,
-                    RS:FindFirstChild("Assets"),
-                    RS:FindFirstChild("CutsceneSets"),
-                }
-                local allTrees = collectTreesInRadius(roots, origin, radius)
-                local total = #allTrees
-                if total > 0 then
-                    local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
-                    if C.State._treeCursor > total then C.State._treeCursor = 1 end
-                    local batch = table.create(batchSize)
-                    for i = 1, batchSize do
-                        local idx = ((C.State._treeCursor + i - 2) % total) + 1
-                        batch[i] = allTrees[idx]
-                    end
-                    C.State._treeCursor = C.State._treeCursor + batchSize
-                    chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                if not hrp then
+                    task.wait(0.2)
                 else
-                    task.wait(0.3)
+                    local origin = hrp.Position
+                    local radius = tonumber(C.State.AuraRadius) or 150
+                    local roots = {
+                        WS,
+                        RS:FindFirstChild("Assets"),
+                        RS:FindFirstChild("CutsceneSets"),
+                    }
+                    local allTrees = collectTreesInRadius(roots, origin, radius)
+                    local total = #allTrees
+                    if total > 0 then
+                        local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
+                        if C.State._treeCursor > total then C.State._treeCursor = 1 end
+                        local batch = table.create(batchSize)
+                        for i = 1, batchSize do
+                            local idx = ((C.State._treeCursor + i - 2) % total) + 1
+                            batch[i] = allTrees[idx]
+                        end
+                        C.State._treeCursor = C.State._treeCursor + batchSize
+                        chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                    else
+                        task.wait(0.3)
+                    end
                 end
             end
         end)
@@ -370,7 +382,14 @@ return function(C, R, UI)
         Title = "Distance",
         Value = { Min = 0, Max = 500, Default = C.State.AuraRadius or 100 },
         Callback = function(v)
-            C.State.AuraRadius = math.clamp(tonumber(v) or 150, 0, 500)
+            local nv = v
+            if type(v) == "table" then
+                nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max
+            end
+            nv = tonumber(nv)
+            if nv then
+                C.State.AuraRadius = math.clamp(nv, 0, 500)
+            end
         end
     })
 
