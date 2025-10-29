@@ -23,9 +23,13 @@ return function(C, R, UI)
     local CLUSTER_RADIUS_STEP = 0.04
     local CLUSTER_RADIUS_MAX  = 2.25
 
-    local IN_FLIGHT_MAX = 5
-    local LIFT_TIME     = 0.8
+    local IN_FLIGHT_MAX = 6
+    local LIFT_TIME     = 0.9
     local ITEM_TIMEOUT  = 3.0
+    local IDLE_TIMEOUT  = 1.5
+
+    local BELT_SPACING  = 1.25
+    local BELT_SLOTS    = 10
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
@@ -306,10 +310,8 @@ return function(C, R, UI)
         local head = headPart()
         local basePos = head and head.Position or root.Position
         local mp = mainPart(model); if not mp then return nil end
-
         local offset = ringOffset()
         local castFrom = basePos + offset
-
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         local itemsFolder = itemsRoot()
@@ -318,7 +320,6 @@ return function(C, R, UI)
         else
             params.FilterDescendantsInstances = { lp.Character, model }
         end
-
         local res = WS:Raycast(castFrom, Vector3.new(0, -2000, 0), params)
         local y = res and res.Position.Y or (root.Position.Y - 3)
         local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
@@ -346,16 +347,15 @@ return function(C, R, UI)
         return part
     end
 
-    local function modelsNear(pos, radius, nameSet, seen)
+    local function modelsNear(pos, radius, nameSet)
         local out = {}
         for _,d in ipairs(WS:GetDescendants()) do
-            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not seen[d] and not isUnderLogWall(d) then
+            if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not isUnderLogWall(d) then
                 if d.Name == "Log" and isWallVariant(d) then
                 else
                     local mp = mainPart(d)
                     if mp and (mp.Position - pos).Magnitude <= radius then
                         out[#out+1] = d
-                        seen[d] = true
                     end
                 end
             end
@@ -371,13 +371,17 @@ return function(C, R, UI)
         return m and m.Parent and root and m:IsA("Model") and m:IsDescendantOf(root)
     end
 
+    local function ease(t)
+        return 1 - (1 - t) * (1 - t)
+    end
+
     local function liftToCF_time(model, targetCF, duration)
         local t0 = os.clock()
         local start = model:GetPivot()
         local snap = setCollide(model, false)
         zeroAssembly(model)
         while alive(model) and (os.clock() - t0) < duration do
-            local a = (os.clock() - t0) / duration
+            local a = ease((os.clock() - t0) / duration)
             local pos = start.Position:Lerp(targetCF.Position, a)
             local cf = CFrame.lookAt(pos, pos + Vector3.new(0, -1, 0))
             if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
@@ -400,42 +404,79 @@ return function(C, R, UI)
         if os.clock() - t0 > ITEM_TIMEOUT then return end
     end
 
+    local function beltDirFrom(targetPos)
+        local h = hrp()
+        local look = h and h.CFrame.LookVector or Vector3.new(0,0,-1)
+        local dir = Vector3.new(look.Z, 0, -look.X)
+        if dir.Magnitude < 0.1 then dir = Vector3.new(1,0,0) end
+        return dir.Unit
+    end
+
     local function processNearby(targets, targetCF)
         local root = hrp(); if not root then return end
+        local beltDir = beltDirFrom(targetCF.Position)
+        local beltLen = BELT_SPACING * BELT_SLOTS
+        local beltHalf = beltLen * 0.5
+        local beltIndex = 0
+
+        local function nextDropCF(orbPos)
+            beltIndex += 1
+            local s = ((beltIndex - 1) * BELT_SPACING) % beltLen
+            local pos = orbPos + beltDir * (s - beltHalf)
+            return CFrame.lookAt(pos, pos + Vector3.new(0, -1, 0))
+        end
+
         dropCounter = 0
         local orb2 = makeOrb(root.CFrame, "orb2")
         local orb1 = makeOrb(targetCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
-        local seen = {}
+
+        local reserved = {}
         local inflight = 0
         local queue = {}
+        local lastActivity = os.clock()
 
         local function enqueue()
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
-            for i=1,#list do queue[#queue+1] = list[i] end
+            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets)
+            for i=1,#list do
+                local m = list[i]
+                if alive(m) and not reserved[m] then
+                    queue[#queue+1] = m
+                end
+            end
+        end
+
+        local function launch(m)
+            reserved[m] = true
+            inflight += 1
+            local dropCF = nextDropCF(orb1.Position)
+            task.spawn(function()
+                pcall(function() raiseAndDropAtCF(m, dropCF) end)
+                inflight -= 1
+                reserved[m] = nil
+                lastActivity = os.clock()
+            end)
         end
 
         enqueue()
 
         while true do
             while inflight < IN_FLIGHT_MAX and #queue > 0 do
-                local m = table.remove(queue)
+                local m = table.remove(queue, 1)
                 if alive(m) then
-                    local off = ringOffset()
-                    local pos = orb1.Position + Vector3.new(off.X, 0, off.Z)
-                    local dropCF = CFrame.lookAt(pos, pos + Vector3.new(0, -1, 0))
-                    inflight += 1
-                    task.spawn(function()
-                        pcall(function() raiseAndDropAtCF(m, dropCF) end)
-                        inflight -= 1
-                    end)
+                    launch(m)
+                    lastActivity = os.clock()
+                    if PER_ITEM_DELAY > 0 then task.wait(PER_ITEM_DELAY) end
                 end
             end
-            if #queue == 0 and inflight == 0 then
+
+            if #queue == 0 then
                 enqueue()
-                if #queue == 0 then break end
+                if #queue == 0 and inflight == 0 then
+                    if os.clock() - lastActivity > IDLE_TIMEOUT then break end
+                end
             end
+
             Run.Heartbeat:Wait()
-            task.wait(PER_ITEM_DELAY)
         end
 
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
