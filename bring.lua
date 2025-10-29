@@ -18,6 +18,7 @@ return function(C, R, UI)
 
     local PICK_RADIUS       = 15
     local ORB_OFFSET_Y      = 30
+    local EXCLUDE_DROP_RADIUS = 0.9
 
     local IN_FLIGHT_MAX     = 8
     local LAUNCH_INTERVAL   = 0.10
@@ -286,7 +287,6 @@ return function(C, R, UI)
         local head = headPart()
         local basePos = head and head.Position or root.Position
         local mp = mainPart(model); if not mp then return nil end
-
         local pos = basePos
         local y = basePos.Y - 3
         local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
@@ -327,7 +327,7 @@ return function(C, R, UI)
         reservedUntil[m] = os.clock() + (seconds or 2)
     end
 
-    local function modelsNear(centerPos, radius, nameSet)
+    local function modelsNear(centerPos, radius, nameSet, excludeXY, excludeRadius)
         local out = {}
         local root = itemsRoot(); if not root then return out end
         for _,d in ipairs(root:GetDescendants()) do
@@ -336,10 +336,15 @@ return function(C, R, UI)
                 else
                     local mp = mainPart(d)
                     if mp then
-                        if (mp.Position - centerPos).Magnitude <= radius then
-                            if not isReserved(d) then
-                                out[#out+1] = d
+                        local within = (mp.Position - centerPos).Magnitude <= radius
+                        if within and excludeXY and excludeRadius then
+                            local dxz = Vector3.new(mp.Position.X, 0, mp.Position.Z) - Vector3.new(excludeXY.X, 0, excludeXY.Z)
+                            if dxz.Magnitude <= excludeRadius then
+                                within = false
                             end
+                        end
+                        if within and not isReserved(d) then
+                            out[#out+1] = d
                         end
                     end
                 end
@@ -425,7 +430,7 @@ return function(C, R, UI)
         local lastScan = 0
 
         local function enqueue()
-            local list = modelsNear(scanCenter, PICK_RADIUS, targets)
+            local list = modelsNear(scanCenter, PICK_RADIUS, targets, orbDrop.Position, EXCLUDE_DROP_RADIUS)
             for i=1,#list do
                 local m = list[i]
                 if alive(m) and not isReserved(m) then
