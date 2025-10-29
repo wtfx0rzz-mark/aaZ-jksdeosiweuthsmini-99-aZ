@@ -26,7 +26,6 @@ return function(C, R, UI)
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- ADDED missing items from Gather
     local junkItems    = {
         "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -148,7 +147,7 @@ return function(C, R, UI)
     end
     local function stopDragGround(r, model)
         if r and r.StopDrag then
-            pcall(function() r.StopDrag:FireServer(model) end)
+            pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
             pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end)
         end
     end
@@ -553,7 +552,6 @@ return function(C, R, UI)
         return s
     end
 
-    -- UPDATED: accept model to match Gather’s Cultist rule (name contains "cultist" AND Humanoid)
     local function nameMatches(selectedSet, m)
         local nm = m and m.Name or ""
         if selectedSet[nm] then return true end
@@ -609,6 +607,27 @@ return function(C, R, UI)
         end
     end
 
+    -- New: bring one Log to feet, drop in air, release immediately
+    local function bringDropOneLog()
+        local list = collectByNameLoose("Log", 1)
+        local entry = list[1]
+        if not entry then return end
+        local model = entry.model
+
+        local r = resolveRemotes()
+        startDragRemote(r, model)
+        Run.Heartbeat:Wait()
+        task.wait(DRAG_SETTLE)
+
+        local root = hrp(); if not root then stopDragRemote(r); return end
+        local pos = root.Position + Vector3.new(0, 3, 0)
+        local look = root.CFrame.LookVector
+        local cf = CFrame.lookAt(pos, pos + look)
+
+        moveModel(model, cf)
+        stopDragRemote(r)
+    end
+
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
 
@@ -623,6 +642,7 @@ return function(C, R, UI)
     end
 
     tab:Section({ Title = "Actions" })
+    tab:Button({ Title = "Bring+Drop One Log (Air)", Callback = bringDropOneLog })
     tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
