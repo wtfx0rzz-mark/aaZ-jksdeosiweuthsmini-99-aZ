@@ -16,42 +16,37 @@ return function(C, R, UI)
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
-    local NEARBY_RADIUS         = 20
+
+    local NEARBY_RADIUS_START   = 28
+    local NEARBY_RADIUS_STEP    = 8
+    local NEARBY_RADIUS_MAX     = 64
+
     local ORB_OFFSET_Y          = 30
 
     local CLUSTER_RADIUS_MIN  = 0.75
     local CLUSTER_RADIUS_STEP = 0.04
     local CLUSTER_RADIUS_MAX  = 2.25
 
-    local IN_FLIGHT_MAX = 6
-    local LIFT_TIME     = 0.9
-    local ITEM_TIMEOUT  = 3.0
-    local IDLE_TIMEOUT  = 1.5
+    local IN_FLIGHT_MAX   = 8
+    local LAUNCH_INTERVAL = 0.10
+    local LIFT_TIME       = 0.45
+    local SLIDE_SPEED     = 22.0
+    local ITEM_TIMEOUT    = 3.0
+    local IDLE_TIMEOUT    = 1.8
 
-    local BELT_SPACING  = 1.25
-    local BELT_SLOTS    = 10
+    local BELT_SPACING    = 1.35
+    local BELT_SLOTS      = 14
+    local LINE_BACK       = BELT_SPACING * BELT_SLOTS
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    local junkItems    = {
-        "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
-        "UFO Junk","UFO Component"
-    }
+    local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine","UFO Junk","UFO Component"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel"}
-    local foodItems    = {
-        "Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot",
-        "Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"
-    }
+    local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot","Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"}
     local medicalItems = {"Bandage","MedKit"}
-    local weaponsArmor = {
-        "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe",
-        "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire"
-    }
-    local ammoMisc     = {
-        "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
-        "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute"
-    }
+    local weaponsArmor = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe","Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire"}
+    local ammoMisc     = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling","Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute"}
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
 
     local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
@@ -135,7 +130,6 @@ return function(C, R, UI)
             StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
         }
     end
-
     local function startDragRemote(r, model)
         if r and r.StartDrag then pcall(function() r.StartDrag:FireServer(model) end) end
     end
@@ -294,7 +288,7 @@ return function(C, R, UI)
         return (p and p.CFrame) or scr:GetPivot()
     end
 
-    local DRAG_SETTLE  = 0.06
+    local DRAG_SETTLE = 0.06
 
     local dropCounter = 0
     local function ringOffset()
@@ -371,27 +365,37 @@ return function(C, R, UI)
         return m and m.Parent and root and m:IsA("Model") and m:IsDescendantOf(root)
     end
 
-    local function ease(t)
-        return 1 - (1 - t) * (1 - t)
-    end
+    local function easeOut(t) return 1 - (1 - t) * (1 - t) end
 
-    local function liftToCF_time(model, targetCF, duration)
+    local function liftTo(model, targetCF, duration)
         local t0 = os.clock()
         local start = model:GetPivot()
         local snap = setCollide(model, false)
         zeroAssembly(model)
         while alive(model) and (os.clock() - t0) < duration do
-            local a = ease((os.clock() - t0) / duration)
+            local a = easeOut((os.clock() - t0) / duration)
             local pos = start.Position:Lerp(targetCF.Position, a)
             local cf = CFrame.lookAt(pos, pos + Vector3.new(0, -1, 0))
             if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
             Run.Heartbeat:Wait()
         end
-        for _,p in ipairs(getAllParts(model)) do p.AssemblyLinearVelocity = Vector3.new(0, -6, 0) end
         setCollide(model, true, snap)
     end
 
-    local function raiseAndDropAtCF(model, dropCF)
+    local function slideAlong(model, fromPos, toPos, speed)
+        local dist = (toPos - fromPos).Magnitude
+        local dur = math.max(0.01, dist / math.max(1, speed))
+        local t0 = os.clock()
+        while alive(model) and (os.clock() - t0) < dur do
+            local a = (os.clock() - t0) / dur
+            local pos = fromPos:Lerp(toPos, a)
+            local cf = CFrame.lookAt(pos, pos + Vector3.new(0, -1, 0))
+            if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
+            Run.Heartbeat:Wait()
+        end
+    end
+
+    local function raiseConveyorAndDrop(model, orbPos, beltDir)
         local r = resolveRemotes()
         local t0 = os.clock()
         startDragRemote(r, model)
@@ -399,7 +403,16 @@ return function(C, R, UI)
         if not alive(model) then stopDragRemote(r); return end
         task.wait(DRAG_SETTLE)
         if not alive(model) then stopDragRemote(r); return end
-        liftToCF_time(model, dropCF, LIFT_TIME)
+
+        local startBack = LINE_BACK + (math.random() * 0.75)
+        local startPos  = orbPos - beltDir * startBack
+        liftTo(model, CFrame.new(startPos), LIFT_TIME)
+        if not alive(model) then stopDragRemote(r); return end
+
+        slideAlong(model, startPos, orbPos, SLIDE_SPEED)
+        if not alive(model) then stopDragRemote(r); return end
+
+        for _,p in ipairs(getAllParts(model)) do p.AssemblyLinearVelocity = Vector3.new(0, -6, 0) end
         stopDragRemote(r)
         if os.clock() - t0 > ITEM_TIMEOUT then return end
     end
@@ -407,26 +420,14 @@ return function(C, R, UI)
     local function beltDirFrom(targetPos)
         local h = hrp()
         local look = h and h.CFrame.LookVector or Vector3.new(0,0,-1)
-        local dir = Vector3.new(look.Z, 0, -look.X)
-        if dir.Magnitude < 0.1 then dir = Vector3.new(1,0,0) end
+        local dir = -look
+        if dir.Magnitude < 0.1 then dir = Vector3.new(0,0,-1) end
         return dir.Unit
     end
 
     local function processNearby(targets, targetCF)
         local root = hrp(); if not root then return end
         local beltDir = beltDirFrom(targetCF.Position)
-        local beltLen = BELT_SPACING * BELT_SLOTS
-        local beltHalf = beltLen * 0.5
-        local beltIndex = 0
-
-        local function nextDropCF(orbPos)
-            beltIndex += 1
-            local s = ((beltIndex - 1) * BELT_SPACING) % beltLen
-            local pos = orbPos + beltDir * (s - beltHalf)
-            return CFrame.lookAt(pos, pos + Vector3.new(0, -1, 0))
-        end
-
-        dropCounter = 0
         local orb2 = makeOrb(root.CFrame, "orb2")
         local orb1 = makeOrb(targetCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
 
@@ -434,9 +435,11 @@ return function(C, R, UI)
         local inflight = 0
         local queue = {}
         local lastActivity = os.clock()
+        local lastLaunch = 0
+        local radius = NEARBY_RADIUS_START
 
-        local function enqueue()
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets)
+        local function enqueue(r)
+            local list = modelsNear(orb2.Position, r, targets)
             for i=1,#list do
                 local m = list[i]
                 if alive(m) and not reserved[m] then
@@ -445,38 +448,39 @@ return function(C, R, UI)
             end
         end
 
-        local function launch(m)
-            reserved[m] = true
-            inflight += 1
-            local dropCF = nextDropCF(orb1.Position)
-            task.spawn(function()
-                pcall(function() raiseAndDropAtCF(m, dropCF) end)
-                inflight -= 1
-                reserved[m] = nil
-                lastActivity = os.clock()
-            end)
-        end
-
-        enqueue()
+        enqueue(radius)
 
         while true do
             while inflight < IN_FLIGHT_MAX and #queue > 0 do
+                if os.clock() - lastLaunch < LAUNCH_INTERVAL then break end
                 local m = table.remove(queue, 1)
                 if alive(m) then
-                    launch(m)
-                    lastActivity = os.clock()
-                    if PER_ITEM_DELAY > 0 then task.wait(PER_ITEM_DELAY) end
+                    reserved[m] = true
+                    inflight += 1
+                    lastLaunch = os.clock()
+                    task.spawn(function()
+                        pcall(function() raiseConveyorAndDrop(m, orb1.Position, beltDir) end)
+                        inflight -= 1
+                        reserved[m] = nil
+                        lastActivity = os.clock()
+                    end)
                 end
             end
 
             if #queue == 0 then
-                enqueue()
-                if #queue == 0 and inflight == 0 then
-                    if os.clock() - lastActivity > IDLE_TIMEOUT then break end
+                local before = #queue
+                enqueue(radius)
+                if #queue == 0 and radius < NEARBY_RADIUS_MAX then
+                    radius = math.min(NEARBY_RADIUS_MAX, radius + NEARBY_RADIUS_STEP)
+                    enqueue(radius)
+                end
+                if #queue == 0 and inflight == 0 and (os.clock() - lastActivity) > IDLE_TIMEOUT then
+                    break
                 end
             end
 
             Run.Heartbeat:Wait()
+            if PER_ITEM_DELAY > 0 then task.wait(PER_ITEM_DELAY) end
         end
 
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
@@ -532,6 +536,7 @@ return function(C, R, UI)
         return s
     end
 
+    local function hasHumanoid(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
     local function nameMatches(selectedSet, m)
         local nm = m and m.Name or ""
         if selectedSet[nm] then return true end
