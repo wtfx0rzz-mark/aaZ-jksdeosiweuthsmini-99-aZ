@@ -9,34 +9,28 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING       = 500
-    local PER_ITEM_DELAY        = 0.0
-    local COLLIDE_OFF_SEC       = 0.22
+    local AMOUNT_TO_BRING   = 500
+    local COLLIDE_OFF_SEC   = 0.22
 
     local DROP_ABOVE_HEAD_STUDS = 10
-    local FALLBACK_UP           = 5
-    local FALLBACK_AHEAD        = 2
+    local FALLBACK_UP       = 5
+    local FALLBACK_AHEAD    = 2
 
-    local NEARBY_RADIUS_START   = 28
-    local NEARBY_RADIUS_STEP    = 8
-    local NEARBY_RADIUS_MAX     = 64
+    local PICK_RADIUS       = 15
+    local ORB_OFFSET_Y      = 30
 
-    local ORB_OFFSET_Y          = 30
+    local IN_FLIGHT_MAX     = 8
+    local LAUNCH_INTERVAL   = 0.10
+    local LIFT_TIME         = 0.75
+    local SLIDE_SPEED       = 22.0
+    local ITEM_TIMEOUT      = 3.0
+    local IDLE_TIMEOUT      = 1.6
+    local RESCAN_INTERVAL   = 0.35
+    local POST_DROP_HOLD    = 2.0
 
-    local CLUSTER_RADIUS_MIN  = 0.75
-    local CLUSTER_RADIUS_STEP = 0.04
-    local CLUSTER_RADIUS_MAX  = 2.25
-
-    local IN_FLIGHT_MAX   = 8
-    local LAUNCH_INTERVAL = 0.10
-    local LIFT_TIME       = 0.45
-    local SLIDE_SPEED     = 22.0
-    local ITEM_TIMEOUT    = 3.0
-    local IDLE_TIMEOUT    = 1.8
-
-    local BELT_SPACING    = 1.35
-    local BELT_SLOTS      = 14
-    local LINE_BACK       = BELT_SPACING * BELT_SLOTS
+    local LINE_SPACING      = 1.35
+    local LINE_SLOTS        = 14
+    local LINE_BACK         = LINE_SPACING * LINE_SLOTS
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
@@ -55,16 +49,15 @@ return function(C, R, UI)
     cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
     scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
 
-    local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
-
     local function hrp()
-        local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
+        local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
     local function headPart()
-        local ch = Players.LocalPlayer.Character
+        local ch = lp.Character
         return ch and ch:FindFirstChild("Head")
     end
+
     local function isWallVariant(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or ""):lower()
@@ -94,6 +87,7 @@ return function(C, R, UI)
         if isUnderLogWall(m) then return true end
         return false
     end
+
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -116,6 +110,10 @@ return function(C, R, UI)
         return t
     end
 
+    local function itemsRoot()
+        return WS:FindFirstChild("Items")
+    end
+
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
@@ -124,8 +122,8 @@ return function(C, R, UI)
     local function resolveRemotes()
         return {
             StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem"),
-            BurnItem  = getRemote("RequestBurnItem","BurnItem","RequestFireAdd"),
             CookItem  = getRemote("RequestCookItem","CookItem"),
+            BurnItem  = getRemote("RequestBurnItem","BurnItem","RequestFireAdd"),
             ScrapItem = getRemote("RequestScrapItem","ScrapItem","RequestWorkbenchScrap"),
             StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
         }
@@ -137,10 +135,6 @@ return function(C, R, UI)
         if r and r.StopDrag then pcall(function() r.StopDrag:FireServer(Instance.new("Model")) end) end
     end
 
-    local function itemsRoot()
-        return WS:FindFirstChild("Items")
-    end
-
     local function sortedFarthest(list)
         local r = hrp(); if not r then return list end
         table.sort(list, function(a,b)
@@ -148,7 +142,6 @@ return function(C, R, UI)
         end)
         return list
     end
-
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         local root = itemsRoot(); if not root then return found end
@@ -288,40 +281,19 @@ return function(C, R, UI)
         return (p and p.CFrame) or scr:GetPivot()
     end
 
-    local DRAG_SETTLE = 0.06
-
-    local dropCounter = 0
-    local function ringOffset()
-        dropCounter += 1
-        local i = dropCounter
-        local a = i * 2.399963229728653
-        local r = math.min(CLUSTER_RADIUS_MIN + CLUSTER_RADIUS_STEP * (i - 1), CLUSTER_RADIUS_MAX)
-        return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
-    end
-
     local function groundCFAroundPlayer(model)
         local root = hrp(); if not root then return nil end
         local head = headPart()
         local basePos = head and head.Position or root.Position
         local mp = mainPart(model); if not mp then return nil end
-        local offset = ringOffset()
-        local castFrom = basePos + offset
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local itemsFolder = itemsRoot()
-        if itemsFolder then
-            params.FilterDescendantsInstances = { lp.Character, model, itemsFolder }
-        else
-            params.FilterDescendantsInstances = { lp.Character, model }
-        end
-        local res = WS:Raycast(castFrom, Vector3.new(0, -2000, 0), params)
-        local y = res and res.Position.Y or (root.Position.Y - 3)
-        local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
-        local pos = Vector3.new(castFrom.X, y + h, castFrom.Z)
-        local look = root.CFrame.LookVector
-        return CFrame.lookAt(pos, pos + look)
-    end
 
+        local pos = basePos
+        local y = basePos.Y - 3
+        local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
+        local final = Vector3.new(pos.X, y + h, pos.Z)
+        local look = root.CFrame.LookVector
+        return CFrame.lookAt(final, final + look)
+    end
     local function dropNearPlayer(model)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -341,15 +313,34 @@ return function(C, R, UI)
         return part
     end
 
-    local function modelsNear(pos, radius, nameSet)
+    local function alive(m)
+        local root = itemsRoot()
+        return m and m.Parent and root and m:IsA("Model") and m:IsDescendantOf(root)
+    end
+
+    local reservedUntil = setmetatable({}, {__mode="k"})
+    local function isReserved(m)
+        local t = reservedUntil[m]
+        return t and (os.clock() < t)
+    end
+    local function reserve(m, seconds)
+        reservedUntil[m] = os.clock() + (seconds or 2)
+    end
+
+    local function modelsNear(centerPos, radius, nameSet)
         local out = {}
-        for _,d in ipairs(WS:GetDescendants()) do
+        local root = itemsRoot(); if not root then return out end
+        for _,d in ipairs(root:GetDescendants()) do
             if d:IsA("Model") and not isExcludedModel(d) and nameSet[d.Name] and not isUnderLogWall(d) then
                 if d.Name == "Log" and isWallVariant(d) then
                 else
                     local mp = mainPart(d)
-                    if mp and (mp.Position - pos).Magnitude <= radius then
-                        out[#out+1] = d
+                    if mp then
+                        if (mp.Position - centerPos).Magnitude <= radius then
+                            if not isReserved(d) then
+                                out[#out+1] = d
+                            end
+                        end
                     end
                 end
             end
@@ -360,13 +351,7 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    local function alive(m)
-        local root = itemsRoot()
-        return m and m.Parent and root and m:IsA("Model") and m:IsDescendantOf(root)
-    end
-
     local function easeOut(t) return 1 - (1 - t) * (1 - t) end
-
     local function liftTo(model, targetCF, duration)
         local t0 = os.clock()
         local start = model:GetPivot()
@@ -381,7 +366,6 @@ return function(C, R, UI)
         end
         setCollide(model, true, snap)
     end
-
     local function slideAlong(model, fromPos, toPos, speed)
         local dist = (toPos - fromPos).Magnitude
         local dur = math.max(0.01, dist / math.max(1, speed))
@@ -398,10 +382,9 @@ return function(C, R, UI)
     local function raiseConveyorAndDrop(model, orbPos, beltDir)
         local r = resolveRemotes()
         local t0 = os.clock()
+        reserve(model, POST_DROP_HOLD)
         startDragRemote(r, model)
         Run.Heartbeat:Wait()
-        if not alive(model) then stopDragRemote(r); return end
-        task.wait(DRAG_SETTLE)
         if not alive(model) then stopDragRemote(r); return end
 
         local startBack = LINE_BACK + (math.random() * 0.75)
@@ -414,76 +397,74 @@ return function(C, R, UI)
 
         for _,p in ipairs(getAllParts(model)) do p.AssemblyLinearVelocity = Vector3.new(0, -6, 0) end
         stopDragRemote(r)
+
+        reserve(model, POST_DROP_HOLD)
         if os.clock() - t0 > ITEM_TIMEOUT then return end
     end
 
     local function beltDirFrom(targetPos)
         local h = hrp()
         local look = h and h.CFrame.LookVector or Vector3.new(0,0,-1)
-        local dir = -look
+        local dir  = -look
         if dir.Magnitude < 0.1 then dir = Vector3.new(0,0,-1) end
         return dir.Unit
     end
 
     local function processNearby(targets, targetCF)
-        local root = hrp(); if not root then return end
+        local h = hrp(); if not h then return end
+        local scanCenter = h.Position
         local beltDir = beltDirFrom(targetCF.Position)
-        local orb2 = makeOrb(root.CFrame, "orb2")
-        local orb1 = makeOrb(targetCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
 
-        local reserved = {}
+        local orbPick = makeOrb(CFrame.new(scanCenter), "orb_pick")
+        local orbDrop = makeOrb(targetCF + Vector3.new(0, ORB_OFFSET_Y, 0), "orb_drop")
+
         local inflight = 0
         local queue = {}
         local lastActivity = os.clock()
         local lastLaunch = 0
-        local radius = NEARBY_RADIUS_START
+        local lastScan = 0
 
-        local function enqueue(r)
-            local list = modelsNear(orb2.Position, r, targets)
+        local function enqueue()
+            local list = modelsNear(scanCenter, PICK_RADIUS, targets)
             for i=1,#list do
                 local m = list[i]
-                if alive(m) and not reserved[m] then
+                if alive(m) and not isReserved(m) then
                     queue[#queue+1] = m
+                    reserve(m, 1.0)
                 end
             end
         end
 
-        enqueue(radius)
+        enqueue()
 
         while true do
             while inflight < IN_FLIGHT_MAX and #queue > 0 do
                 if os.clock() - lastLaunch < LAUNCH_INTERVAL then break end
                 local m = table.remove(queue, 1)
                 if alive(m) then
-                    reserved[m] = true
                     inflight += 1
                     lastLaunch = os.clock()
                     task.spawn(function()
-                        pcall(function() raiseConveyorAndDrop(m, orb1.Position, beltDir) end)
+                        pcall(function() raiseConveyorAndDrop(m, orbDrop.Position, beltDir) end)
                         inflight -= 1
-                        reserved[m] = nil
                         lastActivity = os.clock()
                     end)
                 end
             end
 
-            if #queue == 0 then
-                local before = #queue
-                enqueue(radius)
-                if #queue == 0 and radius < NEARBY_RADIUS_MAX then
-                    radius = math.min(NEARBY_RADIUS_MAX, radius + NEARBY_RADIUS_STEP)
-                    enqueue(radius)
-                end
-                if #queue == 0 and inflight == 0 and (os.clock() - lastActivity) > IDLE_TIMEOUT then
-                    break
-                end
+            if os.clock() - lastScan >= RESCAN_INTERVAL then
+                lastScan = os.clock()
+                enqueue()
+            end
+
+            if #queue == 0 and inflight == 0 and (os.clock() - lastActivity) > IDLE_TIMEOUT then
+                break
             end
 
             Run.Heartbeat:Wait()
-            if PER_ITEM_DELAY > 0 then task.wait(PER_ITEM_DELAY) end
         end
 
-        task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
+        task.delay(1, function() if orbPick then orbPick:Destroy() end if orbDrop then orbDrop:Destroy() end end)
     end
 
     local function burnNearby()
@@ -502,30 +483,6 @@ return function(C, R, UI)
         processNearby(targets, cf)
     end
 
-    local function bringSelected(name, count)
-        dropCounter = 0
-        local want = tonumber(count) or 0
-        if want <= 0 then return end
-        local list
-        if name == "Mossy Coin" then
-            list = collectMossyCoins(want)
-        elseif name == "Cultist" then
-            list = collectCultists(want)
-        elseif name == "Sapling" then
-            list = collectSaplings(want)
-        elseif table.find(pelts, name) then
-            list = collectPelts(name, want)
-        else
-            list = collectByNameLoose(name, want)
-        end
-        if #list == 0 then return end
-        for i,entry in ipairs(list) do
-            if i > want then break end
-            dropNearPlayer(entry.model)
-            if PER_ITEM_DELAY > 0 then task.wait(PER_ITEM_DELAY) end
-        end
-    end
-
     local function setFromChoice(choice)
         local s = {}
         if type(choice) == "table" then
@@ -535,8 +492,6 @@ return function(C, R, UI)
         end
         return s
     end
-
-    local function hasHumanoid(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
     local function nameMatches(selectedSet, m)
         local nm = m and m.Name or ""
         if selectedSet[nm] then return true end
@@ -555,7 +510,6 @@ return function(C, R, UI)
 
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
-        dropCounter = 0
         local perNameCount = {}
         local seenModel = {}
         local queue = {}
