@@ -9,7 +9,6 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- Tunables
     local AMOUNT_TO_BRING     = 500
     local COLLIDE_OFF_SEC     = 0.22
 
@@ -19,7 +18,7 @@ return function(C, R, UI)
 
     local PICK_RADIUS         = 15
     local ORB_OFFSET_Y        = 30
-    local EXCLUDE_DROP_RADIUS = 1.05   -- tiny XY cylinder under drop-orb
+    local EXCLUDE_DROP_RADIUS = 1.05
 
     local IN_FLIGHT_MAX       = 8
     local LAUNCH_INTERVAL     = 0.10
@@ -34,11 +33,17 @@ return function(C, R, UI)
     local LINE_SLOTS          = 14
     local LINE_BACK           = LINE_SPACING * LINE_SLOTS
 
-    -- Scene anchors
-    local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
-    local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
+    local function findCampfire()
+        local map = WS:FindFirstChild("Map")
+        local cg  = map and map:FindFirstChild("Campground")
+        return cg and cg:FindFirstChild("MainFire")
+    end
+    local function findScrapper()
+        local map = WS:FindFirstChild("Map")
+        local cg  = map and map:FindFirstChild("Campground")
+        return cg and cg:FindFirstChild("Scrapper")
+    end
 
-    -- Catalogs
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine","UFO Junk","UFO Component"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot","Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"}
@@ -53,7 +58,6 @@ return function(C, R, UI)
     cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
     scrapAlso["Log"]  = true; scrapAlso["Chair"] = true
 
-    -- Helpers
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -70,7 +74,7 @@ return function(C, R, UI)
     end
     local function isUnderLogWall(inst)
         local cur = inst
-        while cur and cur ~= WS then
+        while cur and cur ~= WS do
             local nm = (cur.Name or ""):lower()
             if nm == "logwall" or nm == "log wall" or (nm:find("log",1,true) and nm:find("wall",1,true)) then
                 return true
@@ -114,7 +118,6 @@ return function(C, R, UI)
         end
         return t
     end
-
     local function itemsRoot()
         return WS:FindFirstChild("Items")
     end
@@ -148,7 +151,6 @@ return function(C, R, UI)
         return list
     end
 
-    -- Collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         local root = itemsRoot(); if not root then return found end
@@ -245,7 +247,6 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
-    -- Placement helpers
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -325,7 +326,6 @@ return function(C, R, UI)
         return m and m.Parent and root and m:IsA("Model") and m:IsDescendantOf(root)
     end
 
-    -- Reservation to avoid re-grabs
     local reservedUntil = setmetatable({}, {__mode="k"})
     local function isReserved(m)
         local t = reservedUntil[m]
@@ -335,7 +335,6 @@ return function(C, R, UI)
         reservedUntil[m] = os.clock() + (seconds or 2)
     end
 
-    -- Scan with tiny exclusion under drop-orb
     local function modelsNear(centerPos, radius, nameSet, excludeXY, excludeRadius)
         local out = {}
         local root = itemsRoot(); if not root then return out end
@@ -348,9 +347,7 @@ return function(C, R, UI)
                         local within = (mp.Position - centerPos).Magnitude <= radius
                         if within and excludeXY and excludeRadius then
                             local dxz = Vector3.new(mp.Position.X, 0, mp.Position.Z) - Vector3.new(excludeXY.X, 0, excludeXY.Z)
-                            if dxz.Magnitude <= excludeRadius then
-                                within = false
-                            end
+                            if dxz.Magnitude <= excludeRadius then within = false end
                         end
                         if within and not isReserved(d) then
                             out[#out+1] = d
@@ -365,7 +362,6 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- Kinematics (no collision toggling inside these)
     local function easeOut(t) return 1 - (1 - t) * (1 - t) end
     local function liftTo(model, targetCF, duration)
         local t0 = os.clock()
@@ -393,16 +389,14 @@ return function(C, R, UI)
         end
     end
 
-    -- Conveyor → exact snap to orb center → zero momentum → release
     local function raiseConveyorAndDrop(model, orbPos, beltDir)
         local r = resolveRemotes()
         reserve(model, POST_DROP_HOLD)
-
         startDragRemote(r, model)
         Run.Heartbeat:Wait()
         if not alive(model) then stopDragRemote(r); return end
 
-        local snap = setCollide(model, false)   -- keep off through lift+slide
+        local snap = setCollide(model, false)
         zeroAssembly(model)
 
         local startBack = LINE_BACK + (math.random() * 0.75)
@@ -414,15 +408,13 @@ return function(C, R, UI)
         slideAlong(model, startPos, orbPos, SLIDE_SPEED)
         if not alive(model) then setCollide(model,true,snap); stopDragRemote(r); return end
 
-        -- Hard snap to EXACT drop point, stop all momentum, then enable collide and release
-        local dropCF = CFrame.new(orbPos + Vector3.new(0, 0.05, 0)) * CFrame.Angles(0,0,0)
+        local dropCF = CFrame.new(orbPos + Vector3.new(0, 0.05, 0))
         if model:IsA("Model") then model:PivotTo(dropCF) else local p=mainPart(model); if p then p.CFrame = dropCF end end
-        zeroAssembly(model)                     -- kill linear and angular velocity
-        setCollide(model, true, snap)           -- collisions on just before release
-        zeroAssembly(model)                     -- ensure zero after enabling collide
+        zeroAssembly(model)
+        setCollide(model, true, snap)
+        zeroAssembly(model)
 
-        stopDragRemote(r)                       -- let gravity take over
-
+        stopDragRemote(r)
         reserve(model, POST_DROP_HOLD)
     end
 
@@ -434,7 +426,6 @@ return function(C, R, UI)
         return dir.Unit
     end
 
-    -- Main processing
     local function processNearby(targets, targetCF)
         local h = hrp(); if not h then return end
         local scanCenter = h.Position
@@ -495,24 +486,6 @@ return function(C, R, UI)
         end)
     end
 
-    -- Actions
-    local function burnNearby()
-        local camp = CAMPFIRE_PATH; if not camp then return end
-        local center = fireCenterCF(camp).Position
-        local cf = CFrame.new(center)
-        local targets = mergedSet(fuelSet, cookSet)
-        processNearby(targets, cf)
-    end
-
-    local function scrapNearby()
-        local scr = SCRAPPER_PATH; if not scr then return end
-        local center = scrCenterCF(scr).Position
-        local cf = CFrame.new(center)
-        local targets = mergedSet(junkSet, scrapAlso)
-        processNearby(targets, cf)
-    end
-
-    -- Multi-select helpers
     local function setFromChoice(choice)
         local s = {}
         if type(choice) == "table" then
@@ -573,7 +546,21 @@ return function(C, R, UI)
         end
     end
 
-    -- UI
+    local function burnNearby()
+        local camp = findCampfire(); if not camp then return end
+        local center = (camp.PrimaryPart or mainPart(camp) or camp):GetPivot().Position
+        local cf = CFrame.new(center)
+        local targets = mergedSet(fuelSet, cookSet)
+        processNearby(targets, cf)
+    end
+    local function scrapNearby()
+        local scr = findScrapper(); if not scr then return end
+        local center = (scr.PrimaryPart or mainPart(scr) or scr):GetPivot().Position
+        local cf = CFrame.new(center)
+        local targets = mergedSet(junkSet, scrapAlso)
+        processNearby(targets, cf)
+    end
+
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
 
