@@ -9,33 +9,36 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING   = 500
-    local COLLIDE_OFF_SEC   = 0.22
+    -- Tunables
+    local AMOUNT_TO_BRING     = 500
+    local COLLIDE_OFF_SEC     = 0.22
 
     local DROP_ABOVE_HEAD_STUDS = 10
-    local FALLBACK_UP       = 5
-    local FALLBACK_AHEAD    = 2
+    local FALLBACK_UP         = 5
+    local FALLBACK_AHEAD      = 2
 
-    local PICK_RADIUS       = 15
-    local ORB_OFFSET_Y      = 30
-    local EXCLUDE_DROP_RADIUS = 0.9
+    local PICK_RADIUS         = 15
+    local ORB_OFFSET_Y        = 30
+    local EXCLUDE_DROP_RADIUS = 1.05   -- tiny XY cylinder under drop-orb
 
-    local IN_FLIGHT_MAX     = 8
-    local LAUNCH_INTERVAL   = 0.10
-    local LIFT_TIME         = 0.75
-    local SLIDE_SPEED       = 22.0
-    local ITEM_TIMEOUT      = 3.0
-    local IDLE_TIMEOUT      = 1.6
-    local RESCAN_INTERVAL   = 0.35
-    local POST_DROP_HOLD    = 2.0
+    local IN_FLIGHT_MAX       = 8
+    local LAUNCH_INTERVAL     = 0.10
+    local LIFT_TIME           = 0.75
+    local SLIDE_SPEED         = 22.0
+    local ITEM_TIMEOUT        = 3.0
+    local IDLE_TIMEOUT        = 1.6
+    local RESCAN_INTERVAL     = 0.35
+    local POST_DROP_HOLD      = 2.0
 
-    local LINE_SPACING      = 1.35
-    local LINE_SLOTS        = 14
-    local LINE_BACK         = LINE_SPACING * LINE_SLOTS
+    local LINE_SPACING        = 1.35
+    local LINE_SLOTS          = 14
+    local LINE_BACK           = LINE_SPACING * LINE_SLOTS
 
+    -- Scene anchors
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
+    -- Catalogs
     local junkItems    = {"Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine","UFO Junk","UFO Component"}
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel"}
     local foodItems    = {"Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot","Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"}
@@ -48,8 +51,9 @@ return function(C, R, UI)
     for _,n in ipairs(fuelItems)  do fuelSet[n] = true end
     for _,n in ipairs(junkItems)  do junkSet[n] = true end
     cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
-    scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
+    scrapAlso["Log"]  = true; scrapAlso["Chair"] = true
 
+    -- Helpers
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -66,7 +70,7 @@ return function(C, R, UI)
     end
     local function isUnderLogWall(inst)
         local cur = inst
-        while cur and cur ~= WS do
+        while cur and cur ~= WS then
             local nm = (cur.Name or ""):lower()
             if nm == "logwall" or nm == "log wall" or (nm:find("log",1,true) and nm:find("wall",1,true)) then
                 return true
@@ -143,6 +147,8 @@ return function(C, R, UI)
         end)
         return list
     end
+
+    -- Collectors
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
         local root = itemsRoot(); if not root then return found end
@@ -239,6 +245,7 @@ return function(C, R, UI)
         return sortedFarthest(out)
     end
 
+    -- Placement helpers
     local function computeForwardDropCF()
         local root = hrp(); if not root then return nil end
         local head = headPart()
@@ -318,6 +325,7 @@ return function(C, R, UI)
         return m and m.Parent and root and m:IsA("Model") and m:IsDescendantOf(root)
     end
 
+    -- Reservation to avoid re-grabs
     local reservedUntil = setmetatable({}, {__mode="k"})
     local function isReserved(m)
         local t = reservedUntil[m]
@@ -327,6 +335,7 @@ return function(C, R, UI)
         reservedUntil[m] = os.clock() + (seconds or 2)
     end
 
+    -- Scan with tiny exclusion under drop-orb
     local function modelsNear(centerPos, radius, nameSet, excludeXY, excludeRadius)
         local out = {}
         local root = itemsRoot(); if not root then return out end
@@ -356,11 +365,11 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
+    -- Kinematics (no collision toggling inside these)
     local function easeOut(t) return 1 - (1 - t) * (1 - t) end
     local function liftTo(model, targetCF, duration)
         local t0 = os.clock()
         local start = model:GetPivot()
-        local snap = setCollide(model, false)
         zeroAssembly(model)
         while alive(model) and (os.clock() - t0) < duration do
             local a = easeOut((os.clock() - t0) / duration)
@@ -369,12 +378,12 @@ return function(C, R, UI)
             if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
             Run.Heartbeat:Wait()
         end
-        setCollide(model, true, snap)
     end
     local function slideAlong(model, fromPos, toPos, speed)
         local dist = (toPos - fromPos).Magnitude
         local dur = math.max(0.01, dist / math.max(1, speed))
         local t0 = os.clock()
+        zeroAssembly(model)
         while alive(model) and (os.clock() - t0) < dur do
             local a = (os.clock() - t0) / dur
             local pos = fromPos:Lerp(toPos, a)
@@ -384,27 +393,37 @@ return function(C, R, UI)
         end
     end
 
+    -- Conveyor → exact snap to orb center → zero momentum → release
     local function raiseConveyorAndDrop(model, orbPos, beltDir)
         local r = resolveRemotes()
-        local t0 = os.clock()
         reserve(model, POST_DROP_HOLD)
+
         startDragRemote(r, model)
         Run.Heartbeat:Wait()
         if not alive(model) then stopDragRemote(r); return end
 
+        local snap = setCollide(model, false)   -- keep off through lift+slide
+        zeroAssembly(model)
+
         local startBack = LINE_BACK + (math.random() * 0.75)
         local startPos  = orbPos - beltDir * startBack
+
         liftTo(model, CFrame.new(startPos), LIFT_TIME)
-        if not alive(model) then stopDragRemote(r); return end
+        if not alive(model) then setCollide(model,true,snap); stopDragRemote(r); return end
 
         slideAlong(model, startPos, orbPos, SLIDE_SPEED)
-        if not alive(model) then stopDragRemote(r); return end
+        if not alive(model) then setCollide(model,true,snap); stopDragRemote(r); return end
 
-        for _,p in ipairs(getAllParts(model)) do p.AssemblyLinearVelocity = Vector3.new(0, -6, 0) end
-        stopDragRemote(r)
+        -- Hard snap to EXACT drop point, stop all momentum, then enable collide and release
+        local dropCF = CFrame.new(orbPos + Vector3.new(0, 0.05, 0)) * CFrame.Angles(0,0,0)
+        if model:IsA("Model") then model:PivotTo(dropCF) else local p=mainPart(model); if p then p.CFrame = dropCF end end
+        zeroAssembly(model)                     -- kill linear and angular velocity
+        setCollide(model, true, snap)           -- collisions on just before release
+        zeroAssembly(model)                     -- ensure zero after enabling collide
+
+        stopDragRemote(r)                       -- let gravity take over
 
         reserve(model, POST_DROP_HOLD)
-        if os.clock() - t0 > ITEM_TIMEOUT then return end
     end
 
     local function beltDirFrom(targetPos)
@@ -415,6 +434,7 @@ return function(C, R, UI)
         return dir.Unit
     end
 
+    -- Main processing
     local function processNearby(targets, targetCF)
         local h = hrp(); if not h then return end
         local scanCenter = h.Position
@@ -469,9 +489,13 @@ return function(C, R, UI)
             Run.Heartbeat:Wait()
         end
 
-        task.delay(1, function() if orbPick then orbPick:Destroy() end if orbDrop then orbDrop:Destroy() end end)
+        task.delay(1, function()
+            if orbPick then orbPick:Destroy() end
+            if orbDrop then orbDrop:Destroy() end
+        end)
     end
 
+    -- Actions
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local center = fireCenterCF(camp).Position
@@ -488,6 +512,7 @@ return function(C, R, UI)
         processNearby(targets, cf)
     end
 
+    -- Multi-select helpers
     local function setFromChoice(choice)
         local s = {}
         if type(choice) == "table" then
@@ -548,6 +573,7 @@ return function(C, R, UI)
         end
     end
 
+    -- UI
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
 
