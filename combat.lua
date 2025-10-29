@@ -37,6 +37,12 @@ return function(C, R, UI)
         return inv and inv:FindFirstChild(name) or nil
     end
     local function hasStrongAxe() return findInInventory("Strong Axe") ~= nil end
+    local function hasChainsaw() return findInInventory("Chainsaw") ~= nil end
+    local function hasBigTreeTool()
+        if hasChainsaw() then return "Chainsaw" end
+        if hasStrongAxe() then return "Strong Axe" end
+        return nil
+    end
 
     local function equippedToolName()
         local ch = lp and lp.Character
@@ -235,8 +241,9 @@ return function(C, R, UI)
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         local toolName
         if isTree and C.State.Toggles.BigTreeAura then
-            if hasStrongAxe() then
-                toolName = "Strong Axe"
+            local bt = hasBigTreeTool()
+            if bt then
+                toolName = bt
             else
                 C.State.Toggles.BigTreeAura = false
             end
@@ -369,11 +376,12 @@ return function(C, R, UI)
 
     local bigToggle
     bigToggle = CombatTab:Toggle({
-        Title = "Big Trees (requires Strong Axe)",
+        Title = "Big Trees (Strong Axe or Chainsaw)",
         Value = C.State.Toggles.BigTreeAura or false,
         Callback = function(on)
             if on then
-                if hasStrongAxe() then
+                local bt = hasBigTreeTool()
+                if bt then
                     C.State.Toggles.BigTreeAura = true
                 else
                     C.State.Toggles.BigTreeAura = false
@@ -390,7 +398,7 @@ return function(C, R, UI)
         local inv = lp:WaitForChild("Inventory", 10)
         if not inv then return end
         local function check()
-            if C.State.Toggles.BigTreeAura and not hasStrongAxe() then
+            if C.State.Toggles.BigTreeAura and not hasBigTreeTool() then
                 C.State.Toggles.BigTreeAura = false
                 pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
                 pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
