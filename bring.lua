@@ -485,34 +485,57 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- conveyor settings
-    local DRAG_SPEED    = 18
-    local STEP_WAIT     = 0.03
-    local PICK_RADIUS   = 10
-    local START_STAGGER = 0.5
-    local delivered     = setmetatable({}, { __mode = "k" })
-    local DELIVER_ATTR  = "DeliveredAtOrb"
+    local DRAG_SPEED      = 18
+    local VERTICAL_MULT   = 1.35
+    local STEP_WAIT       = 0.03
+    local PICK_RADIUS     = 10
+    local START_STAGGER   = 0.5
+    local delivered       = setmetatable({}, { __mode = "k" })
+    local DELIVER_ATTR    = "DeliveredAtOrb"
 
-    local function moveTowards(model, destPos, stopDist)
-        local stop = stopDist or 1.0
+    local function setPivot(model, cf)
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p = mainPart(model); if p then p.CFrame = cf end
+        end
+    end
+
+    local function moveVerticalToY(model, targetY, lookDir)
         local snap = setCollide(model, false)
         zeroAssembly(model)
         while model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
             if not pivot then break end
             local pos = pivot.Position
-            local delta = destPos - pos
+            local dy = targetY - pos.Y
+            if math.abs(dy) <= 0.4 then break end
+            local stepY = math.sign(dy) * math.min(DRAG_SPEED * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
+            local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
+            setPivot(model, CFrame.new(newPos, newPos + (lookDir or Vector3.zAxis)))
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            task.wait(STEP_WAIT)
+        end
+        setCollide(model, true, snap)
+    end
+
+    local function moveHorizontalToXZ(model, destXZ, yFixed)
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        while model and model.Parent do
+            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
+            if not pivot then break end
+            local pos = pivot.Position
+            local delta = Vector3.new(destXZ.X - pos.X, 0, destXZ.Z - pos.Z)
             local dist = delta.Magnitude
-            if dist <= stop then break end
+            if dist <= 1.0 then break end
             local step = math.min(DRAG_SPEED * STEP_WAIT, dist)
             local dir = delta.Unit
-            local newPos = pos + dir * step
-            if model:IsA("Model") then
-                model:PivotTo(CFrame.new(newPos, newPos + dir))
-            else
-                local p = mainPart(model); if not p then break end
-                p.CFrame = CFrame.new(newPos, newPos + dir)
-            end
+            local newPos = Vector3.new(pos.X, yFixed or pos.Y, pos.Z) + dir * step
+            setPivot(model, CFrame.new(newPos, newPos + dir))
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
@@ -526,12 +549,7 @@ return function(C, R, UI)
         if not model or not model.Parent then return end
         local snap = setCollide(model, false)
         zeroAssembly(model)
-        local cf = CFrame.new(topPos)
-        if model:IsA("Model") then
-            model:PivotTo(cf)
-        else
-            local p = mainPart(model); if p then p.CFrame = cf end
-        end
+        setPivot(model, CFrame.new(topPos))
         for _,p in ipairs(getAllParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
             p.AssemblyAngularVelocity = Vector3.new()
@@ -542,13 +560,16 @@ return function(C, R, UI)
     local function startConveyor(model, orbPos)
         if not model or not model.Parent then return end
         local mp = mainPart(model); if not mp then return end
-        moveTowards(model, orbPos, 1.0)
+        local riserY = orbPos.Y - 1.0
+        local lookDir = (Vector3.new(orbPos.X, mp.Position.Y, orbPos.Z) - mp.Position)
+        lookDir = (lookDir.Magnitude > 0.001) and lookDir.Unit or Vector3.zAxis
+        moveVerticalToY(model, riserY, lookDir)
+        moveHorizontalToXZ(model, Vector3.new(orbPos.X, 0, orbPos.Z), riserY)
         if model and model.Parent then
             dropVerticalInto(model, orbPos)
         end
     end
 
-    -- modified top two buttons only
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
