@@ -26,6 +26,7 @@ return function(C, R, UI)
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
+    -- ADDED missing items from Gather
     local junkItems    = {
         "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -372,7 +373,7 @@ return function(C, R, UI)
         task.wait(DRAG_SETTLE)
         moveModel(model, fireHandoffCF(campfire))
         local ok = false
-        if r.CookItem then ok = pcall(function() r.CookItem:FireServer(campfire, Instance.new("Model")) end) end
+        if r.CookItem then ok = pcall(function() r.CCookItem:FireServer(campfire, Instance.new("Model")) end) end
         if not ok then pivotOverTarget(model, campfire) end
         task.wait(ACTION_HOLD)
         local cookedName = RAW_TO_COOKED[model.Name]
@@ -485,10 +486,11 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    local DRAG_SPEED      = 18
-    local VERTICAL_MULT   = 1.35
+    -- === Conveyor helpers (top-two buttons only) ===
+    local DRAG_SPEED      = 18         -- 1.5× baseline
+    local VERTICAL_MULT   = 1.35       -- sharper upward rise
     local STEP_WAIT       = 0.03
-    local PICK_RADIUS     = 20
+    local PICK_RADIUS     = 10         -- adjust as desired
     local START_STAGGER   = 0.5
     local delivered       = setmetatable({}, { __mode = "k" })
     local DELIVER_ATTR    = "DeliveredAtOrb"
@@ -499,6 +501,37 @@ return function(C, R, UI)
         else
             local p = mainPart(model); if p then p.CFrame = cf end
         end
+    end
+
+    -- Robust spatial pick using bounds query; restrict to Items folder so we ignore things players are holding.
+    local function nearbyModelsBySphere(center, radius, nameSet)
+        local itemsFolder = itemsRoot()
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+        local parts = WS:GetPartBoundsInRadius(center, radius, params) or {}
+        local uniq, result = {}, {}
+        for _,part in ipairs(parts) do
+            local m = part:FindFirstAncestorOfClass("Model")
+            if m and not uniq[m] then
+                uniq[m] = true
+                if (not itemsFolder or m:IsDescendantOf(itemsFolder))
+                   and not delivered[m]
+                   and not m:GetAttribute(DELIVER_ATTR)
+                   and not isExcludedModel(m)
+                   and not isUnderLogWall(m)
+                   and nameSet[m.Name]
+                then
+                    if not (m.Name == "Log" and isWallVariant(m)) then
+                        local mp = mainPart(m)
+                        if mp and (mp.Position - center).Magnitude <= radius then
+                            table.insert(result, m)
+                        end
+                    end
+                end
+            end
+        end
+        return result
     end
 
     local function moveVerticalToY(model, targetY, lookDir)
@@ -563,13 +596,43 @@ return function(C, R, UI)
         local riserY = orbPos.Y - 1.0
         local lookDir = (Vector3.new(orbPos.X, mp.Position.Y, orbPos.Z) - mp.Position)
         lookDir = (lookDir.Magnitude > 0.001) and lookDir.Unit or Vector3.zAxis
-        moveVerticalToY(model, riserY, lookDir)
-        moveHorizontalToXZ(model, Vector3.new(orbPos.X, 0, orbPos.Z), riserY)
+        moveVerticalToY(model, riserY, lookDir)        -- sharp up
+        moveHorizontalToXZ(model, Vector3.new(orbPos.X, 0, orbPos.Z), riserY) -- then flat run-in
         if model and model.Parent then
-            dropVerticalInto(model, orbPos)
+            dropVerticalInto(model, orbPos)            -- straight down
         end
     end
 
+    -- === Modified top-two buttons: conveyor, spatial pick, robust cleanup ===
+    local function runConveyorJob(centerPos, orbPos, targets)
+        local picked = nearbyModelsBySphere(centerPos, PICK_RADIUS, targets)
+        if #picked == 0 then return end
+
+        local active = 0
+        local function spawnOne(m)
+            if m and m.Parent then
+                delivered[m] = true
+                pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
+                active += 1
+                task.spawn(function()
+                    startConveyor(m, orbPos)
+                    active -= 1
+                end)
+            end
+        end
+
+        for i = 1, #picked do
+            spawnOne(picked[i])
+            task.wait(START_STAGGER)
+        end
+
+        local deadline = os.clock() + math.max(5, START_STAGGER * #picked + 5)
+        while active > 0 and os.clock() < deadline do
+            Run.Heartbeat:Wait()
+        end
+    end
+
+    -- Campfire
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -578,21 +641,14 @@ return function(C, R, UI)
         local campCenter = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
         local orb1 = makeOrb(campCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
 
-        local seen, targets = {}, mergedSet(fuelSet, cookSet)
-        local list = modelsNear(orb2.Position, PICK_RADIUS, targets, seen)
+        local targets = mergedSet(fuelSet, cookSet)
+        runConveyorJob(orb2.Position, orb1.Position, targets)
 
-        for _,m in ipairs(list) do
-            if m and m.Parent and not delivered[m] and not m:GetAttribute(DELIVER_ATTR) then
-                delivered[m] = true
-                pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
-                task.spawn(function() startConveyor(m, orb1.Position) end)
-                task.wait(START_STAGGER)
-            end
-        end
-
-        task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
+        if orb1 then orb1:Destroy() end
+        if orb2 then orb2:Destroy() end
     end
 
+    -- Scrapper
     local function scrapNearby()
         local scr = SCRAPPER_PATH; if not scr then return end
         local root = hrp(); if not root then return end
@@ -601,24 +657,17 @@ return function(C, R, UI)
         local scrCenter = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
         local orb1 = makeOrb(scrCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
 
-        local seen, targets = {}, mergedSet(junkSet, scrapAlso)
-        local list = modelsNear(orb2.Position, PICK_RADIUS, targets, seen)
+        local targets = mergedSet(junkSet, scrapAlso)
+        runConveyorJob(orb2.Position, orb1.Position, targets)
 
-        for _,m in ipairs(list) do
-            if m and m.Parent and not delivered[m] and not m:GetAttribute(DELIVER_ATTR) then
-                delivered[m] = true
-                pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
-                task.spawn(function() startConveyor(m, orb1.Position) end)
-                task.wait(START_STAGGER)
-            end
-        end
-
-        task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
+        if orb1 then orb1:Destroy() end
+        if orb2 then orb2:Destroy() end
     end
 
+    -- ===== UI wiring (unchanged below this point) =====
     tab:Section({ Title = "Actions" })
     tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
-    tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
+    tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)",      Callback = scrapNearby })
 
     local function setFromChoice(choice)
         local s = {}
