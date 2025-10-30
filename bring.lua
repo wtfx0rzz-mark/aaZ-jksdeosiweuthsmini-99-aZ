@@ -10,7 +10,7 @@ return function(C, R, UI)
     assert(tab, "Bring tab not found in UI")
 
     local AMOUNT_TO_BRING       = 500
-    local CONVEYOR_MAX_ACTIVE   = 8
+    local CONVEYOR_MAX_ACTIVE   = 12
     local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
 
