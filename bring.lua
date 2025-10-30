@@ -10,6 +10,7 @@ return function(C, R, UI)
     assert(tab, "Bring tab not found in UI")
 
     local AMOUNT_TO_BRING       = 500
+    local CONVEYOR_MAX_ACTIVE   = 8
     local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
 
@@ -30,20 +31,17 @@ return function(C, R, UI)
         "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
-    -- removed "Biofuel"
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {
         "Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot",
         "Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"
     }
     local medicalItems = {"Bandage","MedKit"}
-    -- added "Sword" (generic)
     local weaponsArmor = {
         "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe",
         "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire",
         "Sword"
     }
-    -- added "Cultist Gem","Tusk"
     local ammoMisc     = {
         "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
         "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk"
@@ -586,7 +584,6 @@ return function(C, R, UI)
         local l  = nm:lower()
 
         if nameSet[nm] then
-            -- exact name
         else
             if nameSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
             elseif nameSet["Cultist"] and hasHumanoid(m) and l:find("cultist",1,true) then
@@ -624,6 +621,17 @@ return function(C, R, UI)
                 uniq[m] = true
                 out[#out+1] = m
             end
+        end
+        return out
+    end
+
+    local function capPerName(models, perLimit)
+        if not perLimit or perLimit <= 0 then return models end
+        local cnt, out = {}, {}
+        for _,m in ipairs(models) do
+            local nm = m.Name or ""
+            cnt[nm] = (cnt[nm] or 0) + 1
+            if cnt[nm] <= perLimit then out[#out+1] = m end
         end
         return out
     end
@@ -696,10 +704,10 @@ return function(C, R, UI)
     local function runConveyorJob(centerPos, orbPos, targets, jobId)
         local picked = getCandidates(centerPos, PICK_RADIUS, targets, jobId)
         if #picked == 0 then return end
+        picked = capPerName(picked, AMOUNT_TO_BRING)
         local active = 0
         local function spawnOne(m)
             if m and m.Parent then
-                delivered[m] = true
                 active += 1
                 task.spawn(function()
                     startConveyor(m, orbPos, jobId)
@@ -708,6 +716,7 @@ return function(C, R, UI)
             end
         end
         for i = 1, #picked do
+            while active >= CONVEYOR_MAX_ACTIVE do Run.Heartbeat:Wait() end
             spawnOne(picked[i])
             task.wait(START_STAGGER)
         end
@@ -742,10 +751,6 @@ return function(C, R, UI)
         if orb1 then orb1:Destroy() end
         if orb2 then orb2:Destroy() end
     end
-
-    tab:Section({ Title = "Actions" })
-    tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
-    tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)",      Callback = scrapNearby })
 
     local function setFromChoice(choice)
         local s = {}
@@ -832,6 +837,10 @@ return function(C, R, UI)
         })
     end
 
+    tab:Section({ Title = "Actions" })
+    tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
+    tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)",      Callback = scrapNearby })
+
     tab:Section({ Title = "Junk → Ground (Multi)" })
     multiSelectDropdown({ title = "Select Junk Items", values = junkItems, setter = function(s) selJunkMany = s end })
     tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selJunkMany) end })
@@ -859,4 +868,94 @@ return function(C, R, UI)
     tab:Section({ Title = "Pelts → Ground (Multi)" })
     multiSelectDropdown({ title = "Select Pelts", values = pelts, setter = function(s) selPeltMany = s end })
     tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selPeltMany) end })
+
+    do
+        local ORB_RADIUS     = 2.2
+        local ORB_STUCK_SECS = 0.9
+        local ORB_FALL_DELTA = 2.5
+        local ORB_MAX_KICKS  = 2
+        local ORB_RESET_UP   = 1.2
+        local ORB_KICK_VY    = -60
+        local GUARD_HZ       = 12
+
+        local function campOrbPos()
+            local camp = CAMPFIRE_PATH
+            if not camp then return nil end
+            local c = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()).Position
+            return Vector3.new(c.X, c.Y + ORB_OFFSET_Y + 10, c.Z)
+        end
+        local function scrapOrbPos()
+            local scr = SCRAPPER_PATH
+            if not scr then return nil end
+            local c = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()).Position
+            return Vector3.new(c.X, c.Y + ORB_OFFSET_Y + 10, c.Z)
+        end
+        local function liveOrb1Pos()
+            local o = WS:FindFirstChild("orb1")
+            return o and o:IsA("BasePart") and o.Position or nil
+        end
+
+        local function kickDown(m, orbY)
+            local mp = mainPart(m); if not mp then return end
+            pcall(function() mp.Anchored = false end)
+            pcall(function() mp.AssemblyLinearVelocity  = Vector3.new(0, ORB_KICK_VY, 0) end)
+            pcall(function() mp.AssemblyAngularVelocity = Vector3.new() end)
+            pcall(function() mp:SetNetworkOwner(nil) end)
+            pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+            pcall(function()
+                local p = mp.Position
+                mp.CFrame = CFrame.new(Vector3.new(p.X, orbY + ORB_RESET_UP, p.Z))
+            end)
+        end
+
+        local watched = setmetatable({}, {__mode="k"})
+        local acc = 0
+        Run.Heartbeat:Connect(function(dt)
+            acc += dt
+            if acc < (1 / GUARD_HZ) then return end
+            acc = 0
+
+            local positions = {}
+            local pLive = liveOrb1Pos(); if pLive then positions[#positions+1] = pLive end
+            local pCamp = campOrbPos();  if pCamp then positions[#positions+1] = pCamp end
+            local pScr  = scrapOrbPos(); if pScr  then positions[#positions+1] = pScr  end
+            if #positions == 0 then return end
+
+            local items = WS:FindFirstChild("Items"); if not items then return end
+            for _,m in ipairs(items:GetChildren()) do
+                if not m:IsA("Model") then continue end
+                local mp = mainPart(m); if not mp then continue end
+
+                local nearest, orbY = nil, nil
+                local pos = mp.Position
+                for _,o in ipairs(positions) do
+                    local d = (pos - o).Magnitude
+                    if d <= ORB_RADIUS then nearest, orbY = true, o.Y; break end
+                end
+
+                if nearest then
+                    local rec = watched[m]
+                    if not rec then
+                        watched[m] = {t=os.clock(), y0=pos.Y, kicks=0}
+                    else
+                        local fell = (rec.y0 - pos.Y) >= ORB_FALL_DELTA or pos.Y < (orbY - ORB_FALL_DELTA)
+                        if fell then
+                            watched[m] = nil
+                        elseif (os.clock() - rec.t) >= ORB_STUCK_SECS then
+                            if rec.kicks < ORB_MAX_KICKS then
+                                rec.kicks += 1
+                                rec.t = os.clock()
+                                rec.y0 = pos.Y
+                                kickDown(m, orbY)
+                            else
+                                watched[m] = nil
+                            end
+                        end
+                    end
+                else
+                    watched[m] = nil
+                end
+            end
+        end)
+    end
 end
