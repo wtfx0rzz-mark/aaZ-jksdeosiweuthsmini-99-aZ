@@ -41,6 +41,20 @@ return function(C, R, UI)
         local TELEPORT_UP_NUDGE = 0.05
         local SAFE_DROP_UP      = 4.0
 
+        local STREAM_TIMEOUT    = 6.0
+        local function requestStreamAt(pos, timeout)
+            local p = typeof(pos) == "CFrame" and pos.Position or pos
+            local ok, res = pcall(function() return WS:RequestStreamAroundAsync(p, timeout or STREAM_TIMEOUT) end)
+            return ok and res or false
+        end
+        local function waitGameplayResumed(timeout)
+            local t0 = os.clock()
+            while lp and lp.GameplayPaused do
+                if os.clock() - t0 > (timeout or STREAM_TIMEOUT) then break end
+                Run.Heartbeat:Wait()
+            end
+        end
+
         local function snapshotCollide()
             local ch = lp.Character
             if not ch then return {} end
@@ -81,6 +95,9 @@ return function(C, R, UI)
             local ch   = lp.Character
             local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
 
+            requestStreamAt(targetCF)
+            waitGameplayResumed(1.0)
+
             local hadNoclip = isNoclipNow()
             local snap
             if not hadNoclip then
@@ -94,6 +111,7 @@ return function(C, R, UI)
 
             if dropMode then
                 if not hadNoclip then setCollideAll(true, snap) end
+                waitGameplayResumed(1.0)
                 return
             end
 
@@ -115,6 +133,7 @@ return function(C, R, UI)
                 setCollideAll(true, snap)
             end
             if STICK_CLEAR_VEL then zeroAssembly(root) end
+            waitGameplayResumed(1.0)
         end
 
         local function diveBelowGround(depth, frames)
@@ -153,14 +172,18 @@ return function(C, R, UI)
         end
         local DIVE_DEPTH = 200
         local function teleportWithDive(targetCF)
+            local upCF = targetCF + Vector3.new(0, SAFE_DROP_UP, 0)
+            requestStreamAt(upCF)
+            waitGameplayResumed(1.0)
+
             local root = hrp(); if not root then return end
             local snap = snapshotCollide()
             setCollideAll(false)
             diveBelowGround(DIVE_DEPTH, 4)
-            local upCF = targetCF + Vector3.new(0, SAFE_DROP_UP, 0)
             teleportSticky(upCF, true)
             waitUntilGroundedOrMoving(3)
             setCollideAll(true, snap)
+            waitGameplayResumed(1.0)
         end
 
         local function fireCenterPart(fire)
@@ -185,7 +208,6 @@ return function(C, R, UI)
             return nil
         end
 
-        -- UPDATED groundBelow: cast from player downward and exclude foliage/items/characters
         local function groundBelow(pos)
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
