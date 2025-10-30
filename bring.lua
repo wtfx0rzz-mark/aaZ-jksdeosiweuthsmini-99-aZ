@@ -488,7 +488,7 @@ return function(C, R, UI)
     local DRAG_SPEED      = 18
     local VERTICAL_MULT   = 1.35
     local STEP_WAIT       = 0.03
-    local PICK_RADIUS     = 10
+    local PICK_RADIUS     = 20
     local START_STAGGER   = 0.5
     local delivered       = setmetatable({}, { __mode = "k" })
     local DELIVER_ATTR    = "DeliveredAtOrb"
