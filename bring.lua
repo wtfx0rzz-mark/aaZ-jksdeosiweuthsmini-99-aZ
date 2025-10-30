@@ -26,7 +26,6 @@ return function(C, R, UI)
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- ADDED missing items from Gather
     local junkItems    = {
         "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -486,62 +485,120 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
+    -- === New conveyor helpers (used only by top two buttons) ===
+    local DRAG_SPEED  = 12
+    local STEP_WAIT   = 0.03
+    local PICK_RADIUS = 10
+    local delivered   = setmetatable({}, { __mode = "k" })
+    local DELIVER_ATTR = "DeliveredAtOrb"
+
+    local function moveTowards(model, destPos, stopDist)
+        local stop = stopDist or 1.0
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        while model and model.Parent do
+            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
+            if not pivot then break end
+            local pos = pivot.Position
+            local delta = destPos - pos
+            local dist = delta.Magnitude
+            if dist <= stop then break end
+            local step = math.min(DRAG_SPEED * STEP_WAIT, dist)
+            local dir = delta.Unit
+            local newPos = pos + dir * step
+            if model:IsA("Model") then
+                model:PivotTo(CFrame.new(newPos, newPos + dir))
+            else
+                local p = mainPart(model); if not p then break end
+                p.CFrame = CFrame.new(newPos, newPos + dir)
+            end
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            task.wait(STEP_WAIT)
+        end
+        setCollide(model, true, snap)
+    end
+
+    local function dropVerticalInto(model, topPos)
+        if not model or not model.Parent then return end
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        local cf = CFrame.new(topPos)
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p = mainPart(model); if p then p.CFrame = cf end
+        end
+        for _,p in ipairs(getAllParts(model)) do
+            p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
+            p.AssemblyAngularVelocity = Vector3.new()
+        end
+        setCollide(model, true, snap)
+    end
+
+    -- === Modified: Burn/Cook Nearby → conveyor to campfire orb, no remotes ===
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
+
         local orb2 = makeOrb(root.CFrame, "orb2")
-        local orb1 = makeOrb((mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
+        local campCenter = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
+        local orb1 = makeOrb(campCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
+
         local seen, targets = {}, mergedSet(fuelSet, cookSet)
-        while true do
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
-            if #list == 0 then break end
-            for _,m in ipairs(list) do
-                if cookSet[m.Name] then cookFlow(m, camp) else burnFlow(m, camp) end
-                task.wait(PER_ITEM_DELAY)
-            end
-        end
-        task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
-    end
-    local function scrapNearby()
-        local scr = SCRAPPER_PATH; if not scr then return end
-        local root = hrp(); if not root then return end
-        local orb2 = makeOrb(root.CFrame, "orb2")
-        local orb1 = makeOrb((mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y, 0), "orb1")
-        local seen, targets = {}, mergedSet(junkSet, scrapAlso)
-        while true do
-            local list = modelsNear(orb2.Position, NEARBY_RADIUS, targets, seen)
-            if #list == 0 then break end
-            for _,m in ipairs(list) do
-                scrapFlow(m, scr)
-                task.wait(PER_ITEM_DELAY)
+        local list = modelsNear(orb2.Position, PICK_RADIUS, targets, seen)
+
+        for _,m in ipairs(list) do
+            if m and m.Parent and not delivered[m] and not m:GetAttribute(DELIVER_ATTR) then
+                local mp = mainPart(m)
+                if mp then
+                    moveTowards(m, orb1.Position, 1.0)
+                    if m and m.Parent then
+                        delivered[m] = true
+                        pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
+                        dropVerticalInto(m, orb1.Position)
+                    end
+                    task.wait(PER_ITEM_DELAY)
+                end
             end
         end
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    local function bringSelected(name, count)
-        dropCounter = 0
-        local want = tonumber(count) or 0
-        if want <= 0 then return end
-        local list
-        if name == "Mossy Coin" then
-            list = collectMossyCoins(want)
-        elseif name == "Cultist" then
-            list = collectCultists(want)
-        elseif name == "Sapling" then
-            list = collectSaplings(want)
-        elseif table.find(pelts, name) then
-            list = collectPelts(name, want)
-        else
-            list = collectByNameLoose(name, want)
+    -- === Modified: Scrap Nearby → conveyor to scrapper orb, no remotes ===
+    local function scrapNearby()
+        local scr = SCRAPPER_PATH; if not scr then return end
+        local root = hrp(); if not root then return end
+
+        local orb2 = makeOrb(root.CFrame, "orb2")
+        local scrCenter = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
+        local orb1 = makeOrb(scrCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
+
+        local seen, targets = {}, mergedSet(junkSet, scrapAlso)
+        local list = modelsNear(orb2.Position, PICK_RADIUS, targets, seen)
+
+        for _,m in ipairs(list) do
+            if m and m.Parent and not delivered[m] and not m:GetAttribute(DELIVER_ATTR) then
+                local mp = mainPart(m)
+                if mp then
+                    moveTowards(m, orb1.Position, 1.0)
+                    if m and m.Parent then
+                        delivered[m] = true
+                        pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
+                        dropVerticalInto(m, orb1.Position)
+                    end
+                    task.wait(PER_ITEM_DELAY)
+                end
+            end
         end
-        if #list == 0 then return end
-        for i,entry in ipairs(list) do
-            if i > want then break end
-            dropNearPlayer(entry.model)
-            task.wait(PER_ITEM_DELAY)
-        end
+        task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
+
+    tab:Section({ Title = "Actions" })
+    tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
+    tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
     local function setFromChoice(choice)
         local s = {}
@@ -553,7 +610,9 @@ return function(C, R, UI)
         return s
     end
 
-    -- UPDATED: accept model to match Gather’s Cultist rule (name contains "cultist" AND Humanoid)
+    local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
+        {},{},{},{},{},{},{}
+
     local function nameMatches(selectedSet, m)
         local nm = m and m.Name or ""
         if selectedSet[nm] then return true end
@@ -609,9 +668,6 @@ return function(C, R, UI)
         end
     end
 
-    local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
-        {},{},{},{},{},{},{}
-
     local function multiSelectDropdown(args)
         return tab:Dropdown({
             Title = args.title,
@@ -621,10 +677,6 @@ return function(C, R, UI)
             Callback = function(choice) args.setter(setFromChoice(choice)) end
         })
     end
-
-    tab:Section({ Title = "Actions" })
-    tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
-    tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)", Callback = scrapNearby })
 
     tab:Section({ Title = "Junk → Ground (Multi)" })
     multiSelectDropdown({ title = "Select Junk Items", values = junkItems, setter = function(s) selJunkMany = s end })
