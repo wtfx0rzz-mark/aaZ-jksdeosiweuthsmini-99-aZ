@@ -30,19 +30,23 @@ return function(C, R, UI)
         "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
-    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel"}
+    -- removed "Biofuel"
+    local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
     local foodItems    = {
         "Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot",
         "Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"
     }
     local medicalItems = {"Bandage","MedKit"}
+    -- added "Sword" (generic)
     local weaponsArmor = {
         "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe",
-        "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire"
+        "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire",
+        "Sword"
     }
+    -- added "Cultist Gem","Tusk"
     local ammoMisc     = {
         "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
-        "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute"
+        "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk"
     }
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
 
@@ -203,6 +207,7 @@ return function(C, R, UI)
         end
         return sortedFarthest(found)
     end
+    private = nil
     local function collectMossyCoins(limit)
         local out, n = {}, 0
         local root = itemsRoot(); if not root then return out end
@@ -441,7 +446,6 @@ return function(C, R, UI)
     local function dropNearPlayer(model)
         local r = startDragGround(model)
         Run.Heartbeat:Wait()
-
         local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
         local snap = setCollide(model, false)
         zeroAssembly(model)
@@ -451,7 +455,6 @@ return function(C, R, UI)
             local p = mainPart(model); if p then p.CFrame = cf end
         end
         setCollide(model, true, snap)
-
         stopDragGround(r, model)
     end
 
@@ -469,7 +472,6 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- conveyor config
     local DRAG_SPEED      = 18
     local VERTICAL_MULT   = 1.35
     local STEP_WAIT       = 0.03
@@ -552,12 +554,13 @@ return function(C, R, UI)
         end)
     end
 
+    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
+
     local function canPick(m, center, radius, nameSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
-        local itemsFolder = itemsRoot()
+        local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         if isExcludedModel(m) or isUnderLogWall(m) then return false end
-        if not nameSet[m.Name] then return false end
         if m.Name == "Log" and isWallVariant(m) then return false end
 
         local del = m:GetAttribute(DELIVER_ATTR)
@@ -579,8 +582,33 @@ return function(C, R, UI)
             end
         end
 
-        local mp = mainPart(m)
-        if not mp then return false end
+        local nm = m.Name or ""
+        local l  = nm:lower()
+
+        if nameSet[nm] then
+            -- exact name
+        else
+            if nameSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
+            elseif nameSet["Cultist"] and hasHumanoid(m) and l:find("cultist",1,true) then
+            elseif nameSet["Sapling"] and nm == "Sapling" then
+            elseif nameSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then
+            elseif nameSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then
+            elseif nameSet["Wolf Pelt"] and nm == "Wolf Pelt" then
+            elseif nameSet["Bunny Foot"] and nm == "Bunny Foot" then
+            elseif nameSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then
+            elseif nameSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then
+            elseif nameSet["Spear"] and l:find("spear",1,true) then
+            elseif nameSet["Sword"] and l:find("sword",1,true) then
+            elseif nameSet["Crossbow"] and l:find("crossbow",1,true) then
+            elseif nameSet["Blueprint"] and l:find("blueprint",1,true) then
+            elseif nameSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then
+            elseif nameSet["Tusk"] and l:find("tusk",1,true) then
+            else
+                return false
+            end
+        end
+
+        local mp = mainPart(m); if not mp then return false end
         return (mp.Position - center).Magnitude <= radius
     end
 
@@ -610,10 +638,58 @@ return function(C, R, UI)
         local riserY = orbPos.Y - 1.0
         local lookDir = (Vector3.new(orbPos.X, mp.Position.Y, orbPos.Z) - mp.Position)
         lookDir = (lookDir.Magnitude > 0.001) and lookDir.Unit or Vector3.zAxis
-        moveVerticalToY(model, riserY, lookDir)
-        moveHorizontalToXZ(model, Vector3.new(orbPos.X, 0, orbPos.Z), riserY)
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        while model and model.Parent do
+            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
+            if not pivot then break end
+            local pos = pivot.Position
+            local dy = riserY - pos.Y
+            if math.abs(dy) <= 0.4 then break end
+            local stepY = math.sign(dy) * math.min(18 * 1.35 * 0.03, math.abs(dy))
+            local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
+            setPivot(model, CFrame.new(newPos, newPos + (lookDir or Vector3.zAxis)))
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            task.wait(0.03)
+        end
+        setCollide(model, true, snap)
+        local snap2 = setCollide(model, false)
+        zeroAssembly(model)
+        while model and model.Parent do
+            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
+            if not pivot then break end
+            local pos = pivot.Position
+            local delta = Vector3.new(orbPos.X - pos.X, 0, orbPos.Z - pos.Z)
+            local dist = delta.Magnitude
+            if dist <= 1.0 then break end
+            local step = math.min(18 * 0.03, dist)
+            local dir = delta.Unit
+            local newPos = Vector3.new(pos.X, riserY, pos.Z) + dir * step
+            setPivot(model, CFrame.new(newPos, newPos + dir))
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            task.wait(0.03)
+        end
+        setCollide(model, true, snap2)
         if model and model.Parent then
-            dropVerticalInto(model, orbPos, jobId)
+            local snap3 = setCollide(model, false)
+            zeroAssembly(model)
+            setPivot(model, CFrame.new(orbPos))
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            setCollide(model, true, snap3)
+            pcall(function()
+                model:SetAttribute(INFLT_ATTR, nil)
+                model:SetAttribute(JOB_ATTR, nil)
+                model:SetAttribute(DELIVER_ATTR, tostring(jobId))
+            end)
         end
     end
 
@@ -641,7 +717,6 @@ return function(C, R, UI)
         end
     end
 
-    -- campfire (raised orb +10)
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -655,7 +730,6 @@ return function(C, R, UI)
         if orb2 then orb2:Destroy() end
     end
 
-    -- scrapper (raised orb +10)
     local function scrapNearby()
         local scr = SCRAPPER_PATH; if not scr then return end
         local root = hrp(); if not root then return end
@@ -669,7 +743,6 @@ return function(C, R, UI)
         if orb2 then orb2:Destroy() end
     end
 
-    -- UI wiring
     tab:Section({ Title = "Actions" })
     tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)",      Callback = scrapNearby })
@@ -687,7 +760,11 @@ return function(C, R, UI)
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
 
+    local function itemsRootOrNil2() return WS:FindFirstChild("Items") end
+
     local function nameMatches(selectedSet, m)
+        local itemsFolder = itemsRootOrNil2()
+        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         local nm = m and m.Name or ""
         if selectedSet[nm] then return true end
         local l = nm:lower()
@@ -700,16 +777,20 @@ return function(C, R, UI)
         if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
         if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
         if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
+        if selectedSet["Spear"] and l:find("spear",1,true) then return true end
+        if selectedSet["Sword"] and l:find("sword",1,true) then return true end
+        if selectedSet["Crossbow"] and l:find("crossbow",1,true) then return true end
+        if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
+        if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
+        if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
         return false
     end
-
-    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
 
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
         dropCounter = 0
         local perNameCount, seenModel, queue = {}, {}, {}
-        local itemsFolder = itemsRootOrNil(); if not itemsFolder then return end
+        local itemsFolder = itemsRootOrNil2(); if not itemsFolder then return end
 
         for _,d in ipairs(itemsFolder:GetDescendants()) do
             local m
