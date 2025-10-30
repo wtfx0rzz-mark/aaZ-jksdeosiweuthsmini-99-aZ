@@ -485,12 +485,13 @@ return function(C, R, UI)
         local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
     end
 
-    -- === New conveyor helpers (used only by top two buttons) ===
-    local DRAG_SPEED  = 12
-    local STEP_WAIT   = 0.03
-    local PICK_RADIUS = 10
-    local delivered   = setmetatable({}, { __mode = "k" })
-    local DELIVER_ATTR = "DeliveredAtOrb"
+    -- conveyor settings
+    local DRAG_SPEED    = 18
+    local STEP_WAIT     = 0.03
+    local PICK_RADIUS   = 10
+    local START_STAGGER = 0.5
+    local delivered     = setmetatable({}, { __mode = "k" })
+    local DELIVER_ATTR  = "DeliveredAtOrb"
 
     local function moveTowards(model, destPos, stopDist)
         local stop = stopDist or 1.0
@@ -538,7 +539,16 @@ return function(C, R, UI)
         setCollide(model, true, snap)
     end
 
-    -- === Modified: Burn/Cook Nearby → conveyor to campfire orb, no remotes ===
+    local function startConveyor(model, orbPos)
+        if not model or not model.Parent then return end
+        local mp = mainPart(model); if not mp then return end
+        moveTowards(model, orbPos, 1.0)
+        if model and model.Parent then
+            dropVerticalInto(model, orbPos)
+        end
+    end
+
+    -- modified top two buttons only
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -552,22 +562,16 @@ return function(C, R, UI)
 
         for _,m in ipairs(list) do
             if m and m.Parent and not delivered[m] and not m:GetAttribute(DELIVER_ATTR) then
-                local mp = mainPart(m)
-                if mp then
-                    moveTowards(m, orb1.Position, 1.0)
-                    if m and m.Parent then
-                        delivered[m] = true
-                        pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
-                        dropVerticalInto(m, orb1.Position)
-                    end
-                    task.wait(PER_ITEM_DELAY)
-                end
+                delivered[m] = true
+                pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
+                task.spawn(function() startConveyor(m, orb1.Position) end)
+                task.wait(START_STAGGER)
             end
         end
+
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
-    -- === Modified: Scrap Nearby → conveyor to scrapper orb, no remotes ===
     local function scrapNearby()
         local scr = SCRAPPER_PATH; if not scr then return end
         local root = hrp(); if not root then return end
@@ -581,18 +585,13 @@ return function(C, R, UI)
 
         for _,m in ipairs(list) do
             if m and m.Parent and not delivered[m] and not m:GetAttribute(DELIVER_ATTR) then
-                local mp = mainPart(m)
-                if mp then
-                    moveTowards(m, orb1.Position, 1.0)
-                    if m and m.Parent then
-                        delivered[m] = true
-                        pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
-                        dropVerticalInto(m, orb1.Position)
-                    end
-                    task.wait(PER_ITEM_DELAY)
-                end
+                delivered[m] = true
+                pcall(function() m:SetAttribute(DELIVER_ATTR, true) end)
+                task.spawn(function() startConveyor(m, orb1.Position) end)
+                task.wait(START_STAGGER)
             end
         end
+
         task.delay(1, function() if orb1 then orb1:Destroy() end if orb2 then orb2:Destroy() end end)
     end
 
