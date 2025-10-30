@@ -6,6 +6,7 @@ return function(C, R, UI)
         local PPS     = game:GetService("ProximityPromptService")
         local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
         local UIS     = game:GetService("UserInputService")
+        local Lighting= (C and C.Services and C.Services.Lighting) or game:GetService("Lighting")
 
         local lp = Players.LocalPlayer
         local Tabs = (UI and UI.Tabs) or {}
@@ -355,7 +356,7 @@ return function(C, R, UI)
             end
 
             local hit = WS:Raycast(castFrom, Vector3.new(0, -RAY_DEPTH, 0), params)
-            return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
+            return hit and hit.Position or (castFrom - Vector3(0, 3, 0))
         end
 
         local function findClosestSapling()
@@ -694,6 +695,34 @@ return function(C, R, UI)
         })
         task.defer(enableAutoStun)
 
+        local noShadowsOn, lightConn = false, nil
+        local origGlobalShadows = nil
+        local lightOrig = setmetatable({}, {__mode = "k"})
+        local function applyLight(l)
+            if l:IsA("PointLight") or l:IsA("SpotLight") or l:IsA("SurfaceLight") then
+                if lightOrig[l] == nil then lightOrig[l] = l.Shadows end
+                pcall(function() l.Shadows = false end)
+            end
+        end
+        local function enableNoShadows()
+            if noShadowsOn then return end
+            noShadowsOn = true
+            origGlobalShadows = Lighting.GlobalShadows
+            pcall(function() Lighting.GlobalShadows = false end)
+            for _,d in ipairs(Lighting:GetDescendants()) do applyLight(d) end
+            lightConn = Lighting.DescendantAdded:Connect(applyLight)
+        end
+        local function disableNoShadows()
+            noShadowsOn = false
+            if lightConn then lightConn:Disconnect(); lightConn = nil end
+            if origGlobalShadows ~= nil then pcall(function() Lighting.GlobalShadows = origGlobalShadows end) end
+            for l,orig in pairs(lightOrig) do
+                if l and l.Parent then pcall(function() l.Shadows = orig end) end
+            end
+        end
+
+        tab:Toggle({ Title = "Disable Shadows", Value = false, Callback = function(state) if state then enableNoShadows() else disableNoShadows() end end })
+
         local function itemsFolder()
             return WS:FindFirstChild("Items")
         end
@@ -798,6 +827,7 @@ return function(C, R, UI)
             if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
             if infJumpOn and not infConn then enableInfJump() end
             if autoStunOn and not autoStunThread then enableAutoStun() end
+            if noShadowsOn and not lightConn then enableNoShadows() end
         end)
     end
     local ok, err = pcall(run)
