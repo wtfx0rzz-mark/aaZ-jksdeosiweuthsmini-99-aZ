@@ -48,6 +48,18 @@ return function(C, R, UI)
             local ok, res = pcall(function() return WS:RequestStreamAroundAsync(p, timeout or STREAM_TIMEOUT) end)
             return ok and res or false
         end
+        local function prefetchRing(cf, r)
+            local base = typeof(cf)=="CFrame" and cf.Position or cf
+            r = r or 80
+            local o = {
+                Vector3.new( 0,0, 0),
+                Vector3.new( r,0, 0), Vector3.new(-r,0, 0),
+                Vector3.new( 0,0, r), Vector3.new( 0,0,-r),
+                Vector3.new( r,0, r), Vector3.new( r,0,-r),
+                Vector3.new(-r,0, r), Vector3.new(-r,0,-r),
+            }
+            for i=1,#o do requestStreamAt(base + o[i]) end
+        end
         local function waitGameplayResumed(timeout)
             local t0 = os.clock()
             while lp and lp.GameplayPaused do
@@ -96,6 +108,7 @@ return function(C, R, UI)
             local ch   = lp.Character
             local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
 
+            prefetchRing(targetCF)
             requestStreamAt(targetCF)
             waitGameplayResumed(1.0)
 
@@ -174,6 +187,7 @@ return function(C, R, UI)
         local DIVE_DEPTH = 200
         local function teleportWithDive(targetCF)
             local upCF = targetCF + Vector3.new(0, SAFE_DROP_UP, 0)
+            prefetchRing(upCF)
             requestStreamAt(upCF)
             waitGameplayResumed(1.0)
 
@@ -356,7 +370,7 @@ return function(C, R, UI)
             end
 
             local hit = WS:Raycast(castFrom, Vector3.new(0, -RAY_DEPTH, 0), params)
-            return hit and hit.Position or (castFrom - Vector3(0, 3, 0))
+            return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
         end
 
         local function findClosestSapling()
@@ -723,6 +737,18 @@ return function(C, R, UI)
 
         tab:Toggle({ Title = "Disable Shadows", Value = false, Callback = function(state) if state then enableNoShadows() else disableNoShadows() end end })
 
+        local noPauseOn, prevPauseMode
+        local function enableNoStreamingPause()
+            if noPauseOn then return end
+            noPauseOn = true
+            pcall(function()
+                prevPauseMode = WS.StreamingPauseMode
+                WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled
+            end)
+        end
+
+        enableNoStreamingPause()
+
         local function itemsFolder()
             return WS:FindFirstChild("Items")
         end
@@ -822,12 +848,17 @@ return function(C, R, UI)
         tab:Button({ Title = "Drop Saplings", Callback = actionDropSaplings })
         tab:Button({ Title = "Plant All Saplings", Callback = actionPlantAllSaplings })
 
+        local loadDefenseOnDefault = true
+        if loadDefenseOnDefault then enableLoadDefense() end
+
         Players.LocalPlayer.CharacterAdded:Connect(function()
             if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
             if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
             if infJumpOn and not infConn then enableInfJump() end
             if autoStunOn and not autoStunThread then enableAutoStun() end
             if noShadowsOn and not lightConn then enableNoShadows() end
+            enableNoStreamingPause()
+            if loadDefenseOnDefault then enableLoadDefense() end
         end)
     end
     local ok, err = pcall(run)
