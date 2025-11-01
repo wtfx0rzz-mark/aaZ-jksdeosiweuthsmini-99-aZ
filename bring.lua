@@ -600,7 +600,7 @@ return function(C, R, UI)
             elseif nameSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then
             elseif nameSet["Spear"] and l:find("spear",1,true) then
             elseif nameSet["Sword"] and l:find("sword",1,true) then
-            elseif nameSet["Crossbow"] and l:find("crossbow",1,true) then
+            elseif nameSet["Crossbow"] and l:find("crossbow",1,true) and not hasHumanoid(m) and not l:find("cultist",1,true) then
             elseif nameSet["Blueprint"] and l:find("blueprint",1,true) then
             elseif nameSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then
             elseif nameSet["Tusk"] and l:find("tusk",1,true) then
@@ -800,7 +800,8 @@ return function(C, R, UI)
         if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
         if selectedSet["Spear"] and l:find("spear",1,true) then return true end
         if selectedSet["Sword"] and l:find("sword",1,true) then return true end
-        if selectedSet["Crossbow"] and l:find("crossbow",1,true) then return true end
+        if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not hasHumanoid(m) and not l:find("cultist",1,true) then return true end
+        if selectedSet["Crossbow"] and nm == "Crossbow" then return true end
         if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
         if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
         if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
