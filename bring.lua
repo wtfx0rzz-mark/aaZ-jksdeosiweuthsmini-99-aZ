@@ -180,7 +180,9 @@ return function(C, R, UI)
         return list
     end
 
-    local function itemsRoot() return WS:FindFirstChild("Items") end
+    local function itemsRoot()
+        return WS:FindFirstChild("Items")
+    end
 
     local function collectByNameLoose(name, limit)
         local found, n = {}, 0
@@ -471,17 +473,19 @@ return function(C, R, UI)
     local DRAG_SPEED      = 18
     local VERTICAL_MULT   = 1.35
     local STEP_WAIT       = 0.03
-    local PICK_RADIUS     = 16
+    local PICK_RADIUS     = 10
     local START_STAGGER   = 0.5
     local STUCK_TTL       = 6.0
 
-    local DRAG_SPEED_V    = 18
-    local DRAG_SPEED_H    = 28
-    local RESCUE_RADIUS   = 3.5
+    local ORB_PICK_RADIUS = 20
+    local RISE_SPEED      = 12
+    local RUN_SPEED       = 28
 
     local INFLT_ATTR = "OrbInFlightAt"
     local DELIVER_ATTR = "DeliveredAtOrb"
     local JOB_ATTR = "OrbJob"
+
+    local delivered = setmetatable({}, { __mode = "k" })
 
     local function setPivot(model, cf)
         if model:IsA("Model") then
@@ -489,6 +493,151 @@ return function(C, R, UI)
         else
             local p = mainPart(model); if p then p.CFrame = cf end
         end
+    end
+
+    local function moveVerticalToY(model, targetY, lookDir)
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        while model and model.Parent do
+            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
+            if not pivot then break end
+            local pos = pivot.Position
+            local dy = targetY - pos.Y
+            if math.abs(dy) <= 0.4 then break end
+            local stepY = math.sign(dy) * math.min(DRAG_SPEED * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
+            local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
+            setPivot(model, CFrame.new(newPos, newPos + (lookDir or Vector3.zAxis)))
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            task.wait(STEP_WAIT)
+        end
+        setCollide(model, true, snap)
+    end
+
+    local function moveHorizontalToXZ(model, destXZ, yFixed)
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        while model and model.Parent do
+            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
+            if not pivot then break end
+            local pos = pivot.Position
+            local delta = Vector3.new(destXZ.X - pos.X, 0, destXZ.Z - pos.Z)
+            local dist = delta.Magnitude
+            if dist <= 1.0 then break end
+            local step = math.min(DRAG_SPEED * STEP_WAIT, dist)
+            local dir = delta.Unit
+            local newPos = Vector3.new(pos.X, yFixed or pos.Y, pos.Z) + dir * step
+            setPivot(model, CFrame.new(newPos, newPos + dir))
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            task.wait(STEP_WAIT)
+        end
+        setCollide(model, true, snap)
+    end
+
+    local function dropVerticalInto(model, topPos, jobId)
+        if not model or not model.Parent then return end
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        setPivot(model, CFrame.new(topPos))
+        for _,p in ipairs(getAllParts(model)) do
+            p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
+            p.AssemblyAngularVelocity = Vector3.new()
+        end
+        setCollide(model, true, snap)
+        pcall(function()
+            model:SetAttribute(INFLT_ATTR, nil)
+            model:SetAttribute(JOB_ATTR, nil)
+            model:SetAttribute(DELIVER_ATTR, tostring(jobId))
+        end)
+    end
+
+    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
+
+    local function canPick(m, center, radius, nameSet, jobId)
+        if not (m and m.Parent and m:IsA("Model")) then return false end
+        local itemsFolder = itemsRootOrNil()
+        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
+        if isExcludedModel(m) or isUnderLogWall(m) then return false end
+        if m.Name == "Log" and isWallVariant(m) then return false end
+
+        local del = m:GetAttribute(DELIVER_ATTR)
+        if del and tostring(del) == tostring(jobId) then return false end
+
+        local tIn = m:GetAttribute(INFLT_ATTR)
+        local jIn = m:GetAttribute(JOB_ATTR)
+        if tIn then
+            if jIn and tostring(jIn) ~= tostring(jobId) then
+                if os.clock() - tIn >= STUCK_TTL then
+                    pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
+                else
+                    return false
+                end
+            elseif os.clock() - tIn < STUCK_TTL then
+                return false
+            else
+                pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
+            end
+        end
+
+        local nm = m.Name or ""
+        local l  = nm:lower()
+
+        if nameSet[nm] then
+        else
+            if nameSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
+            elseif nameSet["Cultist"] and hasHumanoid(m) and l:find("cultist",1,true) then
+            elseif nameSet["Sapling"] and nm == "Sapling" then
+            elseif nameSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then
+            elseif nameSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then
+            elseif nameSet["Wolf Pelt"] and nm == "Wolf Pelt" then
+            elseif nameSet["Bunny Foot"] and nm == "Bunny Foot" then
+            elseif nameSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then
+            elseif nameSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then
+            elseif nameSet["Spear"] and l:find("spear",1,true) then
+            elseif nameSet["Sword"] and l:find("sword",1,true) then
+            elseif nameSet["Crossbow"] and l:find("crossbow",1,true) then
+            elseif nameSet["Blueprint"] and l:find("blueprint",1,true) then
+            elseif nameSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then
+            elseif nameSet["Tusk"] and l:find("tusk",1,true) then
+            else
+                return false
+            end
+        end
+
+        local mp = mainPart(m); if not mp then return false end
+        return (mp.Position - center).Magnitude <= radius
+    end
+
+    local function getCandidates(center, radius, nameSet, jobId)
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+        local parts = WS:GetPartBoundsInRadius(center, radius, params) or {}
+        local uniq, out = {}, {}
+        for _,part in ipairs(parts) do
+            local m = part:FindFirstAncestorOfClass("Model")
+            if m and not uniq[m] and canPick(m, center, radius, nameSet, jobId) then
+                uniq[m] = true
+                out[#out+1] = m
+            end
+        end
+        return out
+    end
+
+    local function capPerName(models, perLimit)
+        if not perLimit or perLimit <= 0 then return models end
+        local cnt, out = {}, {}
+        for _,m in ipairs(models) do
+            local nm = m.Name or ""
+            cnt[nm] = (cnt[nm] or 0) + 1
+            if cnt[nm] <= perLimit then out[#out+1] = m end
+        end
+        return out
     end
 
     local function startConveyor(model, orbPos, jobId)
@@ -509,14 +658,14 @@ return function(C, R, UI)
             local pos = pivot.Position
             local dy = riserY - pos.Y
             if math.abs(dy) <= 0.4 then break end
-            local stepY = math.sign(dy) * math.min(DRAG_SPEED_V * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
+            local stepY = math.sign(dy) * math.min(RISE_SPEED * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
             local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
             setPivot(model, CFrame.new(newPos, newPos + (lookDir or Vector3.zAxis)))
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
             end
-            task.wait(STEP_WAIT)
+            task.wait(0.03)
         end
         setCollide(model, true, snap)
         local snap2 = setCollide(model, false)
@@ -528,7 +677,7 @@ return function(C, R, UI)
             local delta = Vector3.new(orbPos.X - pos.X, 0, orbPos.Z - pos.Z)
             local dist = delta.Magnitude
             if dist <= 1.0 then break end
-            local step = math.min(DRAG_SPEED_H * STEP_WAIT, dist)
+            local step = math.min(RUN_SPEED * 0.03, dist)
             local dir = delta.Unit
             local newPos = Vector3.new(pos.X, riserY, pos.Z) + dir * step
             setPivot(model, CFrame.new(newPos, newPos + dir))
@@ -536,20 +685,17 @@ return function(C, R, UI)
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
             end
-            task.wait(STEP_WAIT)
+            task.wait(0.03)
         end
         setCollide(model, true, snap2)
         if model and model.Parent then
             local snap3 = setCollide(model, false)
             zeroAssembly(model)
-            setPivot(model, CFrame.new(orbPos))
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
-                pcall(function() p:SetNetworkOwner(nil) end)
-                pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
             end
-            Run.Heartbeat:Wait()
+            setPivot(model, CFrame.new(orbPos))
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
                 p.AssemblyAngularVelocity = Vector3.new()
@@ -563,123 +709,36 @@ return function(C, R, UI)
         end
     end
 
-    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
-
-    local function nameMatches(selectedSet, m)
-        local nm = m and m.Name or ""
-        if selectedSet[nm] then return true end
-        local l = nm:lower()
-        if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
-        if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then return true end
-        if selectedSet["Sapling"] and nm == "Sapling" then return true end
-        if selectedSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then return true end
-        if selectedSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then return true end
-        if selectedSet["Wolf Pelt"] and nm == "Wolf Pelt" then return true end
-        if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
-        if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
-        if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
-        if selectedSet["Spear"] and l:find("spear",1,true) then return true end
-        if selectedSet["Sword"] and l:find("sword",1,true) then return true end
-        if selectedSet["Crossbow"] and l:find("crossbow",1,true) then return true end
-        if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
-        if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
-        if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
-        return false
-    end
-
-    local function canPick(m, center, radius, nameSet, jobId)
-        if not (m and m.Parent and m:IsA("Model")) then return false end
-        local itemsFolder = itemsRootOrNil()
-        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
-        if isExcludedModel(m) or isUnderLogWall(m) then return false end
-        if m.Name == "Log" and isWallVariant(m) then return false end
-        local mp = mainPart(m); if not mp then return false end
-        local d = (mp.Position - center).Magnitude
-        if d > radius then return false end
-        local rescue = d <= RESCUE_RADIUS
-        if not rescue then
-            local del = m:GetAttribute(DELIVER_ATTR)
-            if del and tostring(del) == tostring(jobId) then return false end
-            local tIn = m:GetAttribute(INFLT_ATTR)
-            local jIn = m:GetAttribute(JOB_ATTR)
-            if tIn then
-                if jIn and tostring(jIn) ~= tostring(jobId) then
-                    if os.clock() - tIn < STUCK_TTL then return false end
-                    pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
-                elseif os.clock() - tIn < STUCK_TTL then
-                    return false
-                else
-                    pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
-                end
-            end
-        else
-            pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
-        end
-        if nameSet[m.Name] then return true end
-        return nameMatches(nameSet, m)
-    end
-
-    local function getCandidates(center, radius, nameSet, jobId)
-        local uniq, out = {}, {}
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { lp.Character }
-        local parts = WS:GetPartBoundsInRadius(center, radius, params) or {}
-        for _,part in ipairs(parts) do
-            local m = part:FindFirstAncestorOfClass("Model")
-            if m and not uniq[m] and canPick(m, center, radius, nameSet, jobId) then
-                uniq[m] = true
-                out[#out+1] = m
+    local function runConveyorWave(centerPos, orbPos, targets, jobId)
+        local picked = getCandidates(centerPos, ORB_PICK_RADIUS, targets, jobId)
+        if #picked == 0 then return 0 end
+        picked = capPerName(picked, AMOUNT_TO_BRING)
+        local active = 0
+        local function spawnOne(m)
+            if m and m.Parent then
+                active += 1
+                task.spawn(function()
+                    startConveyor(m, orbPos, jobId)
+                    active -= 1
+                end)
             end
         end
-        local items = itemsRootOrNil()
-        if items then
-            for _,m in ipairs(items:GetChildren()) do
-                if not uniq[m] and canPick(m, center, radius, nameSet, jobId) then
-                    uniq[m] = true
-                    out[#out+1] = m
-                end
-            end
+        for i = 1, #picked do
+            while active >= CONVEYOR_MAX_ACTIVE do Run.Heartbeat:Wait() end
+            spawnOne(picked[i])
+            task.wait(START_STAGGER)
         end
-        return out
-    end
-
-    local function capPerName(models, perLimit)
-        if not perLimit or perLimit <= 0 then return models end
-        local cnt, out = {}, {}
-        for _,m in ipairs(models) do
-            local nm = m.Name or ""
-            cnt[nm] = (cnt[nm] or 0) + 1
-            if cnt[nm] <= perLimit then out[#out+1] = m end
+        local deadline = os.clock() + math.max(5, START_STAGGER * #picked + 5)
+        while active > 0 and os.clock() < deadline do
+            Run.Heartbeat:Wait()
         end
-        return out
+        return #picked
     end
 
     local function runConveyorJob(centerPos, orbPos, targets, jobId)
         while true do
-            local picked = getCandidates(centerPos, PICK_RADIUS, targets, jobId)
-            if #picked == 0 then break end
-            picked = capPerName(picked, AMOUNT_TO_BRING)
-            local active = 0
-            local function spawnOne(m)
-                if m and m.Parent then
-                    active += 1
-                    task.spawn(function()
-                        startConveyor(m, orbPos, jobId)
-                        active -= 1
-                    end)
-                end
-            end
-            for i = 1, #picked do
-                while active >= CONVEYOR_MAX_ACTIVE do Run.Heartbeat:Wait() end
-                spawnOne(picked[i])
-                task.wait(START_STAGGER)
-            end
-            local deadline = os.clock() + math.max(5, START_STAGGER * #picked + 5)
-            while active > 0 and os.clock() < deadline do
-                Run.Heartbeat:Wait()
-            end
-            task.wait(0.1)
+            local moved = runConveyorWave(centerPos, orbPos, targets, jobId)
+            if moved == 0 then break end
         end
     end
 
@@ -724,10 +783,28 @@ return function(C, R, UI)
 
     local function itemsRootOrNil2() return WS:FindFirstChild("Items") end
 
-    local function nameMatchesUI(selectedSet, m)
+    local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil2()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
-        return nameMatches(selectedSet, m)
+        local nm = m and m.Name or ""
+        if selectedSet[nm] then return true end
+        local l = nm:lower()
+        if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
+        if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then return true end
+        if selectedSet["Sapling"] and nm == "Sapling" then return true end
+        if selectedSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then return true end
+        if selectedSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then return true end
+        if selectedSet["Wolf Pelt"] and nm == "Wolf Pelt" then return true end
+        if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
+        if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
+        if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
+        if selectedSet["Spear"] and l:find("spear",1,true) then return true end
+        if selectedSet["Sword"] and l:find("sword",1,true) then return true end
+        if selectedSet["Crossbow"] and l:find("crossbow",1,true) then return true end
+        if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
+        if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
+        if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
+        return false
     end
 
     local function fastBringToGround(selectedSet)
@@ -735,6 +812,7 @@ return function(C, R, UI)
         dropCounter = 0
         local perNameCount, seenModel, queue = {}, {}, {}
         local itemsFolder = itemsRootOrNil2(); if not itemsFolder then return end
+
         for _,d in ipairs(itemsFolder:GetDescendants()) do
             local m
             if d:IsA("Model") then
@@ -747,7 +825,7 @@ return function(C, R, UI)
                 if not isExcludedModel(m) and not isUnderLogWall(m) then
                     local nm = m.Name
                     if not (nm == "Log" and isWallVariant(m)) then
-                        if nameMatchesUI(selectedSet, m) then
+                        if nameMatches(selectedSet, m) then
                             perNameCount[nm] = (perNameCount[nm] or 0) + 1
                             if perNameCount[nm] <= AMOUNT_TO_BRING then
                                 local mp = mainPart(m)
@@ -758,6 +836,7 @@ return function(C, R, UI)
                 end
             end
         end
+
         for i=1,#queue do
             dropNearPlayer(queue[i])
             if i % 25 == 0 then Run.Heartbeat:Wait() end
