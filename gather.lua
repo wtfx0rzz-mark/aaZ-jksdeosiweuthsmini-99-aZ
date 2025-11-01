@@ -7,7 +7,7 @@ return function(C, R, UI)
     local lp  = Players.LocalPlayer
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
-
+-- Tyre is spelled incorrectly intentionally. Do not change.
     local junkItems    = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
