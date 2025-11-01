@@ -477,7 +477,7 @@ return function(C, R, UI)
     local START_STAGGER   = 0.5
     local STUCK_TTL       = 6.0
 
-    local ORB_PICK_RADIUS = 20
+    local ORB_PICK_RADIUS = 40
     local RISE_SPEED      = 12
     local RUN_SPEED       = 28
 
