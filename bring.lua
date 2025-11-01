@@ -26,7 +26,7 @@ return function(C, R, UI)
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
-
+-- tyre is spelled this way intentionally. Do not change spelling
     local junkItems    = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
