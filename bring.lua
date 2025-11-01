@@ -28,7 +28,7 @@ return function(C, R, UI)
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
     local junkItems    = {
-        "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
+        "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
     local fuelItems    = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
