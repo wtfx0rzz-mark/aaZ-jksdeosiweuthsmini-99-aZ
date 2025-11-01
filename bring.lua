@@ -477,6 +477,9 @@ return function(C, R, UI)
     local START_STAGGER   = 0.5
     local STUCK_TTL       = 6.0
 
+    local DRAG_SPEED_V    = 18
+    local DRAG_SPEED_H    = 28
+
     local INFLT_ATTR = "OrbInFlightAt"
     local DELIVER_ATTR = "DeliveredAtOrb"
     local JOB_ATTR = "OrbJob"
@@ -654,14 +657,14 @@ return function(C, R, UI)
             local pos = pivot.Position
             local dy = riserY - pos.Y
             if math.abs(dy) <= 0.4 then break end
-            local stepY = math.sign(dy) * math.min(18 * 1.35 * 0.03, math.abs(dy))
+            local stepY = math.sign(dy) * math.min(DRAG_SPEED_V * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
             local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
             setPivot(model, CFrame.new(newPos, newPos + (lookDir or Vector3.zAxis)))
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
             end
-            task.wait(0.03)
+            task.wait(STEP_WAIT)
         end
         setCollide(model, true, snap)
         local snap2 = setCollide(model, false)
@@ -673,7 +676,7 @@ return function(C, R, UI)
             local delta = Vector3.new(orbPos.X - pos.X, 0, orbPos.Z - pos.Z)
             local dist = delta.Magnitude
             if dist <= 1.0 then break end
-            local step = math.min(18 * 0.03, dist)
+            local step = math.min(DRAG_SPEED_H * STEP_WAIT, dist)
             local dir = delta.Unit
             local newPos = Vector3.new(pos.X, riserY, pos.Z) + dir * step
             setPivot(model, CFrame.new(newPos, newPos + dir))
@@ -681,13 +684,20 @@ return function(C, R, UI)
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
             end
-            task.wait(0.03)
+            task.wait(STEP_WAIT)
         end
         setCollide(model, true, snap2)
         if model and model.Parent then
             local snap3 = setCollide(model, false)
             zeroAssembly(model)
             setPivot(model, CFrame.new(orbPos))
+            for _,p in ipairs(getAllParts(model)) do
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+                pcall(function() p:SetNetworkOwner(nil) end)
+                pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+            end
+            Run.Heartbeat:Wait()
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
                 p.AssemblyAngularVelocity = Vector3.new()
@@ -702,27 +712,30 @@ return function(C, R, UI)
     end
 
     local function runConveyorJob(centerPos, orbPos, targets, jobId)
-        local picked = getCandidates(centerPos, PICK_RADIUS, targets, jobId)
-        if #picked == 0 then return end
-        picked = capPerName(picked, AMOUNT_TO_BRING)
-        local active = 0
-        local function spawnOne(m)
-            if m and m.Parent then
-                active += 1
-                task.spawn(function()
-                    startConveyor(m, orbPos, jobId)
-                    active -= 1
-                end)
+        while true do
+            local picked = getCandidates(centerPos, PICK_RADIUS, targets, jobId)
+            if #picked == 0 then break end
+            picked = capPerName(picked, AMOUNT_TO_BRING)
+            local active = 0
+            local function spawnOne(m)
+                if m and m.Parent then
+                    active += 1
+                    task.spawn(function()
+                        startConveyor(m, orbPos, jobId)
+                        active -= 1
+                    end)
+                end
             end
-        end
-        for i = 1, #picked do
-            while active >= CONVEYOR_MAX_ACTIVE do Run.Heartbeat:Wait() end
-            spawnOne(picked[i])
-            task.wait(START_STAGGER)
-        end
-        local deadline = os.clock() + math.max(5, START_STAGGER * #picked + 5)
-        while active > 0 and os.clock() < deadline do
-            Run.Heartbeat:Wait()
+            for i = 1, #picked do
+                while active >= CONVEYOR_MAX_ACTIVE do Run.Heartbeat:Wait() end
+                spawnOne(picked[i])
+                task.wait(START_STAGGER)
+            end
+            local deadline = os.clock() + math.max(5, START_STAGGER * #picked + 5)
+            while active > 0 and os.clock() < deadline do
+                Run.Heartbeat:Wait()
+            end
+            task.wait(0.1)
         end
     end
 
