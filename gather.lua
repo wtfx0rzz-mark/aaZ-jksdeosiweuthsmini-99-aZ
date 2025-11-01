@@ -9,7 +9,7 @@ return function(C, R, UI)
     assert(tab, "Gather tab not found")
 
     local junkItems    = {
-        "Tire","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
+        "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
     local fuelItems    = { "Log","Chair","Coal","Fuel Canister","Oil Barrel","Biofuel" }
@@ -178,7 +178,7 @@ return function(C, R, UI)
             return true
         end
 
-        if Selected.Junk["Tire"] and (nl:find("tire",1,true) or nl:find("tyre",1,true)) then
+        if Selected.Junk["Tyre"] and (nl:find("Tyre",1,true) or nl:find("tyre",1,true)) then
             return true
         end
 
