@@ -26,7 +26,6 @@ return function(C, R, UI)
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
-    -- tyre is spelled this way intentionally. Do not change spelling
     local junkItems    = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -405,6 +404,7 @@ return function(C, R, UI)
         local p = mainPart(scr) or scr.PrimaryPart
         return (p and p.CFrame) or scr:GetPivot()
     end
+    private = nil
     local function scrapFlow(model, scrapper)
         local r = resolveRemotes()
         startDragRemote(r, model)
@@ -508,8 +508,8 @@ return function(C, R, UI)
         end
     end
 
-    local function moveVerticalToY(model, targetY, lookDir)
-        local snap = setCollide(model, false)
+    local function moveVerticalToY(model, targetY, lookDir, keepNoCollide)
+        local snap = keepNoCollide and nil or setCollide(model, false)
         zeroAssembly(model)
         while model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
@@ -526,11 +526,11 @@ return function(C, R, UI)
             end
             task.wait(STEP_WAIT)
         end
-        setCollide(model, true, snap)
+        if not keepNoCollide then setCollide(model, true, snap) end
     end
 
-    local function moveHorizontalToXZ(model, destXZ, yFixed)
-        local snap = setCollide(model, false)
+    local function moveHorizontalToXZ(model, destXZ, yFixed, keepNoCollide)
+        local snap = keepNoCollide and nil or setCollide(model, false)
         zeroAssembly(model)
         while model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
@@ -549,19 +549,21 @@ return function(C, R, UI)
             end
             task.wait(STEP_WAIT)
         end
-        setCollide(model, true, snap)
+        if not keepNoCollide then setCollide(model, true, snap) end
     end
 
-    local function dropVerticalInto(model, topPos, jobId)
-        if not model or not model.Parent then return end
-        local snap = setCollide(model, false)
+    local function dropFromOrbSmooth(model, orbPos, jobId, origSnap, H)
         zeroAssembly(model)
-        setPivot(model, CFrame.new(topPos))
+        local above = orbPos + Vector3.new(0, math.max(0.5, H * 0.25), 0)
+        setPivot(model, CFrame.new(above))
         for _,p in ipairs(getAllParts(model)) do
-            p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
+            p.Anchored = false
+            p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
+            pcall(function() p:SetNetworkOwner(nil) end)
+            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
-        setCollide(model, true, snap)
+        setCollide(model, true, origSnap)
         pcall(function()
             model:SetAttribute(INFLT_ATTR, nil)
             model:SetAttribute(JOB_ATTR, nil)
@@ -666,69 +668,13 @@ return function(C, R, UI)
         local lookDir = (Vector3.new(orbPos.X, mp.Position.Y, orbPos.Z) - mp.Position)
         lookDir = (lookDir.Magnitude > 0.001) and lookDir.Unit or Vector3.zAxis
 
-        local snap = setCollide(model, false)
+        local snapOrig = setCollide(model, false)
         zeroAssembly(model)
-        while model and model.Parent do
-            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
-            if not pivot then break end
-            local pos = pivot.Position
-            local dy = riserY - pos.Y
-            if math.abs(dy) <= 0.4 then break end
-            local stepY = math.sign(dy) * math.min(RISE_SPEED * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
-            local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
-            setPivot(model, CFrame.new(newPos, newPos + (lookDir or Vector3.zAxis)))
-            for _,p in ipairs(getAllParts(model)) do
-                p.AssemblyLinearVelocity  = Vector3.new()
-                p.AssemblyAngularVelocity = Vector3.new()
-            end
-            task.wait(0.03)
-        end
-        setCollide(model, true, snap)
 
-        local snap2 = setCollide(model, false)
-        zeroAssembly(model)
-        while model and model.Parent do
-            local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
-            if not pivot then break end
-            local pos = pivot.Position
-            local delta = Vector3.new(orbPos.X - pos.X, 0, orbPos.Z - pos.Z)
-            local dist = delta.Magnitude
-            if dist <= 1.0 then break end
-            local step = math.min(RUN_SPEED * 0.03, dist)
-            local dir = delta.Unit
-            local newPos = Vector3.new(pos.X, riserY, pos.Z) + dir * step
-            setPivot(model, CFrame.new(newPos, newPos + dir))
-            for _,p in ipairs(getAllParts(model)) do
-                p.AssemblyLinearVelocity  = Vector3.new()
-                p.AssemblyAngularVelocity = Vector3.new()
-            end
-            task.wait(0.03)
-        end
-        setCollide(model, true, snap2)
+        moveVerticalToY(model, riserY, lookDir, true)
+        moveHorizontalToXZ(model, Vector3.new(orbPos.X, 0, orbPos.Z), riserY, true)
 
-        if model and model.Parent then
-            local snap3 = setCollide(model, false)
-            zeroAssembly(model)
-            local above = orbPos + Vector3.new(0, math.max(0.5, H * 0.25), 0)
-            setPivot(model, CFrame.new(above))
-            local pm = mainPart(model)
-            if pm then
-                pcall(function() pm.Anchored = false end)
-                pcall(function() pm:SetNetworkOwner(nil) end)
-                pcall(function() if pm.SetNetworkOwnershipAuto then pm:SetNetworkOwnershipAuto() end end)
-            end
-            for _,p in ipairs(getAllParts(model)) do
-                p.AssemblyLinearVelocity  = Vector3.new(0, -50, 0)
-                p.AssemblyAngularVelocity = Vector3.new()
-            end
-            local offSec = isBig(model) and 0.55 or COLLIDE_OFF_SEC
-            task.delay(offSec, function() setCollide(model, true, snap3) end)
-            pcall(function()
-                model:SetAttribute(INFLT_ATTR, nil)
-                model:SetAttribute(JOB_ATTR, nil)
-                model:SetAttribute(DELIVER_ATTR, tostring(jobId))
-            end)
-        end
+        dropFromOrbSmooth(model, orbPos, jobId, snapOrig, H)
     end
 
     local function runConveyorWave(centerPos, orbPos, targets, jobId)
@@ -777,6 +723,7 @@ return function(C, R, UI)
         if orb2 then orb2:Destroy() end
     end
 
+    private = nil
     local function scrapNearby()
         local scr = SCRAPPER_PATH; if not scr then return end
         local root = hrp(); if not root then return end
