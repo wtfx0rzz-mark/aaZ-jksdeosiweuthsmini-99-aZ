@@ -783,8 +783,8 @@ return function(C, R, UI)
         local COIN_RADIUS      = 10
         local COIN_INTERVAL    = 0.12
         local COIN_TTL         = 1.0
-        local COIN_FORWARD     = 2.0   -- start rays a bit in front of the head
-        local COIN_HEAD_UP     = 0.5   -- raise origin slightly
+        local COIN_FORWARD     = 2.0
+        local COIN_HEAD_UP     = 0.5
 
         local coinSeen = {}
         local coinConn, coinAcc = nil, 0
@@ -925,7 +925,6 @@ return function(C, R, UI)
             coinSeen = {}
         end
 
-        -- place the toggle directly under "Hide Big Trees (Local)"
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
         ----------------------------------------------------------------
@@ -1037,7 +1036,7 @@ return function(C, R, UI)
             end
         end
 
-        -- Find Unopened Chests toggle + implementation (with Snow Chest exclusion + camera placement)
+        -- Find Unopened Chests (Snow Chest excluded) + camera-in-front placement
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
         tab:Toggle({
@@ -1165,7 +1164,7 @@ return function(C, R, UI)
                 local mp = mainPart(m); if not (camNow and mp) then return end
                 local chestPos = mp.Position
                 local forward  = mp.CFrame.LookVector
-                local camPos   = chestPos - forward * 8 + Vector3.new(0, 3, 0) -- 8 studs out, slightly above
+                local camPos   = chestPos - forward * 8 + Vector3.new(0, 3, 0)
                 local prevType = camNow.CameraType
                 pcall(function()
                     camNow.CameraType = Enum.CameraType.Scriptable
@@ -1179,11 +1178,16 @@ return function(C, R, UI)
                 end)
             end
 
+            -- NEW: teleport in front of chest (not on top), facing the chest
+            local FRONT_DIST = 4.0
             local function teleportNearChest(m)
-                local pos = chestPos(m)
-                if not pos then return end
-                local lookAt = pos + Vector3.new(0,0,1)
-                teleportWithDive(CFrame.new(pos + Vector3.new(0,3,0), lookAt))
+                local mp = mainPart(m); if not mp then return end
+                local pos = mp.Position
+                local forward = mp.CFrame.LookVector
+                local desired = pos - forward * FRONT_DIST
+                local ground = groundBelow(desired)
+                local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
+                teleportWithDive(CFrame.new(standPos, pos))
                 focusCameraOnChest(m)
             end
 
