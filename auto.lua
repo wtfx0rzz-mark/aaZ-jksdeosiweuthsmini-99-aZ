@@ -421,6 +421,7 @@ return function(C, R, UI)
             if v then lostEligible[m] = true else if was and savedCount < MAX_TO_SAVE then savedCount += 1 end; lostEligible[m] = nil end
             refreshLostBtn()
         end
+        private_trackLostModel = nil
         local function trackLostModel(m)
             if not isLostChildModel(m) then return end
             onLostAttrChange(m)
@@ -775,7 +776,7 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
         ----------------------------------------------------------------
-        -- Auto Collect Coins (radius 10, head-forward origin, wider pitches)
+        -- Auto Collect Coins (radius 10)
         ----------------------------------------------------------------
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
@@ -925,6 +926,7 @@ return function(C, R, UI)
             coinSeen = {}
         end
 
+        -- place the toggle directly under "Hide Big Trees (Local)"
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
         ----------------------------------------------------------------
@@ -1036,7 +1038,9 @@ return function(C, R, UI)
             end
         end
 
+        ----------------------------------------------------------------
         -- Find Unopened Chests (Snow Chest excluded) + camera-in-front placement
+        ----------------------------------------------------------------
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
         tab:Toggle({
@@ -1158,37 +1162,67 @@ return function(C, R, UI)
                 return list
             end
 
-            -- Camera helper: put camera in front of chest and face it
-            local function focusCameraOnChest(m)
+            -- Camera helper: briefly focus on chest, then restore safely
+            local function focusCameraOnChest(chestModel, standPos)
                 local camNow = WS.CurrentCamera
-                local mp = mainPart(m); if not (camNow and mp) then return end
-                local chestPos = mp.Position
-                local forward  = mp.CFrame.LookVector
-                local camPos   = chestPos - forward * 8 + Vector3.new(0, 3, 0)
+                local mp = mainPart(chestModel); if not (camNow and mp) then return end
+                local chestCenter = mp.Position
+                local camPos = (standPos or chestCenter) + Vector3.new(0, 3, 0)
+
                 local prevType = camNow.CameraType
+                local prevSubject = camNow.CameraSubject
+                local subj = getHumanoid() or hrp()
+
+                local restored = false
+                local function restore()
+                    if restored then return end
+                    restored = true
+                    local c = WS.CurrentCamera
+                    if not c then return end
+                    pcall(function()
+                        c.CameraType = prevType or Enum.CameraType.Custom
+                        if subj and subj.Parent then c.CameraSubject = subj end
+                    end)
+                end
+
                 pcall(function()
                     camNow.CameraType = Enum.CameraType.Scriptable
-                    camNow.CFrame = CFrame.new(camPos, chestPos)
+                    camNow.CFrame = CFrame.new(camPos, chestCenter)
                 end)
-                task.delay(0.25, function()
-                    local camCheck = WS.CurrentCamera
-                    if camCheck then
-                        pcall(function() camCheck.CameraType = prevType end)
-                    end
+
+                -- restore quickly, and add a longer failsafe + any key/mouse
+                task.delay(0.20, restore)
+                task.delay(1.50, restore)
+                local conn
+                conn = UIS.InputBegan:Connect(function()
+                    if conn then conn:Disconnect() conn=nil end
+                    restore()
                 end)
             end
 
-            -- NEW: teleport in front of chest (not on top), facing the chest
+            -- Teleport to the side OPPOSITE of where we currently are, face the chest
             local FRONT_DIST = 4.0
             local function teleportNearChest(m)
                 local mp = mainPart(m); if not mp then return end
-                local pos = mp.Position
-                local forward = mp.CFrame.LookVector
-                local desired = pos - forward * FRONT_DIST
+                local chestCenter = mp.Position
+                local root = hrp(); if not root then return end
+                local from = root.Position
+                local vec = from - chestCenter
+                local dir
+                if vec.Magnitude > 0.001 then
+                    -- Opposite side of the player relative to chest
+                    dir = (-vec).Unit
+                else
+                    -- Fallback: use negative of chest LookVector (opposite of its "front")
+                    dir = (-mp.CFrame.LookVector).Unit
+                end
+
+                local desired = chestCenter + dir * FRONT_DIST
                 local ground = groundBelow(desired)
                 local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
-                teleportWithDive(CFrame.new(standPos, pos))
-                focusCameraOnChest(m)
+
+                teleportWithDive(CFrame.new(standPos, chestCenter))
+                focusCameraOnChest(m, standPos)
             end
 
             local cfHB, childAdd, childRem
@@ -1242,9 +1276,9 @@ return function(C, R, UI)
 
             disableChestFinder = function()
                 chestFinderOn = false
-                if cfHB then cfHB:Disconnect(); cfHB = nil end
-                if childAdd then childAdd:Disconnect(); childAdd = nil end
-                if childRem then childRem:Disconnect(); childRem = nil end
+                if cfHB then cfHB:Disconnect() cfHB = nil end
+                if childAdd then childAdd:Disconnect() childAdd = nil end
+                if childRem then childRem:Disconnect() childRem = nil end
                 nextChestBtn.Visible = false
             end
         end
