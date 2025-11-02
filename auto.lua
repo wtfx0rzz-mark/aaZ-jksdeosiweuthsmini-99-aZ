@@ -524,19 +524,6 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Godmode", Value = true, Callback = function(state) if state then enableGod() else disableGod() end end })
         task.defer(enableGod)
 
-        local infJumpOn, infConn = true, nil
-        local function enableInfJump()
-            infJumpOn = true
-            if infConn then infConn:Disconnect() end
-            infConn = UIS.JumpRequest:Connect(function()
-                local h = getHumanoid()
-                if h then pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end) end
-            end)
-        end
-        local function disableInfJump() infJumpOn = false; if infConn then infConn:Disconnect(); infConn = nil end end
-        tab:Toggle({ Title = "Infinite Jump", Value = true, Callback = function(state) if state then enableInfJump() else disableInfJump() end end })
-        enableInfJump()
-
         local INSTANT_HOLD, TRIGGER_COOLDOWN = 0.2, 0.4
         local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
         local EXCLUDE_ANCESTOR_SUBSTR = { "closetdoors", "closet", "door", "landmarks" }
@@ -854,7 +841,6 @@ return function(C, R, UI)
         Players.LocalPlayer.CharacterAdded:Connect(function()
             if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
             if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
-            if infJumpOn and not infConn then enableInfJump() end
             if autoStunOn and not autoStunThread then enableAutoStun() end
             if noShadowsOn and not lightConn then enableNoShadows() end
             enableNoStreamingPause()
