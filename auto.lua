@@ -42,8 +42,8 @@ return function(C, R, UI)
         local STICK_CLEAR_VEL   = true
         local TELEPORT_UP_NUDGE = 0.05
         local SAFE_DROP_UP      = 4.0
-        local STREAM_TIMEOUT    = 6.0
 
+        local STREAM_TIMEOUT    = 6.0
         local function requestStreamAt(pos, timeout)
             local p = typeof(pos) == "CFrame" and pos.Position or pos
             local ok, res = pcall(function() return WS:RequestStreamAroundAsync(p, timeout or STREAM_TIMEOUT) end)
@@ -108,23 +108,28 @@ return function(C, R, UI)
             local root = hrp(); if not root then return end
             local ch   = lp.Character
             local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
+
             prefetchRing(targetCF)
             requestStreamAt(targetCF)
             waitGameplayResumed(1.0)
+
             local hadNoclip = isNoclipNow()
             local snap
             if not hadNoclip then
                 snap = snapshotCollide()
                 setCollideAll(false)
             end
+
             if ch then pcall(function() ch:PivotTo(targetCF) end) end
             pcall(function() root.CFrame = targetCF end)
             if STICK_CLEAR_VEL then zeroAssembly(root) end
+
             if dropMode then
                 if not hadNoclip then setCollideAll(true, snap) end
                 waitGameplayResumed(1.0)
                 return
             end
+
             local t0 = os.clock()
             while (os.clock() - t0) < STICK_DURATION do
                 if ch then pcall(function() ch:PivotTo(targetCF) end) end
@@ -138,7 +143,10 @@ return function(C, R, UI)
                 if STICK_CLEAR_VEL then zeroAssembly(root) end
                 Run.Heartbeat:Wait()
             end
-            if not hadNoclip then setCollideAll(true, snap) end
+
+            if not hadNoclip then
+                setCollideAll(true, snap)
+            end
             if STICK_CLEAR_VEL then zeroAssembly(root) end
             waitGameplayResumed(1.0)
         end
@@ -183,6 +191,7 @@ return function(C, R, UI)
             prefetchRing(upCF)
             requestStreamAt(upCF)
             waitGameplayResumed(1.0)
+
             local root = hrp(); if not root then return end
             local snap = snapshotCollide()
             setCollideAll(false)
@@ -227,9 +236,11 @@ return function(C, R, UI)
             local items = WS:FindFirstChild("Items");      if items then table.insert(ex, items) end
             local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
             params.FilterDescendantsInstances = ex
+
             local start = pos + Vector3.new(0, 5, 0)
             local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
             if hit then return hit.Position end
+
             hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
             return (hit and hit.Position) or pos
         end
@@ -309,6 +320,11 @@ return function(C, R, UI)
         local plantBtn = makeEdgeBtn("PlantEdge",   "Plant",    3)
         local lostBtn  = makeEdgeBtn("LostEdge",    "Lost Child", 4)
         local campBtn  = makeEdgeBtn("CampEdge",    "Campfire", 5)
+        local placeBtn = stack:FindFirstChild("PlaceEdge")
+        if not placeBtn then
+            placeBtn = makeEdgeBtn("PlaceEdge", "Place", 1000)
+        end
+        local chestBtn = makeEdgeBtn("ChestEdge", "Chest", 6)
 
         campBtn.Visible = true
 
@@ -525,7 +541,7 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Infinite Jump", Value = true, Callback = function(state) if state then enableInfJump() else disableInfJump() end end })
         enableInfJump()
 
-        local INSTANT_HOLD, TRIGGER_COOLDOWN = 0.0, 0.25
+        local INSTANT_HOLD, TRIGGER_COOLDOWN = 0.2, 0.4
         local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
         local EXCLUDE_ANCESTOR_SUBSTR = { "closetdoors", "closet", "door", "landmarks" }
         local function strfindAny(s, list)
@@ -585,6 +601,7 @@ return function(C, R, UI)
         local STUN_RADIUS     = 24
         local HIT_BURST       = 2
         local OFF_PULSE_EVERY = 1.5
+        local OFF_PULSE_LEN   = 1/90
 
         local autoStunOn, autoStunThread = false, nil
         local lastFlashState, lastFlashName = nil, nil
@@ -868,6 +885,7 @@ return function(C, R, UI)
                 coinAcc += dt
                 if coinAcc < COIN_INTERVAL then return end
                 coinAcc = 0
+
                 local root = hrp(); if not root then return end
                 local ch = lp.Character
                 local head = ch and ch:FindFirstChild("Head")
@@ -876,20 +894,21 @@ return function(C, R, UI)
                     origin = head.Position + root.CFrame.LookVector * COIN_FORWARD + Vector3.new(0, COIN_HEAD_UP, 0)
                 end
                 coinParams.FilterDescendantsInstances = { lp.Character }
+
                 local now = os.clock()
                 for i=1,#coinDirs do
                     local res = WS:Raycast(origin, coinDirs[i] * COIN_RADIUS, coinParams)
                     if res and res.Instance then
-                        local stackM = findCoinStack(res.Instance)
-                        if stackM and stackM.Parent then
-                            local pos = (stackM.PrimaryPart and stackM.PrimaryPart.Position) or stackM:GetPivot().Position
+                        local stack = findCoinStack(res.Instance)
+                        if stack and stack.Parent then
+                            local pos = (stack.PrimaryPart and stack.PrimaryPart.Position) or stack:GetPivot().Position
                             if (pos - origin).Magnitude <= COIN_RADIUS then
-                                local t = coinSeen[stackM]
+                                local t = coinSeen[stack]
                                 if not t or now - t > COIN_TTL then
-                                    local done = triggerPromptOn(stackM)
-                                    if not done then done = clickDetectorOn(stackM) end
-                                    if not done then tryRemote(stackM) end
-                                    coinSeen[stackM] = now
+                                    local done = triggerPromptOn(stack)
+                                    if not done then done = clickDetectorOn(stack) end
+                                    if not done then tryRemote(stack) end
+                                    coinSeen[stack] = now
                                 end
                             end
                         end
@@ -909,20 +928,7 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
 
-        local noPauseOn, prevPauseMode
-        local function enableNoStreamingPause()
-            if noPauseOn then return end
-            noPauseOn = true
-            pcall(function()
-                prevPauseMode = WS.StreamingPauseMode
-                WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled
-            end)
-        end
-        enableNoStreamingPause()
-
-        local function itemsFolder()
-            return WS:FindFirstChild("Items")
-        end
+        local function itemsFolder() return WS:FindFirstChild("Items") end
 
         local function groundAtFeetCF()
             local root = hrp(); if not root then return nil end
@@ -932,115 +938,10 @@ return function(C, R, UI)
             return CFrame.new(pos, pos + look)
         end
 
-        local function dropModelAtFeet(m)
-            local startDrag = getRemote("RequestStartDraggingItem")
-            local stopDrag  = getRemote("RequestStopDraggingItem") or getRemote("StopDraggingItem")
-            if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
-            Run.Heartbeat:Wait()
-            local cf = groundAtFeetCF()
-            if cf then
-                pcall(function()
-                    if m:IsA("Model") then m:PivotTo(cf) else local p = mainPart(m); if p then p.CFrame = cf end end
-                end)
-            end
-            task.wait(0.05)
-            if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
+        local function pivotModel(m, cf)
+            if m:IsA("Model") then m:PivotTo(cf) else local p = mainPart(m); if p then p.CFrame = cf end end
         end
 
-        local function ensureEdgeBtn(name, label, order)
-            return makeEdgeBtn(name, label, order)
-        end
-
-        local function isChestModel(m)
-            if not (m and m:IsA("Model")) then return false end
-            local n = m.Name or ""
-            if n:lower():find("snow", 1, true) then return false
-            end
-            if n:match("^.+Chest$") or n:match("^.+Chest%d+$") then return true end
-            return false
-        end
-
-        local function chestOpenedBySomeone(m)
-            if not (m and m:IsA("Model")) then return true end
-            local opened = m:GetAttribute("opened")
-            local pid    = m:GetAttribute("playerId") or m:GetAttribute("player") or m:GetAttribute("owner")
-            if opened == true then return true end
-            if typeof(pid) == "string" or typeof(pid) == "number" then return true end
-            return false
-        end
-
-        local chestScanOn = false
-        local chestList = {}
-        local chestConnA, chestConnB = nil, nil
-        local function recordChest(m)
-            if not isChestModel(m) then return end
-            if chestOpenedBySomeone(m) then return end
-            chestList[m] = true
-            m:GetAttributeChangedSignal("opened"):Connect(function()
-                if m:GetAttribute("opened") == true then chestList[m] = nil end
-            end)
-            m.AncestryChanged:Connect(function(_, p) if not p then chestList[m] = nil end end)
-        end
-        local function startChestScan()
-            if chestScanOn then return end
-            chestScanOn = true
-            local items = itemsFolder()
-            if items then
-                for _,c in ipairs(items:GetChildren()) do recordChest(c) end
-                chestConnA = items.ChildAdded:Connect(recordChest)
-            end
-            chestConnB = WS.DescendantAdded:Connect(function(d)
-                if d:IsA("Model") and d.Parent == itemsFolder() then recordChest(d) end
-            end)
-        end
-        local function stopChestScan()
-            chestScanOn = false
-            if chestConnA then chestConnA:Disconnect() chestConnA = nil end
-            if chestConnB then chestConnB:Disconnect() chestConnB = nil end
-            table.clear(chestList)
-        end
-
-        local function nearestChestCF()
-            local root = hrp(); if not root then return nil end
-            local best, bestD = nil, math.huge
-            for m,_ in pairs(chestList) do
-                if m and m.Parent and not chestOpenedBySomeone(m) then
-                    local mp = mainPart(m)
-                    if mp then
-                        local d = (mp.Position - root.Position).Magnitude
-                        if d < bestD then bestD, best = d, m end
-                    end
-                end
-            end
-            if not best then return nil end
-            local mp = mainPart(best)
-            if not mp then return nil end
-            local look = mp.CFrame.LookVector
-            local behind = mp.Position - look * 3 + Vector3.new(0, 2.5, 0)
-            local g = groundBelow(behind)
-            local pos = Vector3.new(behind.X, g.Y + 2.0, behind.Z)
-            return CFrame.new(pos, mp.Position)
-        end
-
-        local CHEST_RADIUS = 3.5
-        local CHEST_WINDOW = 10.0
-        local gatherHB, hoverRB = nil, nil
-        local chestLooting = false
-        local chestTimerT0 = 0
-        local chestCollectedList = {}
-        local function mpOf(x)
-            if not x then return nil end
-            if x:IsA("BasePart") then return x end
-            if x:IsA("Model") then return mainPart(x) end
-            return nil
-        end
-        local function isLootCandidate(m)
-            if not (m and m.Parent) then return false end
-            if not m:IsA("Model") then return false end
-            if m.Parent ~= itemsFolder() and (not m:IsDescendantOf(itemsFolder() or m)) then return false end
-            if isChestModel(m) then return false end
-            return mpOf(m) ~= nil
-        end
         local function setNoCollideModel(m, on)
             for _,d in ipairs(m:GetDescendants()) do
                 if d:IsA("BasePart") then
@@ -1059,27 +960,8 @@ return function(C, R, UI)
             end
         end
 
-        local function pivotModel(m, cf)
-            if m:IsA("Model") then m:PivotTo(cf) else local p=mpOf(m); if p then p.CFrame=cf end end
-        end
-        local function hoverAboveHeadCF()
+        local function groundAheadCF()
             local root = hrp(); if not root then return nil end
-            local forward = root.CFrame.LookVector
-            local above   = root.Position + Vector3.new(0, 5, 0)
-            return CFrame.lookAt(above, above + forward)
-        end
-
-        local chestPlaceBtn = ensureEdgeBtn("ChestPlaceEdge", "Place", 1001)
-        chestPlaceBtn.MouseButton1Click:Connect(function()
-            chestPlaceBtn.Visible = false
-            local list = {}
-            for i = #chestCollectedList, 1, -1 do
-                if chestCollectedList[i] and chestCollectedList[i].Parent then
-                    table.insert(list, chestCollectedList[i])
-                end
-            end
-            if #list == 0 then return end
-            local root = hrp(); if not root then return end
             local forward = root.CFrame.LookVector
             local ahead   = root.Position + forward * 10 + Vector3.new(0, 40, 0)
             local params  = RaycastParams.new()
@@ -1087,136 +969,262 @@ return function(C, R, UI)
             params.FilterDescendantsInstances = {lp.Character}
             local rc = WS:Raycast(ahead, Vector3.new(0, -200, 0), params)
             local hitPos = rc and rc.Position or (root.Position + forward * 10)
-            local dropCF = CFrame.lookAt(hitPos + Vector3.new(0, 3, 0), hitPos + forward)
-            local LAYER_SIZE, LAYER_HEIGHT, PILE_RADIUS = 14, 0.35, 1.25
-            local function pileCF(i)
-                local idx0   = i - 1
-                local layer  = math.floor(idx0 / LAYER_SIZE)
-                local inLayer= idx0 % LAYER_SIZE
-                local angle  = (inLayer / LAYER_SIZE) * math.pi * 2
-                local r      = (0.25 + (inLayer % 7) * 0.07) * PILE_RADIUS
-                local x      = math.cos(angle) * r
-                local z      = math.sin(angle) * r
-                local y      = layer * LAYER_HEIGHT
-                return dropCF * CFrame.new(x, y, z)
-            end
-            for i = 1, #list do
-                local m = list[i]
-                if m and m.Parent then
-                    setAnchoredModel(m, true)
-                    setNoCollideModel(m, true)
-                    pivotModel(m, pileCF(i))
-                end
-            end
-            task.wait(0.03)
-            for _,m in ipairs(list) do
+            local drop   = hitPos + Vector3.new(0, 5, 0)
+            return CFrame.lookAt(drop, drop + forward)
+        end
+
+        local function pileCF(i, baseCF)
+            local idx0   = i - 1
+            local layer  = math.floor(idx0 / 14)
+            local inLayer= idx0 % 14
+            local angle  = (inLayer / 14) * math.pi * 2
+            local r      = (0.25 + (inLayer % 7) * 0.07) * 1.25
+            local x      = math.cos(angle) * r + (math.random() - 0.5) * 0.12
+            local z      = math.sin(angle) * r + (math.random() - 0.5) * 0.12
+            local y      = layer * 0.35
+            return baseCF * CFrame.new(x, y, z)
+        end
+
+        local function finalizePileDrop(items)
+            for _,m in ipairs(items) do
                 if m and m.Parent then
                     setNoCollideModel(m, false)
-                    setAnchoredModel(m, false)
+                    local mp = mainPart(m)
+                    if mp then
+                        pcall(function() mp:SetNetworkOwner(nil) end)
+                        pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+                        pcall(function() mp.CollisionGroupId = 0 end)
+                    end
                     for _,p in ipairs(m:GetDescendants()) do
                         if p:IsA("BasePart") then
-                            p.AssemblyLinearVelocity  = Vector3.new(0,-3.5,0)
+                            p.AssemblyLinearVelocity  = Vector3.new()
                             p.AssemblyAngularVelocity = Vector3.new()
+                            p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
+                            p.Massless   = false
                         end
                     end
                 end
             end
-            table.clear(chestCollectedList)
-        end)
-
-        local function startChestLootWindow()
-            if gatherHB then gatherHB:Disconnect() gatherHB = nil end
-            if hoverRB then hoverRB:Disconnect() hoverRB = nil end
-            table.clear(chestCollectedList)
-            chestLooting = true
-            chestTimerT0 = os.clock()
-            local seen = {}
-            gatherHB = Run.Heartbeat:Connect(function()
-                if not chestLooting then return end
-                if os.clock() - chestTimerT0 >= CHEST_WINDOW then
-                    chestLooting = false
-                    if #chestCollectedList > 0 then chestPlaceBtn.Visible = true end
-                    if gatherHB then gatherHB:Disconnect() gatherHB = nil end
-                    return
+            local n = #items
+            local i = 1
+            while i <= n do
+                for j = i, math.min(i + 6 - 1, n) do
+                    local m = items[j]
+                    if m and m.Parent then
+                        setAnchoredModel(m, false)
+                        for _,p in ipairs(m:GetDescendants()) do
+                            if p:IsA("BasePart") then
+                                p.AssemblyLinearVelocity  = Vector3.new(0, -4, 0)
+                                p.AssemblyAngularVelocity = Vector3.new()
+                            end
+                        end
+                    end
                 end
+                task.wait(0.03)
+                i = i + 6
+            end
+        end
+
+        _G._ChestLootStash = _G._ChestLootStash or { set = {}, list = {} }
+        local function addToStash(m)
+            if not _G._ChestLootStash.set[m] then
+                _G._ChestLootStash.set[m] = true
+                table.insert(_G._ChestLootStash.list, m)
+            end
+        end
+        local function clearStash()
+            for m,_ in pairs(_G._ChestLootStash.set) do _G._ChestLootStash.set[m] = nil end
+            table.clear(_G._ChestLootStash.list)
+        end
+
+        local gatherActive  = false
+        local gatherEndsAt  = 0
+        local hoverConn
+        local function ensureHoverLoop()
+            if hoverConn then return end
+            hoverConn = Run.RenderStepped:Connect(function()
+                if not gatherActive then return end
+                local root = hrp(); if not root then return end
+                local above = root.Position + Vector3.new(0, 5, 0)
+                local cf = CFrame.lookAt(above, above + root.CFrame.LookVector)
+                for i = #_G._ChestLootStash.list, 1, -1 do
+                    local m = _G._ChestLootStash.list[i]
+                    if m and m.Parent then
+                        pivotModel(m, cf)
+                    else
+                        _G._ChestLootStash.set[m] = nil
+                        table.remove(_G._ChestLootStash.list, i)
+                    end
+                end
+                if os.clock() >= gatherEndsAt then
+                    gatherActive = false
+                    placeBtn.Visible = #_G._ChestLootStash.list > 0
+                end
+            end)
+        end
+        local function startChestGatherWindow()
+            ensureHoverLoop()
+            gatherActive = true
+            gatherEndsAt = os.clock() + 10
+        end
+
+        local lootScanConn, lootAcc = nil, 0
+        local function enableLootScan()
+            if lootScanConn then return end
+            lootAcc = 0
+            lootScanConn = Run.Heartbeat:Connect(function(dt)
+                lootAcc += dt
+                if lootAcc < 0.05 then return end
+                lootAcc = 0
+                if not gatherActive then return end
+                local items = itemsFolder(); if not items then return end
                 local root = hrp(); if not root then return end
                 local origin = root.Position
-                local items = itemsFolder(); if not items then return end
                 for _,m in ipairs(items:GetChildren()) do
-                    repeat
-                        if seen[m] then break end
-                        if not isLootCandidate(m) then break end
-                        local mp = mpOf(m); if not mp then break end
-                        local d = (mp.Position - origin).Magnitude
-                        if d > CHEST_RADIUS then break end
-                        seen[m] = true
-                        local startDrag = getRemote("RequestStartDraggingItem") or getRemote("StartDraggingItem")
-                        local stopDrag  = getRemote("RequestStopDraggingItem") or getRemote("StopDraggingItem")
-                        if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
-                        task.wait()
-                        pcall(function() mp:SetNetworkOwner(lp) end)
-                        setNoCollideModel(m, true)
-                        setAnchoredModel(m, true)
-                        table.insert(chestCollectedList, m)
-                        if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
-                    until true
-                end
-            end)
-            hoverRB = Run.RenderStepped:Connect(function()
-                if not chestLooting then return end
-                local cf = hoverAboveHeadCF(); if not cf then return end
-                for i=#chestCollectedList,1,-1 do
-                    local m = chestCollectedList[i]
-                    if not (m and m.Parent) then table.remove(chestCollectedList, i)
-                    else pivotModel(m, cf) end
+                    if m:IsA("Model") and not string.find(string.lower(m.Name or ""), "chest", 1, true) then
+                        local mp = mainPart(m)
+                        if mp and (mp.Position - origin).Magnitude <= 2 then
+                            local ok = pcall(function() mp:SetNetworkOwner(lp) end)
+                            setNoCollideModel(m, true)
+                            setAnchoredModel(m, true)
+                            addToStash(m)
+                        end
+                    end
                 end
             end)
         end
+        enableLootScan()
 
-        local chestHuntOn = false
-        local chestBtn = ensureEdgeBtn("ChestHuntEdge", "Teleport to Chest", 1000)
-        chestBtn.MouseButton1Click:Connect(function()
-            local cf = nearestChestCF()
-            if cf then
-                teleportWithDive(cf)
-                startChestLootWindow()
+        placeBtn.MouseButton1Click:Connect(function()
+            placeBtn.Visible = false
+            local n = #_G._ChestLootStash.list
+            if n == 0 then return end
+            local baseCF = groundAheadCF(); if not baseCF then return end
+            local cfs = table.create(n)
+            for i=1,n do cfs[i] = pileCF(i, baseCF) end
+            for i=1,n do
+                local m = _G._ChestLootStash.list[i]
+                if m and m.Parent then
+                    setAnchoredModel(m, true)
+                    setNoCollideModel(m, true)
+                    pivotModel(m, cfs[i])
+                end
+                if i % 12 == 0 then Run.Heartbeat:Wait() end
             end
+            task.wait(0.03)
+            finalizePileDrop(_G._ChestLootStash.list)
+            clearStash()
         end)
-        local function refreshChestBtn()
-            local any = false
-            for m,_ in pairs(chestList) do
-                if m and m.Parent and not chestOpenedBySomeone(m) then any = true break end
-            end
-            chestBtn.Visible = chestHuntOn and any
+
+        local function isChestModel(m)
+            if not (m and m:IsA("Model")) then return false end
+            local n = m.Name or ""
+            local nl = n:lower()
+            if nl:find("snow",1,true) then return false end
+            return n:match("Chest$") ~= nil or n:match("^.+Chest%d+$") ~= nil
         end
-        local chestListWatch
-        local function enableChestHunt()
-            if chestHuntOn then return end
-            chestHuntOn = true
-            startChestScan()
-            if chestListWatch then chestListWatch:Disconnect() end
-            chestListWatch = Run.Heartbeat:Connect(function()
-                refreshChestBtn()
-            end)
-        end
-        local function disableChestHunt()
-            chestHuntOn = false
-            chestBtn.Visible = false
-            chestPlaceBtn.Visible = false
-            stopChestScan()
-            if chestListWatch then chestListWatch:Disconnect() chestListWatch = nil end
-            if gatherHB then gatherHB:Disconnect() gatherHB = nil end
-            if hoverRB then hoverRB:Disconnect() hoverRB = nil end
-            table.clear(chestCollectedList)
+        local function isUnopenedChest(m)
+            if not isChestModel(m) then return false end
+            local opened = m:GetAttribute("opened") == true
+            local owner  = m:GetAttribute("playerId")
+            return (not opened) and (owner == nil)
         end
 
-        tab:Toggle({ Title = "Auto Chest Hunt", Value = false, Callback = function(state) if state then enableChestHunt() else disableChestHunt() end end })
+        local CHEST_VISIT_COOLDOWN = 30
+        local chestVisitedAt = setmetatable({}, {__mode="k"})
+        local function markChestVisited(chest)
+            if chest and chest.Parent then chestVisitedAt[chest] = os.clock() end
+        end
+        local function recentlyVisited(chest)
+            local t = chestVisitedAt[chest]
+            return t and (os.clock() - t < CHEST_VISIT_COOLDOWN)
+        end
+        local function watchChestOpenState(chest)
+            if not (chest and chest.Parent) then return end
+            local function onChange()
+                local opened = chest:GetAttribute("opened") == true
+                local owner  = chest:GetAttribute("playerId")
+                if opened or owner then chestVisitedAt[chest] = math.huge end
+            end
+            pcall(function() chest:GetAttributeChangedSignal("opened"):Connect(onChange) end)
+            pcall(function() chest:GetAttributeChangedSignal("playerId"):Connect(onChange) end)
+            chest.AncestryChanged:Connect(function(_, parent) if not parent then chestVisitedAt[chest] = math.huge end end)
+            onChange()
+        end
+
+        local function nearestUnopenedChest()
+            local items = itemsFolder() or WS
+            local root = hrp(); if not root then return nil end
+            local best, bestD = nil, math.huge
+            for _,m in ipairs(items:GetDescendants()) do
+                repeat
+                    if not (m:IsA("Model")) then break end
+                    if not isUnopenedChest(m) then break end
+                    if recentlyVisited(m) then break end
+                    local mp = mainPart(m); if not mp then break end
+                    local d = (mp.Position - root.Position).Magnitude
+                    if d < bestD then bestD, best = d, m end
+                until true
+            end
+            return best
+        end
+
+        local chestOn = false
+        local function ensureChestBtnVisibility()
+            chestBtn.Visible = chestOn and (nearestUnopenedChest() ~= nil)
+        end
+
+        local function chestFrontCF(chest)
+            local mp = mainPart(chest); if not mp then return nil end
+            local look = mp.CFrame.LookVector
+            local pos  = mp.Position - look * 4 + Vector3.new(0, 3, 0)
+            local g = groundBelow(pos)
+            local finalPos = Vector3.new(pos.X, g.Y + 2.5, pos.Z)
+            return CFrame.new(finalPos, mp.Position)
+        end
+
+        chestBtn.MouseButton1Click:Connect(function()
+            if not chestOn then return end
+            local chest = nearestUnopenedChest(); if not chest then ensureChestBtnVisibility(); return end
+            watchChestOpenState(chest)
+            local cf = chestFrontCF(chest); if not cf then return end
+            teleportWithDive(cf)
+            markChestVisited(chest)
+            startChestGatherWindow()
+            task.delay(0.05, ensureChestBtnVisibility)
+        end)
+
+        local chestScanConn
+        local function enableChest()
+            if chestScanConn then return end
+            chestOn = true
+            chestScanConn = Run.Heartbeat:Connect(function()
+                ensureChestBtnVisibility()
+            end)
+        end
+        local function disableChest()
+            chestOn = false
+            if chestScanConn then chestScanConn:Disconnect(); chestScanConn = nil end
+            chestBtn.Visible = false
+        end
+
+        tab:Toggle({ Title = "Chest Teleport (Unopened)", Value = false, Callback = function(state) if state then enableChest() else disableChest() end end })
+
+        local loadDefenseOnDefault = true
+        if loadDefenseOnDefault then enableLoadDefense() end
 
         Players.LocalPlayer.CharacterAdded:Connect(function()
             if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
-            if coinOn and not coinConn then enableCoin() end
-            if chestHuntOn then enableChestHunt() end
+            if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
+            if infJumpOn and not infConn then enableInfJump() end
+            if autoStunOn and not autoStunThread then enableAutoStun() end
             if noShadowsOn and not lightConn then enableNoShadows() end
+            if hideBigTreesOn and not hideConn then enableHideBigTrees() end
+            local _ = prevPauseMode
+            pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
+            if loadDefenseOnDefault then enableLoadDefense() end
+            if coinOn and not coinConn then enableCoin() end
+            if chestOn and not chestScanConn then enableChest() end
         end)
     end
     local ok, err = pcall(run)
