@@ -22,6 +22,11 @@ return function(C, R, UI)
     TUNE.CHAR_HIT_STEP_WAIT   = TUNE.CHAR_HIT_STEP_WAIT   or 0.02
     TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
 
+    TUNE.RAY_FAN_RAYS         = TUNE.RAY_FAN_RAYS         or 72
+    TUNE.RAY_MAX_HOPS         = TUNE.RAY_MAX_HOPS         or 1
+    TUNE.RAY_HEIGHT           = TUNE.RAY_HEIGHT           or 2.5
+    TUNE.RAY_EPS              = TUNE.RAY_EPS              or 0.01
+
     local running = { SmallTree = false, Character = false }
 
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
@@ -153,66 +158,116 @@ return function(C, R, UI)
         return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
     end
 
-    local function collectTreesInRadius(roots, origin, radius)
-        local includeBig = C.State.Toggles.BigTreeAura == true
-        local out, n = {}, 0
-        local function walk(node)
-            if not node then return end
-            if node:IsA("Model") and (TREE_NAMES[node.Name] or (includeBig and isBigTreeName(node.Name))) then
-                local trunk = bestTreeHitPart(node)
-                if trunk then
-                    local d = (trunk.Position - origin).Magnitude
-                    if d <= radius then
-                        n = n + 1
-                        out[n] = node
+    local function ascendModel(inst)
+        local cur = inst
+        while cur and not cur:IsA("Model") do cur = cur.Parent end
+        return cur
+    end
+
+    local function dist(a, b)
+        return (a - b).Magnitude
+    end
+
+    local function fanRayCollect(origin, radius, fanRays, maxHops, predicate, getKeyPart)
+        local resultSet, ordered = {}, {}
+        local baseParams = RaycastParams.new()
+        baseParams.FilterType = Enum.RaycastFilterType.Exclude
+        baseParams.FilterDescendantsInstances = { lp.Character }
+        baseParams.IgnoreWater = true
+        local start = origin + Vector3.new(0, TUNE.RAY_HEIGHT, 0)
+        local step = (2 * math.pi) / math.max(1, fanRays)
+        for i = 1, fanRays do
+            local theta = (i - 1) * step
+            local dir = Vector3.new(math.cos(theta), 0, math.sin(theta)) * radius
+            local remaining = dir
+            local rayOrigin = start
+            local hops = math.max(0, maxHops)
+            local excluded = { lp.Character }
+            while true do
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.IgnoreWater = baseParams.IgnoreWater
+                params.FilterDescendantsInstances = excluded
+                local hit = WS:Raycast(rayOrigin, remaining, params)
+                if not hit then break end
+                local mdl = ascendModel(hit.Instance)
+                local accepted = false
+                if mdl and predicate(mdl) then
+                    local key = mdl
+                    if not resultSet[key] then
+                        local kp = getKeyPart(mdl)
+                        if kp and dist(kp.Position, origin) <= radius + 1e-3 then
+                            resultSet[key] = true
+                            ordered[#ordered+1] = mdl
+                        end
                     end
+                    accepted = true
                 end
-            end
-            local ok, children = pcall(node.GetChildren, node)
-            if ok and children then
-                for _, ch in ipairs(children) do
-                    walk(ch)
-                end
+                local traveled = (hit.Position - rayOrigin).Magnitude
+                local leftover = remaining.Magnitude - traveled - TUNE.RAY_EPS
+                if leftover <= 0 then break end
+                rayOrigin = hit.Position + remaining.Unit * TUNE.RAY_EPS
+                remaining = remaining.Unit * leftover
+                if hops <= 0 then break end
+                hops -= 1
+                table.insert(excluded, hit.Instance)
+                if mdl then table.insert(excluded, mdl) end
             end
         end
-        for _, root in ipairs(roots) do
-            walk(root)
-        end
-        table.sort(out, function(a, b)
+        return ordered
+    end
+
+    local function isTreeModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local n = m.Name or ""
+        if TREE_NAMES[n] then return true end
+        if C.State.Toggles.BigTreeAura and isBigTreeName(n) then return true end
+        return false
+    end
+
+    local function collectTreesByRay(origin, radius)
+        local fan = TUNE.RAY_FAN_RAYS
+        local hops = TUNE.RAY_MAX_HOPS
+        local list = fanRayCollect(
+            origin, radius, fan, hops,
+            function(m) return isTreeModel(m) end,
+            function(m) return bestTreeHitPart(m) end
+        )
+        table.sort(list, function(a, b)
             local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
-            local da = pa and (pa.Position - origin).Magnitude or math.huge
-            local db = pb and (pb.Position - origin).Magnitude or math.huge
+            local da = pa and dist(pa.Position, origin) or math.huge
+            local db = pb and dist(pb.Position, origin) or math.huge
             if da == db then return (a.Name or "") < (b.Name or "") end
             return da < db
         end)
-        return out
+        return list
     end
 
-    local function collectCharactersInRadius(charsFolder, origin, radius)
-        local out = {}
-        if not charsFolder then return out end
-        for _, mdl in ipairs(charsFolder:GetChildren()) do
-            repeat
-                if not mdl:IsA("Model") then break end
-                local n = mdl.Name or ""
-                local nameLower = n:lower()
-                if string.find(nameLower, "horse", 1, true) then break end
-                local distPart = charDistancePart(mdl)
-                if not distPart then break end
-                if (distPart.Position - origin).Magnitude > radius then break end
-                out[#out+1] = mdl
-            until true
-        end
+    local function collectCharactersByRay(charsFolder, origin, radius)
+        if not charsFolder then return {} end
+        local fan = TUNE.RAY_FAN_RAYS
+        local hops = TUNE.RAY_MAX_HOPS
+        local list = fanRayCollect(
+            origin, radius, fan, hops,
+            function(m)
+                if not (m and m:IsA("Model")) then return false end
+                if not m:IsDescendantOf(charsFolder) then return false end
+                local n = (m.Name or ""):lower()
+                if string.find(n, "horse", 1, true) then return false end
+                return true
+            end,
+            function(m) return charDistancePart(m) end
+        )
         if TUNE.CHAR_SORT then
-            table.sort(out, function(a, b)
+            table.sort(list, function(a, b)
                 local pa, pb = charDistancePart(a), charDistancePart(b)
-                local da = pa and (pa.Position - origin).Magnitude or math.huge
-                local db = pb and (pb.Position - origin).Magnitude or math.huge
+                local da = pa and dist(pa.Position, origin) or math.huge
+                local db = pb and dist(pb.Position, origin) or math.huge
                 if da == db then return (a.Name or "") < (b.Name or "") end
                 return da < db
             end)
         end
-        return out
+        return list
     end
 
     local TreeImpactCF = setmetatable({}, {__mode="k"})
@@ -305,7 +360,7 @@ return function(C, R, UI)
                 else
                     local origin = hrp.Position
                     local radius = tonumber(C.State.AuraRadius) or 150
-                    local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
+                    local targets = collectCharactersByRay(WS:FindFirstChild("Characters"), origin, radius)
                     if #targets > 0 then
                         chopWave(targets, TUNE.CHOP_SWING_DELAY, bestCharacterHitPart, false)
                     else
@@ -330,12 +385,7 @@ return function(C, R, UI)
                 else
                     local origin = hrp.Position
                     local radius = tonumber(C.State.AuraRadius) or 150
-                    local roots = {
-                        WS,
-                        RS:FindFirstChild("Assets"),
-                        RS:FindFirstChild("CutsceneSets"),
-                    }
-                    local allTrees = collectTreesInRadius(roots, origin, radius)
+                    local allTrees = collectTreesByRay(origin, radius)
                     local total = #allTrees
                     if total > 0 then
                         local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
