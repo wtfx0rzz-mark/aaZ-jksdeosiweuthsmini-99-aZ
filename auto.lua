@@ -774,15 +774,17 @@ return function(C, R, UI)
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
-        -- Auto Collect Coins
+        ----------------------------------------------------------------
+        -- Auto Collect Coins (radius 10, head-forward origin, wider pitches)
+        ----------------------------------------------------------------
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
         local COIN_RADIUS      = 10
         local COIN_INTERVAL    = 0.12
         local COIN_TTL         = 1.0
-        local COIN_FORWARD     = 2.0
-        local COIN_HEAD_UP     = 0.5
+        local COIN_FORWARD     = 2.0   -- start rays a bit in front of the head
+        local COIN_HEAD_UP     = 0.5   -- raise origin slightly
 
         local coinSeen = {}
         local coinConn, coinAcc = nil, 0
@@ -923,23 +925,10 @@ return function(C, R, UI)
             coinSeen = {}
         end
 
+        -- place the toggle directly under "Hide Big Trees (Local)"
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
-
-        -- Find Unopened Chests toggle (fixed)
-        local chestFinderOn = false
-        local enableChestFinder, disableChestFinder
-        tab:Toggle({
-            Title = "Find Unopened Chests",
-            Value = false,
-            Callback = function(state)
-                if state then
-                    if enableChestFinder then enableChestFinder() end
-                else
-                    if disableChestFinder then disableChestFinder() end
-                end
-            end
-        })
+        ----------------------------------------------------------------
 
         local noPauseOn, prevPauseMode
         local function enableNoStreamingPause()
@@ -1048,19 +1037,42 @@ return function(C, R, UI)
             end
         end
 
-        -- Chest Finder implementation
+        -- Find Unopened Chests toggle + implementation (with Snow Chest exclusion + camera placement)
+        local chestFinderOn = false
+        local enableChestFinder, disableChestFinder
+        tab:Toggle({
+            Title = "Find Unopened Chests",
+            Value = false,
+            Callback = function(state)
+                if state then
+                    if enableChestFinder then enableChestFinder() end
+                else
+                    if disableChestFinder then disableChestFinder() end
+                end
+            end
+        })
+
         do
             local nextChestBtn = makeEdgeBtn("NextChestEdge", "Nearest Unopened Chest", 6)
+
             local chests = {}
             local diamondModel = nil
             local DIAMOND_PAIR_DIST   = 9.8
             local DIAMOND_PAIR_TOL    = 2.0
-            local EXCLUDE_NAMES = { ["Stronghold Diamond Chest"] = true }
+
+            local EXCLUDE_NAMES = {
+                ["Stronghold Diamond Chest"] = true
+            }
 
             local function isChestName(n)
                 if type(n) ~= "string" then return false end
                 return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
             end
+            local function isSnowChestName(n)
+                if type(n) ~= "string" then return false end
+                return (n == "Snow Chest") or (n:match("^Snow Chest%d+$") ~= nil)
+            end
+
             local function chestOpened(m)
                 if not m then return false end
                 local attrs = m:GetAttributes()
@@ -1076,13 +1088,15 @@ return function(C, R, UI)
                 local ok, cf = pcall(function() return m:GetPivot() end)
                 return ok and cf.Position or nil
             end
+
             local function markChest(m)
                 if not (m and m:IsA("Model")) then return end
                 if not isChestName(m.Name) then return end
                 local pos = chestPos(m); if not pos then return end
+                local excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or false
                 local rec = chests[m]
                 if not rec then
-                    chests[m] = { pos = pos, opened = chestOpened(m), excluded = EXCLUDE_NAMES[m.Name] or false }
+                    chests[m] = { pos = pos, opened = chestOpened(m), excluded = excluded }
                     m:GetAttributeChangedSignal("LocalOpened"):Connect(function() local r=chests[m]; if r then r.opened = chestOpened(m) end end)
                     for k,_ in pairs(m:GetAttributes()) do
                         if tostring(k):match("Opened$") then
@@ -1094,15 +1108,18 @@ return function(C, R, UI)
                 else
                     rec.pos = pos
                     rec.opened = chestOpened(m)
+                    rec.excluded = excluded
                 end
                 if m.Name == "Stronghold Diamond Chest" then diamondModel = m end
             end
+
             local function initialScan()
                 chests = {}
                 diamondModel = nil
                 local items = itemsFolder(); if not items then return end
                 for _,m in ipairs(items:GetChildren()) do markChest(m) end
             end
+
             local function applyDiamondNeighborExclusion()
                 if not diamondModel then return end
                 local dpos = chestPos(diamondModel); if not dpos then return end
@@ -1115,11 +1132,16 @@ return function(C, R, UI)
                     end
                 end
             end
+
             local function updateChestRecord(m)
                 local r = chests[m]; if not r then return end
                 r.pos = chestPos(m) or r.pos
                 r.opened = chestOpened(m)
+                if m and m.Parent then
+                    r.excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or r.excluded or false
+                end
             end
+
             local function unopenedList()
                 local list = {}
                 for m,r in pairs(chests) do
@@ -1136,6 +1158,56 @@ return function(C, R, UI)
                 end)
                 return list
             end
+
+            -- Camera helper: put camera in front of chest and face it
+            local function focusCameraOnChest(m)
+                local camNow = WS.CurrentCamera
+                local mp = mainPart(m); if not (camNow and mp) then return end
+                local chestPos = mp.Position
+                local forward  = mp.CFrame.LookVector
+                local camPos   = chestPos - forward * 8 + Vector3.new(0, 3, 0) -- 8 studs out, slightly above
+                local prevType = camNow.CameraType
+                pcall(function()
+                    camNow.CameraType = Enum.CameraType.Scriptable
+                    camNow.CFrame = CFrame.new(camPos, chestPos)
+                end)
+                task.delay(0.25, function()
+                    local camCheck = WS.CurrentCamera
+                    if camCheck then
+                        pcall(function() camCheck.CameraType = prevType end)
+                    end
+                end)
+            end
+
+            local function teleportNearChest(m)
+                local pos = chestPos(m)
+                if not pos then return end
+                local lookAt = pos + Vector3.new(0,0,1)
+                teleportWithDive(CFrame.new(pos + Vector3.new(0,3,0), lookAt))
+                focusCameraOnChest(m)
+            end
+
+            local cfHB, childAdd, childRem
+            nextChestBtn.MouseButton1Click:Connect(function()
+                local list = unopenedList()
+                if #list == 0 then
+                    nextChestBtn.Text = "Nearest Unopened Chest"
+                    nextChestBtn.Visible = false
+                    return
+                end
+                local target = list[1]
+                teleportNearChest(target.m)
+                task.delay(0.5, function()
+                    local l2 = unopenedList()
+                    nextChestBtn.Visible = chestFinderOn and (#l2 > 0)
+                    if #l2 > 0 then
+                        nextChestBtn.Text = ("Nearest Unopened Chest (%d)"):format(#l2)
+                    else
+                        nextChestBtn.Text = "Nearest Unopened Chest"
+                    end
+                end)
+            end)
+
             local function refreshButton()
                 local list = unopenedList()
                 nextChestBtn.Visible = chestFinderOn and (#list > 0)
@@ -1145,20 +1217,6 @@ return function(C, R, UI)
                     nextChestBtn.Text = "Nearest Unopened Chest"
                 end
             end
-            local function teleportNear(pos)
-                local lookAt = pos + Vector3.new(0,0,1)
-                teleportWithDive(CFrame.new(pos + Vector3.new(0,3,0), lookAt))
-            end
-
-            local cfHB, childAdd, childRem
-            nextChestBtn.MouseButton1Click:Connect(function()
-                local list = unopenedList()
-                if #list == 0 then refreshButton(); return end
-                local target = list[1]
-                local pos = chestPos(target.m) or target.pos
-                if pos then teleportNear(pos) end
-                task.delay(0.5, refreshButton)
-            end)
 
             enableChestFinder = function()
                 if chestFinderOn then return end
@@ -1177,6 +1235,7 @@ return function(C, R, UI)
                 end)
                 refreshButton()
             end
+
             disableChestFinder = function()
                 chestFinderOn = false
                 if cfHB then cfHB:Disconnect(); cfHB = nil end
