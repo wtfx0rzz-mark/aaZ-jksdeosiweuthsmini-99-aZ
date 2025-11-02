@@ -737,6 +737,42 @@ return function(C, R, UI)
 
         tab:Toggle({ Title = "Disable Shadows", Value = false, Callback = function(state) if state then enableNoShadows() else disableNoShadows() end end })
 
+        local function isBigTreeName(n)
+            if not n then return false end
+            if n == "TreeBig1" or n == "TreeBig2" or n == "TreeBig3" then return true end
+            return (type(n)=="string") and (n:match("^WebbedTreeBig%d*$") ~= nil)
+        end
+        local hideBigTreesOn, hideConn, hideAcc = false, nil, 0
+        local function deleteBigTreesOnce()
+            local count = 0
+            for _,d in ipairs(WS:GetDescendants()) do
+                if d:IsA("Model") and isBigTreeName(d.Name) then
+                    pcall(function() d:Destroy() end)
+                    count += 1
+                end
+            end
+            return count
+        end
+        local function enableHideBigTrees()
+            if hideBigTreesOn then return end
+            hideBigTreesOn = true
+            deleteBigTreesOnce()
+            if hideConn then hideConn:Disconnect() end
+            hideAcc = 0
+            hideConn = Run.Heartbeat:Connect(function(dt)
+                hideAcc += dt
+                if hideAcc >= 60 then
+                    hideAcc = 0
+                    deleteBigTreesOnce()
+                end
+            end)
+        end
+        local function disableHideBigTrees()
+            hideBigTreesOn = false
+            if hideConn then hideConn:Disconnect() hideConn = nil end
+        end
+        tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
+
         local noPauseOn, prevPauseMode
         local function enableNoStreamingPause()
             if noPauseOn then return end
@@ -848,52 +884,6 @@ return function(C, R, UI)
         tab:Button({ Title = "Drop Saplings", Callback = actionDropSaplings })
         tab:Button({ Title = "Plant All Saplings", Callback = actionPlantAllSaplings })
 
-        local bigTreeToggleOn = false
-        local bigTreeLoopAlive = false
-        local BIG_TREE_SET = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
-        local function isBigTreeName(n)
-            if not n then return false end
-            if BIG_TREE_SET[n] then return true end
-            return n:match("^WebbedTreeBig%d*$") ~= nil
-        end
-        local function purgeBigTreesOnce()
-            local root = WS
-            local list = root:GetDescendants()
-            for i=1,#list do
-                local d = list[i]
-                if d and d:IsA("Model") and isBigTreeName(d.Name) then
-                    pcall(function() d:Destroy() end)
-                end
-            end
-        end
-        local function enableBigTreePurge()
-            if bigTreeToggleOn then return end
-            bigTreeToggleOn = true
-            purgeBigTreesOnce()
-            if bigTreeLoopAlive then return end
-            bigTreeLoopAlive = true
-            task.spawn(function()
-                while bigTreeToggleOn do
-                    task.wait(60)
-                    if not bigTreeToggleOn then break end
-                    purgeBigTreesOnce()
-                end
-                bigTreeLoopAlive = false
-            end)
-        end
-        local function disableBigTreePurge()
-            bigTreeToggleOn = false
-        end
-
-        tab:Section({ Title = "World Filters" })
-        tab:Toggle({
-            Title = "Hide Big Trees (Local)",
-            Value = false,
-            Callback = function(on)
-                if on then enableBigTreePurge() else disableBigTreePurge() end
-            end
-        })
-
         local loadDefenseOnDefault = true
         if loadDefenseOnDefault then enableLoadDefense() end
 
@@ -903,9 +893,10 @@ return function(C, R, UI)
             if infJumpOn and not infConn then enableInfJump() end
             if autoStunOn and not autoStunThread then enableAutoStun() end
             if noShadowsOn and not lightConn then enableNoShadows() end
-            enableNoStreamingPause()
+            if hideBigTreesOn and not hideConn then enableHideBigTrees() end
+            local _ = prevPauseMode
+            pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if loadDefenseOnDefault then enableLoadDefense() end
-            if bigTreeToggleOn then task.defer(purgeBigTreesOnce) end
         end)
     end
     local ok, err = pcall(run)
