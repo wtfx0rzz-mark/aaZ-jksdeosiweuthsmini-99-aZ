@@ -1197,3 +1197,4 @@
 end
 local ok, err = pcall(run)
 if not ok then warn("[Auto] module error: " .. tostring(err)) end
+end
