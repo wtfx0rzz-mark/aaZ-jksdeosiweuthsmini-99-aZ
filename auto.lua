@@ -509,7 +509,7 @@ return function(C, R, UI)
         local GOD_INTERVAL = 0.5
         local function fireGod()
             local f = RS:FindFirstChild("RemoteEvents")
-            local ev = f and f:FindFirstChild("DamagePlayer")
+            local ev = f and f:FindChildWhichIsA("RemoteEvent", false) and f:FindFirstChild("DamagePlayer")
             if ev and ev:IsA("RemoteEvent") then pcall(function() ev:FireServer(-math.huge) end) end
         end
         local function enableGod()
@@ -1038,7 +1038,7 @@ return function(C, R, UI)
         end
 
         ----------------------------------------------------------------
-        -- Find Unopened Chests (Snow Chest excluded). Hinge-based front placement. No camera locking.
+        -- Find Unopened Chests (Snow Chest excluded + nearest neighbor to Stronghold Diamond Chest excluded)
         ----------------------------------------------------------------
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
@@ -1059,8 +1059,6 @@ return function(C, R, UI)
 
             local chests = {}
             local diamondModel = nil
-            local DIAMOND_PAIR_DIST   = 9.8
-            local DIAMOND_PAIR_TOL    = 2.0
 
             local EXCLUDE_NAMES = {
                 ["Stronghold Diamond Chest"] = true
@@ -1098,7 +1096,7 @@ return function(C, R, UI)
                 local excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or false
                 local rec = chests[m]
                 if not rec then
-                    chests[m] = { pos = pos, opened = chestOpened(m), excluded = excluded }
+                    chests[m] = { pos = pos, opened = chestOpened(m), excluded = excluded, reason = excluded and "static" or nil }
                     m:GetAttributeChangedSignal("LocalOpened"):Connect(function() local r=chests[m]; if r then r.opened = chestOpened(m) end end)
                     for k,_ in pairs(m:GetAttributes()) do
                         if tostring(k):match("Opened$") then
@@ -1110,7 +1108,7 @@ return function(C, R, UI)
                 else
                     rec.pos = pos
                     rec.opened = chestOpened(m)
-                    rec.excluded = excluded
+                    rec.excluded = excluded or rec.excluded
                 end
                 if m.Name == "Stronghold Diamond Chest" then diamondModel = m end
             end
@@ -1123,15 +1121,24 @@ return function(C, R, UI)
             end
 
             local function applyDiamondNeighborExclusion()
-                if not diamondModel then return end
+                if not diamondModel or not diamondModel.Parent then return end
                 local dpos = chestPos(diamondModel); if not dpos then return end
                 for m,r in pairs(chests) do
-                    if m ~= diamondModel and not r.excluded then
-                        local dist = (r.pos - dpos).Magnitude
-                        if math.abs(dist - DIAMOND_PAIR_DIST) <= DIAMOND_PAIR_TOL then
-                            r.excluded = true
+                    if r and r.reason == "diamond_neighbor" then r.excluded, r.reason = false, nil end
+                end
+                local bestM, bestD = nil, math.huge
+                for m,r in pairs(chests) do
+                    if m ~= diamondModel and m.Parent and not r.opened and not EXCLUDE_NAMES[m.Name] and not isSnowChestName(m.Name) then
+                        local pos = r.pos or chestPos(m)
+                        if pos then
+                            local d = (pos - dpos).Magnitude
+                            if d < bestD then bestD, bestM = d, m end
                         end
                     end
+                end
+                if bestM and chests[bestM] then
+                    chests[bestM].excluded = true
+                    chests[bestM].reason = "diamond_neighbor"
                 end
             end
 
@@ -1140,7 +1147,9 @@ return function(C, R, UI)
                 r.pos = chestPos(m) or r.pos
                 r.opened = chestOpened(m)
                 if m and m.Parent then
-                    r.excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or r.excluded or false
+                    if EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) then
+                        r.excluded, r.reason = true, "static"
+                    end
                 end
             end
 
@@ -1212,6 +1221,7 @@ return function(C, R, UI)
             end
 
             local cfHB, childAdd, childRem
+            local acc = 0
             nextChestBtn.MouseButton1Click:Connect(function()
                 local list = unopenedList()
                 if #list == 0 then
@@ -1251,10 +1261,16 @@ return function(C, R, UI)
                 local items = itemsFolder()
                 if items then
                     childAdd = items.ChildAdded:Connect(function(c) markChest(c); applyDiamondNeighborExclusion() end)
-                    childRem = items.ChildRemoved:Connect(function(c) chests[c] = nil end)
+                    childRem = items.ChildRemoved:Connect(function(c) chests[c] = nil; applyDiamondNeighborExclusion() end)
                 end
-                cfHB = Run.Heartbeat:Connect(function()
+                acc = 0
+                cfHB = Run.Heartbeat:Connect(function(dt)
                     for m,_ in pairs(chests) do if m and m.Parent then updateChestRecord(m) end end
+                    acc += dt
+                    if acc >= 1.0 then
+                        applyDiamondNeighborExclusion()
+                        acc = 0
+                    end
                     refreshButton()
                 end)
                 refreshButton()
