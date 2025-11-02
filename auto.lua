@@ -42,8 +42,8 @@ return function(C, R, UI)
         local STICK_CLEAR_VEL   = true
         local TELEPORT_UP_NUDGE = 0.05
         local SAFE_DROP_UP      = 4.0
-
         local STREAM_TIMEOUT    = 6.0
+
         local function requestStreamAt(pos, timeout)
             local p = typeof(pos) == "CFrame" and pos.Position or pos
             local ok, res = pcall(function() return WS:RequestStreamAroundAsync(p, timeout or STREAM_TIMEOUT) end)
@@ -291,7 +291,7 @@ return function(C, R, UI)
             list.Parent = stack
         end
 
-        local function makeEdgeBtn(name, label, order)
+        local function ensureBtn(name, label, order, visible)
             local b = stack:FindFirstChild(name)
             if not b then
                 b = Instance.new("TextButton")
@@ -303,25 +303,23 @@ return function(C, R, UI)
                 b.BackgroundColor3 = Color3.fromRGB(30,30,35)
                 b.TextColor3 = Color3.new(1,1,1)
                 b.BorderSizePixel = 0
-                b.Visible = false
+                b.Visible = visible or false
                 b.LayoutOrder = order or 1
                 b.Parent = stack
                 local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = b
             else
                 b.Text = label
                 b.LayoutOrder = order or b.LayoutOrder
-                b.Visible = false
+                if visible ~= nil then b.Visible = visible end
             end
             return b
         end
 
-        local phaseBtn = makeEdgeBtn("Phase10Edge", "Phase 10", 1)
-        local tpBtn    = makeEdgeBtn("TpEdge",      "Teleport", 2)
-        local plantBtn = makeEdgeBtn("PlantEdge",   "Plant",    3)
-        local lostBtn  = makeEdgeBtn("LostEdge",    "Lost Child", 4)
-        local campBtn  = makeEdgeBtn("CampEdge",    "Campfire", 5)
-
-        campBtn.Visible = true
+        local phaseBtn = ensureBtn("Phase10Edge", "Phase 10", 1, false)
+        local tpBtn    = ensureBtn("TpEdge",      "Teleport", 2, false)
+        local plantBtn = ensureBtn("PlantEdge",   "Plant",     3, false)
+        local lostBtn  = ensureBtn("LostEdge",    "Lost Child",4, false)
+        local campBtn  = ensureBtn("CampEdge",    "Campfire",  5, true)
 
         phaseBtn.MouseButton1Click:Connect(function()
             local root = hrp(); if not root then return end
@@ -775,7 +773,7 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
         ----------------------------------------------------------------
-        -- Auto Collect Coins (radius 10, head-forward origin, wider pitches)
+        -- Auto Collect Coins
         ----------------------------------------------------------------
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
@@ -783,8 +781,8 @@ return function(C, R, UI)
         local COIN_RADIUS      = 10
         local COIN_INTERVAL    = 0.12
         local COIN_TTL         = 1.0
-        local COIN_FORWARD     = 2.0   -- start rays a bit in front of the head
-        local COIN_HEAD_UP     = 0.5   -- raise origin slightly
+        local COIN_FORWARD     = 2.0
+        local COIN_HEAD_UP     = 0.5
 
         local coinSeen = {}
         local coinConn, coinAcc = nil, 0
@@ -924,10 +922,426 @@ return function(C, R, UI)
             if coinConn then coinConn:Disconnect(); coinConn = nil end
             coinSeen = {}
         end
-
-        -- place the toggle directly under "Hide Big Trees (Local)"
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
+        ----------------------------------------------------------------
+
+        ----------------------------------------------------------------
+        -- Chest Teleport + 10s Micro-Gather (Default OFF)   [below coins]
+        ----------------------------------------------------------------
+        local placeBtn = ensureBtn("PlaceEdge", "Place", 1000, false)
+        _G._PlaceEdgeBtn = placeBtn
+
+        local function itemsFolder()
+            return WS:FindFirstChild("Items")
+        end
+        local function isUnderItems(m)
+            local it = itemsFolder()
+            return it and m and m:IsDescendantOf(it) or false
+        end
+        local function isChestName(n)
+            if type(n)~="string" then return false end
+            local s = n:lower()
+            if s:find("snow",1,true) then return false
+            end
+            return s:find("chest",1,true) ~= nil
+        end
+        local function isChestModel(m) return m and m:IsA("Model") and isChestName(m.Name) end
+        local function chestOpened(m)
+            if not m then return false end
+            if m:GetAttribute("LocalOpened") == true then return true end
+            for k,v in pairs(m:GetAttributes()) do
+                if tostring(k):match("Opened$") and v == true then return true end
+            end
+            return false
+        end
+        local function chestPos(m)
+            local mp = mainPart(m)
+            if mp then return mp.Position end
+            local ok, cf = pcall(function() return m:GetPivot() end)
+            return ok and cf.Position or nil
+        end
+
+        local Chest = {}
+        Chest.Record   = {}
+        Chest.Enabled  = false
+        Chest.Btn      = ensureBtn("ChestEdge", "Nearest Unopened Chest", 6, false)
+
+        local function markChest(m)
+            if not isChestModel(m) then return end
+            local pos = chestPos(m); if not pos then return end
+            local r = Chest.Record[m] or {}
+            r.pos = pos
+            r.opened = chestOpened(m)
+            Chest.Record[m] = r
+            m:GetAttributeChangedSignal("LocalOpened"):Connect(function() local rec=Chest.Record[m]; if rec then rec.opened = chestOpened(m) end end)
+            for k,_ in pairs(m:GetAttributes()) do
+                if tostring(k):match("Opened$") then
+                    m:GetAttributeChangedSignal(k):Connect(function() local rec=Chest.Record[m]; if rec then rec.opened = chestOpened(m) end end)
+                end
+            end
+            m.AncestryChanged:Connect(function(_, parent) if not parent then Chest.Record[m]=nil end end)
+        end
+        local function initialScanChests()
+            Chest.Record = {}
+            local items = itemsFolder(); if not items then return end
+            for _,m in ipairs(items:GetChildren()) do markChest(m) end
+        end
+        initialScanChests()
+        do
+            local it = itemsFolder()
+            if it then
+                it.ChildAdded:Connect(function(c) markChest(c) end)
+                it.ChildRemoved:Connect(function(c) Chest.Record[c] = nil end)
+            end
+        end
+
+        local function unopenedList()
+            local root = hrp(); if not root then return {} end
+            local out = {}
+            for m,r in pairs(Chest.Record) do
+                if m and m.Parent and not r.opened then
+                    out[#out+1] = {m=m, pos=r.pos, d=(r.pos - root.Position).Magnitude}
+                end
+            end
+            table.sort(out, function(a,b) return a.d < b.d end)
+            return out
+        end
+        local function refreshChestBtn()
+            if not Chest.Enabled then Chest.Btn.Visible=false return end
+            local l = unopenedList()
+            Chest.Btn.Visible = (#l > 0)
+            Chest.Btn.Text = (#l>0) and ("Nearest Unopened Chest ("..#l..")") or "Nearest Unopened Chest"
+        end
+
+        local function chestFrontCF(m)
+            local cf = (m.PrimaryPart and m.PrimaryPart.CFrame) or m:GetPivot()
+            local front = cf.LookVector
+            local pos   = cf.Position + front * 3.0 + Vector3.new(0,0.1,0)
+            return CFrame.new(pos, cf.Position)
+        end
+
+        local function approachChest(m)
+            local cf = chestFrontCF(m); if not cf then return end
+            teleportSticky(cf)
+            local camNow = WS.CurrentCamera
+            if camNow then
+                camNow.CameraType = Enum.CameraType.Scriptable
+                local front = (m.PrimaryPart and m.PrimaryPart.CFrame.LookVector) or m:GetPivot().LookVector
+                local cpos  = (m.PrimaryPart and m.PrimaryPart.Position or m:GetPivot().Position) + front * 5.0 + Vector3.new(0,1.8,0)
+                camNow.CFrame = CFrame.new(cpos, (m.PrimaryPart and m.PrimaryPart.Position) or m:GetPivot().Position)
+                task.delay(0.7, function() if camNow then camNow.CameraType = Enum.CameraType.Custom end end)
+            end
+        end
+
+        local ChestAllow = {
+            ["Log"]=true,["Chair"]=true,["Coal"]=true,["Fuel Canister"]=true,["Oil Barrel"]=true,["Biofuel"]=true,
+            ["Cake"]=true,["Cooked Steak"]=true,["Cooked Morsel"]=true,["Steak"]=true,["Morsel"]=true,["Berry"]=true,
+            ["Carrot"]=true,["Chilli"]=true,["Stew"]=true,["Ribs"]=true,["Pumpkin"]=true,["Hearty Stew"]=true,
+            ["Cooked Ribs"]=true,["Corn"]=true,["BBQ ribs"]=true,["Apple"]=true,["Mackerel"]=true,
+            ["Bandage"]=true,["MedKit"]=true,
+            ["Revolver"]=true,["Rifle"]=true,["Leather Body"]=true,["Iron Body"]=true,["Good Axe"]=true,["Strong Axe"]=true,
+            ["Chainsaw"]=true,["Crossbow"]=true,["Katana"]=true,["Kunai"]=true,["Laser cannon"]=true,["Laser sword"]=true,
+            ["Morningstar"]=true,["Riot shield"]=true,["Spear"]=true,["Tactical Shotgun"]=true,["Wildfire"]=true,
+            ["Revolver Ammo"]=true,["Rifle Ammo"]=true,["Giant Sack"]=true,["Good Sack"]=true,["Blueprint"]=true,
+            ["Diamond"]=true,["Forest Gem"]=true,["Sapling"]=true,["Basketball"]=true
+        }
+        local function allowedByPattern(name)
+            local n = (name or ""):lower()
+            if n == "mossy coin" or n:match("^mossy coin%d+$") then return true end
+            if n:find("forest gem fragment",1,true) then return true end
+            if n:find(" key",1,true) and (n:find("blue",1,true) or n:find("yellow",1,true) or n:find("red",1,true)
+                or n:find("gray",1,true) or n:find("grey",1,true) or n:find("frog",1,true)) then return true end
+            if n:find("flashlight",1,true) and (n:find("old",1,true) or n:find("strong",1,true)) then return true end
+            if n:find("taming flute",1,true) and (n:find("old",1,true) or n:find("good",1,true) or n:find("strong",1,true)) then return true end
+            return false
+        end
+        local function isLootItem(m)
+            if not (m and m:IsA("Model")) then return false end
+            if not isUnderItems(m) then return false end
+            local n = m.Name or ""
+            if isChestName(n) then return false end
+            if ChestAllow[n] then return true end
+            return allowedByPattern(n)
+        end
+
+        local function startDrag(m)
+            local ev = getRemote("RequestStartDraggingItem") or getRemote("StartDraggingItem")
+            if not ev then return end
+            pcall(function() ev:FireServer(m) end)
+            pcall(function() ev:FireServer(Instance.new("Model")) end)
+        end
+        local function stopDrag(m)
+            local ev = getRemote("RequestStopDraggingItem") or getRemote("StopDraggingItem")
+            if not ev then return end
+            pcall(function() ev:FireServer(m or Instance.new("Model")) end)
+            pcall(function() ev:FireServer(Instance.new("Model")) end)
+        end
+        local function setNoCollideModel(m, on)
+            for _,d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    d.CanCollide = not on
+                    d.CanQuery   = not on
+                    d.CanTouch   = not on
+                    d.Massless   = on and true or false
+                    d.AssemblyLinearVelocity  = Vector3.new()
+                    d.AssemblyAngularVelocity = Vector3.new()
+                end
+            end
+        end
+        local function setAnchoredModel(m, on)
+            for _,d in ipairs(m:GetDescendants()) do if d:IsA("BasePart") then d.Anchored = on end end
+        end
+        local function pivotModel(m, cf)
+            if m:IsA("Model") then m:PivotTo(cf) else local p=mainPart(m); if p then p.CFrame=cf end end
+        end
+
+        local ChestMICRO_RADIUS   = 2.0
+        local ChestHOVER_HEIGHT   = 5
+        local ChestPILE_RADIUS    = 1.25
+        local ChestLAYER_SIZE     = 14
+        local ChestLAYER_HEIGHT   = 0.35
+        local ChestUNANCHOR_BATCH = 6
+        local ChestUNANCHOR_STEP  = 0.03
+        local ChestNUDGE_DOWN     = 4
+        local ChestPLACE_BATCH    = 12
+        local ChestDURATION       = 10.0
+
+        local chestGatherOn, chestEndAt = false, 0
+        local chestScanConn, chestHoverConn, chestChildConn = nil, nil, nil
+        local chestGathered, chestList = {}, {}
+
+        local function chestAdd(m)
+            if chestGathered[m] then return end
+            chestGathered[m] = true
+            chestList[#chestList+1] = m
+        end
+        local function chestRemove(m)
+            if not chestGathered[m] then return end
+            chestGathered[m] = nil
+            for i=#chestList,1,-1 do if chestList[i]==m then table.remove(chestList,i) break end end
+        end
+
+        local function tryCaptureLoot(m)
+            repeat
+                if not (m and m.Parent and m:IsA("Model")) then break end
+                if not isLootItem(m) then break end
+                local mp = mainPart(m); if not mp then break end
+                local root = hrp(); if not root then break end
+                if (mp.Position - root.Position).Magnitude > ChestMICRO_RADIUS then break end
+                startDrag(m)
+                task.wait(0.02)
+                pcall(function() mp:SetNetworkOwner(lp) end)
+                setNoCollideModel(m, true)
+                setAnchoredModel(m, true)
+                chestAdd(m)
+                stopDrag(m)
+            until true
+        end
+
+        local function hookItemsAdded()
+            if chestChildConn then chestChildConn:Disconnect() chestChildConn=nil end
+            local it = itemsFolder()
+            if it then
+                chestChildConn = it.ChildAdded:Connect(function(c)
+                    if not chestGatherOn then return end
+                    local m = c:IsA("Model") and c or c:FindFirstAncestorOfClass("Model")
+                    if m then tryCaptureLoot(m) end
+                end)
+            end
+        end
+        hookItemsAdded()
+
+        local function chestScan()
+            if not chestGatherOn then return end
+            local it = itemsFolder()
+            if not it then return end
+            for _,d in ipairs(it:GetDescendants()) do
+                local m = d:IsA("Model") and d or d:FindFirstAncestorOfClass("Model")
+                if m and not chestGathered[m] then tryCaptureLoot(m) end
+            end
+        end
+
+        local function chestHover()
+            if not chestGatherOn then return end
+            local root = hrp(); if not root then return end
+            local forward = root.CFrame.LookVector
+            local above   = root.Position + Vector3.new(0, ChestHOVER_HEIGHT, 0)
+            local baseCF  = CFrame.lookAt(above, above + forward)
+            for _,m in ipairs(chestList) do
+                if m and m.Parent then pivotModel(m, baseCF) else chestRemove(m) end
+            end
+        end
+
+        local function chestEnableMicro()
+            if chestGatherOn then return end
+            chestGatherOn = true
+            chestScanConn  = Run.Heartbeat:Connect(chestScan)
+            chestHoverConn = Run.RenderStepped:Connect(chestHover)
+            placeBtn.Visible = false
+        end
+        local function chestDisableMicro()
+            chestGatherOn = false
+            if chestScanConn  then pcall(function() chestScanConn:Disconnect()  end) end; chestScanConn=nil
+            if chestHoverConn then pcall(function() chestHoverConn:Disconnect() end) end; chestHoverConn=nil
+        end
+
+        local function groundBelowLoose(pos, exclude)
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local ex = { lp.Character }
+            if exclude then for i=1,#exclude do ex[#ex+1] = exclude[i] end end
+            params.FilterDescendantsInstances = ex
+            local from = pos + Vector3.new(0, 200, 0)
+            local hit = WS:Raycast(from, Vector3.new(0, -1000, 0), params)
+            return hit and hit.Position or (pos - Vector3.new(0, 3, 0))
+        end
+        local function groundAheadCF()
+            local root = hrp(); if not root then return nil end
+            local forward = root.CFrame.LookVector
+            local ahead   = root.Position + forward * 10 + Vector3.new(0, 40, 0)
+            local params  = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = {lp.Character}
+            local rc = WS:Raycast(ahead, Vector3.new(0, -200, 0), params)
+            local hitPos = rc and rc.Position or (root.Position + forward * 10)
+            local drop   = hitPos + Vector3.new(0, 5, 0)
+            return CFrame.lookAt(drop, drop + forward)
+        end
+        local function pileCF(i, baseCF)
+            local idx0   = i - 1
+            local layer  = math.floor(idx0 / ChestLAYER_SIZE)
+            local inLayer= idx0 % ChestLAYER_SIZE
+            local angle  = (inLayer / ChestLAYER_SIZE) * math.pi * 2
+            local r      = (0.25 + (inLayer % 7) * 0.07) * ChestPILE_RADIUS
+            local x      = math.cos(angle) * r + (math.random() - 0.5) * 0.12
+            local z      = math.sin(angle) * r + (math.random() - 0.5) * 0.12
+            local y      = layer * ChestLAYER_HEIGHT
+            return baseCF * CFrame.new(x, y, z)
+        end
+        local function setPhysicsFree(items)
+            for _,m in ipairs(items) do
+                if m and m.Parent then
+                    setNoCollideModel(m, false)
+                    local mp = mainPart(m)
+                    if mp then
+                        pcall(function() mp:SetNetworkOwner(nil) end)
+                        pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+                        pcall(function() mp.CollisionGroupId = 0 end)
+                    end
+                    for _,p in ipairs(m:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            p.AssemblyLinearVelocity  = Vector3.new()
+                            p.AssemblyAngularVelocity = Vector3.new()
+                            p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
+                            p.Massless   = false
+                        end
+                    end
+                end
+            end
+        end
+        local function unanchorAndDrop(items)
+            local n = #items
+            local i = 1
+            while i <= n do
+                for j = i, math.min(i + ChestUNANCHOR_BATCH - 1, n) do
+                    local m = items[j]
+                    if m and m.Parent then
+                        local mp = mainPart(m)
+                        if mp then
+                            local g = groundBelowLoose(mp.Position, {lp.Character})
+                            local targetY = g.Y + 0.2
+                            local cf = mp.CFrame
+                            local rx,ry,rz = cf:ToOrientation()
+                            local to = CFrame.new(cf.X, targetY, cf.Z) * CFrame.fromOrientation(rx,ry,rz)
+                            if m:IsA("Model") then m:PivotTo(to) else mp.CFrame = to end
+                        end
+                        setAnchoredModel(m, false)
+                        for _,p in ipairs(m:GetDescendants()) do
+                            if p:IsA("BasePart") then
+                                p.AssemblyLinearVelocity  = Vector3.new(0, -ChestNUDGE_DOWN, 0)
+                                p.AssemblyAngularVelocity = Vector3.new()
+                            end
+                        end
+                    end
+                end
+                Run.Heartbeat:Wait()
+                i = i + ChestUNANCHOR_BATCH
+            end
+        end
+        local function chestPlaceDown()
+            local baseCF = groundAheadCF(); if not baseCF then return end
+            chestDisableMicro()
+            placeBtn.Visible = false
+            local n = #chestList
+            local cfs = table.create(n)
+            for i = 1, n do cfs[i] = pileCF(i, baseCF) end
+            local placed = 0
+            for i = 1, n do
+                local m = chestList[i]
+                if m and m.Parent then
+                    startDrag(m)
+                    setAnchoredModel(m, true)
+                    setNoCollideModel(m, true)
+                    pivotModel(m, cfs[i])
+                    stopDrag(m)
+                    placed += 1
+                    if placed % ChestPLACE_BATCH == 0 then Run.Heartbeat:Wait() end
+                end
+            end
+            task.wait(0.03)
+            setPhysicsFree(chestList)
+            unanchorAndDrop(chestList)
+            for k,_ in pairs(chestGathered) do chestGathered[k]=nil end
+            table.clear(chestList)
+        end
+        placeBtn.MouseButton1Click:Connect(chestPlaceDown)
+
+        Chest.Btn.MouseButton1Click:Connect(function()
+            if not Chest.Enabled then return end
+            local l = unopenedList()
+            if #l == 0 then refreshChestBtn(); return end
+            approachChest(l[1].m)
+            chestEndAt = os.clock() + ChestDURATION
+            if not chestGatherOn then chestEnableMicro() end
+            placeBtn.Visible = false
+        end)
+
+        local chestOnToggle = false
+        local function setChestEnabled(state)
+            Chest.Enabled = state
+            chestOnToggle = state
+            Chest.Btn.Visible = state
+            refreshChestBtn()
+            if not state then
+                chestDisableMicro()
+                placeBtn.Visible = false
+                for k,_ in pairs(chestGathered) do chestGathered[k]=nil end
+                table.clear(chestList)
+            end
+        end
+
+        tab:Toggle({
+            Title = "Chest Teleport + 10s Gather",
+            Value = false,
+            Callback = function(state) setChestEnabled(state) end
+        })
+
+        Run.Heartbeat:Connect(function()
+            if Chest.Enabled then
+                if chestGatherOn and os.clock() >= chestEndAt then
+                    chestDisableMicro()
+                    placeBtn.Visible = (#chestList > 0)
+                end
+                for m,r in pairs(Chest.Record) do
+                    if m and m.Parent then
+                        r.pos = chestPos(m) or r.pos
+                        r.opened = chestOpened(m)
+                    end
+                end
+                refreshChestBtn()
+            end
+        end)
         ----------------------------------------------------------------
 
         local noPauseOn, prevPauseMode
@@ -942,9 +1356,6 @@ return function(C, R, UI)
 
         enableNoStreamingPause()
 
-        local function itemsFolder()
-            return WS:FindFirstChild("Items")
-        end
         local function collectSaplingsSnapshot()
             local items = itemsFolder(); if not items then return {} end
             local list = {}
@@ -1051,10 +1462,11 @@ return function(C, R, UI)
             if autoStunOn and not autoStunThread then enableAutoStun() end
             if noShadowsOn and not lightConn then enableNoShadows() end
             if hideBigTreesOn and not hideConn then enableHideBigTrees() end
-            local _ = prevPauseMode
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if loadDefenseOnDefault then enableLoadDefense() end
             if coinOn and not coinConn then enableCoin() end
+            if chestOnToggle then setChestEnabled(true) end
+            hookItemsAdded()
         end)
     end
     local ok, err = pcall(run)
