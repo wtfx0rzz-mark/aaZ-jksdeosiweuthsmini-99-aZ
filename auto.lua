@@ -1,12 +1,13 @@
 return function(C, R, UI)
     local function run()
-        local Players = (C and C.Services and C.Services.Players) or game:GetService("Players")
-        local RS      = (C and C.Services and C.Services.RS)      or game:GetService("ReplicatedStorage")
-        local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
-        local PPS     = game:GetService("ProximityPromptService")
-        local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
-        local UIS     = game:GetService("UserInputService")
-        local Lighting= (C and C.Services and C.Services.Lighting) or game:GetService("Lighting")
+        local Players  = (C and C.Services and C.Services.Players)  or game:GetService("Players")
+        local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
+        local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
+        local PPS      = game:GetService("ProximityPromptService")
+        local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
+        local UIS      = game:GetService("UserInputService")
+        local Lighting = (C and C.Services and C.Services.Lighting) or game:GetService("Lighting")
+        local VIM      = game:GetService("VirtualInputManager")
 
         local lp = Players.LocalPlayer
         local Tabs = (UI and UI.Tabs) or {}
@@ -728,7 +729,7 @@ return function(C, R, UI)
         end
         local function disableNoShadows()
             noShadowsOn = false
-            if lightConn then lightConn:Disconnect(); lightConn = nil end
+            if lightConn then lightConn:Disconnect() lightConn = nil end
             if origGlobalShadows ~= nil then pcall(function() Lighting.GlobalShadows = origGlobalShadows end) end
             for l,orig in pairs(lightOrig) do
                 if l and l.Parent then pcall(function() l.Shadows = orig end) end
@@ -772,6 +773,162 @@ return function(C, R, UI)
             if hideConn then hideConn:Disconnect() hideConn = nil end
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
+
+        ----------------------------------------------------------------
+        -- Auto Collect Coins (radius 10, head-forward origin, wider pitches)
+        ----------------------------------------------------------------
+        local cam = WS.CurrentCamera
+        WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
+
+        local COIN_RADIUS      = 10
+        local COIN_INTERVAL    = 0.12
+        local COIN_TTL         = 1.0
+        local COIN_FORWARD     = 2.0   -- start rays a bit in front of the head
+        local COIN_HEAD_UP     = 0.5   -- raise origin slightly
+
+        local coinSeen = {}
+        local coinConn, coinAcc = nil, 0
+        local coinDirs = {}
+        do
+            local pitches = { -24, -12, 0, 12, 24 }
+            for i = 0, 15 do
+                local yaw = math.rad(i * 22.5)
+                local cy, sy = math.cos(yaw), math.sin(yaw)
+                for _,deg in ipairs(pitches) do
+                    local p = math.rad(deg)
+                    local cp, sp = math.cos(p), math.sin(p)
+                    coinDirs[#coinDirs+1] = Vector3.new(cy*cp, sp, sy*cp).Unit
+                end
+            end
+        end
+
+        local coinParams = RaycastParams.new()
+        coinParams.FilterType = Enum.RaycastFilterType.Exclude
+        coinParams.IgnoreWater = true
+
+        local function getNil(name, class)
+            local ok, arr = pcall(getnilinstances)
+            if not ok or type(arr) ~= "table" then return nil end
+            for _, v in next, arr do
+                if v and v.ClassName == class and v.Name == name then
+                    return v
+                end
+            end
+        end
+
+        local function isMossyName(n)
+            if n == "Mossy Coin" then return true end
+            return n and n:match("^Mossy Coin%d+$") ~= nil
+        end
+
+        local function findCoinStack(inst)
+            local cur = inst
+            for _ = 1, 8 do
+                if not cur then return nil end
+                if cur:IsA("Model") and cur.Name == "Coin Stack" then return cur end
+                if cur:IsA("Model") and isMossyName(cur.Name) and cur.Parent and cur.Parent:IsA("Model") and cur.Parent.Name == "Coin Stack" then
+                    return cur.Parent
+                end
+                cur = cur.Parent
+            end
+            return nil
+        end
+
+        local function triggerPromptOn(model)
+            local p = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if p and p.Enabled then PPS:TriggerPrompt(p); return true end
+            return false
+        end
+
+        local function clickDetectorOn(model)
+            local cd = model:FindFirstChildWhichIsA("ClickDetector", true)
+            if not cd then return false end
+            local pos = (model.PrimaryPart and model.PrimaryPart.Position) or model:GetPivot().Position
+            if not cam then return false end
+            local v2, onScreen = cam:WorldToViewportPoint(pos)
+            if not onScreen then return false end
+            VIM:SendMouseMoveEvent(v2.X, v2.Y, game)
+            VIM:SendMouseButtonEvent(v2.X, v2.Y, 0, true, game, 0)
+            VIM:SendMouseButtonEvent(v2.X, v2.Y, 0, false, game, 0)
+            return true
+        end
+
+        local function tryRemote(stack)
+            local remote = RS:WaitForChild("RemoteEvents"):WaitForChild("RequestCollectCoints")
+            local ok = false
+            do
+                local s, r = pcall(function() return remote:InvokeServer(stack) end)
+                ok = s and (r ~= nil or true)
+                if ok then return true end
+            end
+            do
+                local ghost = getNil("Coin Stack", "Model")
+                if ghost then
+                    local s, r = pcall(function() return remote:InvokeServer(ghost) end)
+                    ok = s and (r ~= nil or true)
+                    if ok then return true end
+                end
+            end
+            do
+                local s, r = pcall(function() return remote:InvokeServer() end)
+                ok = s and (r ~= nil or true)
+            end
+            return ok
+        end
+
+        local coinOn = true
+        local function enableCoin()
+            if coinConn then return end
+            coinOn = true
+            coinAcc = 0
+            coinConn = Run.Heartbeat:Connect(function(dt)
+                coinAcc += dt
+                if coinAcc < COIN_INTERVAL then return end
+                coinAcc = 0
+
+                local root = hrp(); if not root then return end
+                local ch = lp.Character
+                local head = ch and ch:FindFirstChild("Head")
+                local origin = root.Position
+                if head then
+                    origin = head.Position + root.CFrame.LookVector * COIN_FORWARD + Vector3.new(0, COIN_HEAD_UP, 0)
+                end
+                coinParams.FilterDescendantsInstances = { lp.Character }
+
+                local now = os.clock()
+                for i=1,#coinDirs do
+                    local res = WS:Raycast(origin, coinDirs[i] * COIN_RADIUS, coinParams)
+                    if res and res.Instance then
+                        local stack = findCoinStack(res.Instance)
+                        if stack and stack.Parent then
+                            local pos = (stack.PrimaryPart and stack.PrimaryPart.Position) or stack:GetPivot().Position
+                            if (pos - origin).Magnitude <= COIN_RADIUS then
+                                local t = coinSeen[stack]
+                                if not t or now - t > COIN_TTL then
+                                    local done = triggerPromptOn(stack)
+                                    if not done then done = clickDetectorOn(stack) end
+                                    if not done then tryRemote(stack) end
+                                    coinSeen[stack] = now
+                                end
+                            end
+                        end
+                    end
+                end
+                for m, t in pairs(coinSeen) do
+                    if (not m) or (not m.Parent) or now - t > 5 then coinSeen[m] = nil end
+                end
+            end)
+        end
+        local function disableCoin()
+            coinOn = false
+            if coinConn then coinConn:Disconnect(); coinConn = nil end
+            coinSeen = {}
+        end
+
+        -- place the toggle directly under "Hide Big Trees (Local)"
+        tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
+        if coinOn then enableCoin() end
+        ----------------------------------------------------------------
 
         local noPauseOn, prevPauseMode
         local function enableNoStreamingPause()
@@ -897,6 +1054,7 @@ return function(C, R, UI)
             local _ = prevPauseMode
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if loadDefenseOnDefault then enableLoadDefense() end
+            if coinOn and not coinConn then enableCoin() end
         end)
     end
     local ok, err = pcall(run)
