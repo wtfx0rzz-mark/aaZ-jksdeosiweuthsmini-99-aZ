@@ -848,6 +848,52 @@ return function(C, R, UI)
         tab:Button({ Title = "Drop Saplings", Callback = actionDropSaplings })
         tab:Button({ Title = "Plant All Saplings", Callback = actionPlantAllSaplings })
 
+        local bigTreeToggleOn = false
+        local bigTreeLoopAlive = false
+        local BIG_TREE_SET = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
+        local function isBigTreeName(n)
+            if not n then return false end
+            if BIG_TREE_SET[n] then return true end
+            return n:match("^WebbedTreeBig%d*$") ~= nil
+        end
+        local function purgeBigTreesOnce()
+            local root = WS
+            local list = root:GetDescendants()
+            for i=1,#list do
+                local d = list[i]
+                if d and d:IsA("Model") and isBigTreeName(d.Name) then
+                    pcall(function() d:Destroy() end)
+                end
+            end
+        end
+        local function enableBigTreePurge()
+            if bigTreeToggleOn then return end
+            bigTreeToggleOn = true
+            purgeBigTreesOnce()
+            if bigTreeLoopAlive then return end
+            bigTreeLoopAlive = true
+            task.spawn(function()
+                while bigTreeToggleOn do
+                    task.wait(60)
+                    if not bigTreeToggleOn then break end
+                    purgeBigTreesOnce()
+                end
+                bigTreeLoopAlive = false
+            end)
+        end
+        local function disableBigTreePurge()
+            bigTreeToggleOn = false
+        end
+
+        tab:Section({ Title = "World Filters" })
+        tab:Toggle({
+            Title = "Hide Big Trees (Local)",
+            Value = false,
+            Callback = function(on)
+                if on then enableBigTreePurge() else disableBigTreePurge() end
+            end
+        })
+
         local loadDefenseOnDefault = true
         if loadDefenseOnDefault then enableLoadDefense() end
 
@@ -859,6 +905,7 @@ return function(C, R, UI)
             if noShadowsOn and not lightConn then enableNoShadows() end
             enableNoStreamingPause()
             if loadDefenseOnDefault then enableLoadDefense() end
+            if bigTreeToggleOn then task.defer(purgeBigTreesOnce) end
         end)
     end
     local ok, err = pcall(run)
