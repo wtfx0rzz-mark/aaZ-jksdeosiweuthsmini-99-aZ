@@ -776,7 +776,7 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
         ----------------------------------------------------------------
-        -- Auto Collect Coins (radius 10)
+        -- Auto Collect Coins
         ----------------------------------------------------------------
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
@@ -926,7 +926,6 @@ return function(C, R, UI)
             coinSeen = {}
         end
 
-        -- place the toggle directly under "Hide Big Trees (Local)"
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
         ----------------------------------------------------------------
@@ -1039,7 +1038,7 @@ return function(C, R, UI)
         end
 
         ----------------------------------------------------------------
-        -- Find Unopened Chests (Snow Chest excluded) + camera-in-front placement
+        -- Find Unopened Chests (Snow Chest excluded). Hinge-based front placement. No camera locking.
         ----------------------------------------------------------------
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
@@ -1162,67 +1161,54 @@ return function(C, R, UI)
                 return list
             end
 
-            -- Camera helper: briefly focus on chest, then restore safely
-            local function focusCameraOnChest(chestModel, standPos)
-                local camNow = WS.CurrentCamera
-                local mp = mainPart(chestModel); if not (camNow and mp) then return end
-                local chestCenter = mp.Position
-                local camPos = (standPos or chestCenter) + Vector3.new(0, 3, 0)
-
-                local prevType = camNow.CameraType
-                local prevSubject = camNow.CameraSubject
-                local subj = getHumanoid() or hrp()
-
-                local restored = false
-                local function restore()
-                    if restored then return end
-                    restored = true
-                    local c = WS.CurrentCamera
-                    if not c then return end
-                    pcall(function()
-                        c.CameraType = prevType or Enum.CameraType.Custom
-                        if subj and subj.Parent then c.CameraSubject = subj end
-                    end)
+            local function hingeBackCenter(m)
+                local pts = {}
+                for _,d in ipairs(m:GetDescendants()) do
+                    if d.Name == "Hinge" then
+                        if d:IsA("BasePart") then
+                            table.insert(pts, d.Position)
+                        elseif d:IsA("Model") then
+                            local mp = mainPart(d)
+                            if mp then table.insert(pts, mp.Position) end
+                        end
+                    end
                 end
-
-                pcall(function()
-                    camNow.CameraType = Enum.CameraType.Scriptable
-                    camNow.CFrame = CFrame.new(camPos, chestCenter)
-                end)
-
-                -- restore quickly, and add a longer failsafe + any key/mouse
-                task.delay(0.20, restore)
-                task.delay(1.50, restore)
-                local conn
-                conn = UIS.InputBegan:Connect(function()
-                    if conn then conn:Disconnect() conn=nil end
-                    restore()
-                end)
+                if #pts == 0 then return nil end
+                local sum = Vector3.new(0,0,0)
+                for _,p in ipairs(pts) do sum += p end
+                return sum / #pts
             end
 
-            -- Teleport to the side OPPOSITE of where we currently are, face the chest
             local FRONT_DIST = 4.0
             local function teleportNearChest(m)
                 local mp = mainPart(m); if not mp then return end
                 local chestCenter = mp.Position
-                local root = hrp(); if not root then return end
-                local from = root.Position
-                local vec = from - chestCenter
+
+                local hingePos = hingeBackCenter(m)
                 local dir
-                if vec.Magnitude > 0.001 then
-                    -- Opposite side of the player relative to chest
-                    dir = (-vec).Unit
+                if hingePos then
+                    dir = (chestCenter - hingePos)
+                    if dir.Magnitude < 1e-3 then dir = -mp.CFrame.LookVector end
+                    dir = dir.Unit
                 else
-                    -- Fallback: use negative of chest LookVector (opposite of its "front")
-                    dir = (-mp.CFrame.LookVector).Unit
+                    local root = hrp()
+                    if root then
+                        local vec = root.Position - chestCenter
+                        if vec.Magnitude > 0.001 then
+                            dir = (-vec).Unit
+                        else
+                            dir = (-mp.CFrame.LookVector).Unit
+                        end
+                    else
+                        dir = (-mp.CFrame.LookVector).Unit
+                    end
                 end
 
                 local desired = chestCenter + dir * FRONT_DIST
                 local ground = groundBelow(desired)
                 local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
 
-                teleportWithDive(CFrame.new(standPos, chestCenter))
-                focusCameraOnChest(m, standPos)
+                teleportSticky(CFrame.new(standPos, chestCenter), true)
             end
 
             local cfHB, childAdd, childRem
