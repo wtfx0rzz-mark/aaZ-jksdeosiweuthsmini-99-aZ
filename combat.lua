@@ -464,20 +464,21 @@ return function(C, R, UI)
         while true do task.wait(2.0) check() end
     end)
 
-    CombatTab:Slider({
-        Title = "Distance",
-        Value = { Min = 0, Max = 500, Default = C.State.AuraRadius or 100 },
-        Callback = function(v)
-            local nv = v
-            if type(v) == "table" then
-                nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max
-            end
-            nv = tonumber(nv)
-            if nv then
-                C.State.AuraRadius = math.clamp(nv, 0, 500)
-            end
+CombatTab:Slider({
+    Title = "Distance",
+    Value = { Min = 0, Max = 200, Default = 100 },
+    Callback = function(v)
+        local nv = v
+        if type(v) == "table" then
+            nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max
         end
-    })
+        nv = tonumber(nv)
+        if nv then
+            C.State.AuraRadius = math.clamp(nv, 0, 200)
+        end
+    end
+})
+
 
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
 end
