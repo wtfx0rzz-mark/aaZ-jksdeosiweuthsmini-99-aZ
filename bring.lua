@@ -26,7 +26,7 @@ return function(C, R, UI)
 
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
--- tyre is spelled this way intentionally. Do not change spelling
+    -- tyre is spelled this way intentionally. Do not change spelling
     local junkItems    = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -113,6 +113,19 @@ return function(C, R, UI)
             end
         end
         return t
+    end
+
+    local function bboxHeight(m)
+        if m:IsA("Model") then
+            local s = m:GetExtentsSize()
+            return (s and s.Y) or 2
+        end
+        local p = mainPart(m)
+        return (p and p.Size.Y) or 2
+    end
+    local function isBig(m)
+        local n = (m.Name or ""):lower()
+        return n == "oil barrel" or bboxHeight(m) >= 3.2
     end
 
     local function getRemote(...)
@@ -598,9 +611,9 @@ return function(C, R, UI)
             elseif nameSet["Bunny Foot"] and nm == "Bunny Foot" then
             elseif nameSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then
             elseif nameSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then
-            elseif nameSet["Spear"] and l:find("spear",1,true) then
-            elseif nameSet["Sword"] and l:find("sword",1,true) then
-            elseif nameSet["Crossbow"] and l:find("crossbow",1,true) and not hasHumanoid(m) and not l:find("cultist",1,true) then
+            elseif nameSet["Spear"] and l:find("spear",1,true) and not hasHumanoid(m) then
+            elseif nameSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then
+            elseif nameSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then
             elseif nameSet["Blueprint"] and l:find("blueprint",1,true) then
             elseif nameSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then
             elseif nameSet["Tusk"] and l:find("tusk",1,true) then
@@ -647,9 +660,12 @@ return function(C, R, UI)
             model:SetAttribute(JOB_ATTR, tostring(jobId))
         end)
         local mp = mainPart(model); if not mp then return end
-        local riserY = orbPos.Y - 1.0
+        local H = bboxHeight(model)
+
+        local riserY = orbPos.Y - 1.0 + math.clamp(H * 0.45, 0.8, 3.0)
         local lookDir = (Vector3.new(orbPos.X, mp.Position.Y, orbPos.Z) - mp.Position)
         lookDir = (lookDir.Magnitude > 0.001) and lookDir.Unit or Vector3.zAxis
+
         local snap = setCollide(model, false)
         zeroAssembly(model)
         while model and model.Parent do
@@ -668,6 +684,7 @@ return function(C, R, UI)
             task.wait(0.03)
         end
         setCollide(model, true, snap)
+
         local snap2 = setCollide(model, false)
         zeroAssembly(model)
         while model and model.Parent do
@@ -688,19 +705,24 @@ return function(C, R, UI)
             task.wait(0.03)
         end
         setCollide(model, true, snap2)
+
         if model and model.Parent then
             local snap3 = setCollide(model, false)
             zeroAssembly(model)
+            local above = orbPos + Vector3.new(0, math.max(0.5, H * 0.25), 0)
+            setPivot(model, CFrame.new(above))
+            local pm = mainPart(model)
+            if pm then
+                pcall(function() pm.Anchored = false end)
+                pcall(function() pm:SetNetworkOwner(nil) end)
+                pcall(function() if pm.SetNetworkOwnershipAuto then pm:SetNetworkOwnershipAuto() end end)
+            end
             for _,p in ipairs(getAllParts(model)) do
-                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyLinearVelocity  = Vector3.new(0, -50, 0)
                 p.AssemblyAngularVelocity = Vector3.new()
             end
-            setPivot(model, CFrame.new(orbPos))
-            for _,p in ipairs(getAllParts(model)) do
-                p.AssemblyLinearVelocity  = Vector3.new(0, -40, 0)
-                p.AssemblyAngularVelocity = Vector3.new()
-            end
-            setCollide(model, true, snap3)
+            local offSec = isBig(model) and 0.55 or COLLIDE_OFF_SEC
+            task.delay(offSec, function() setCollide(model, true, snap3) end)
             pcall(function()
                 model:SetAttribute(INFLT_ATTR, nil)
                 model:SetAttribute(JOB_ATTR, nil)
@@ -798,10 +820,9 @@ return function(C, R, UI)
         if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
         if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
         if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
-        if selectedSet["Spear"] and l:find("spear",1,true) then return true end
-        if selectedSet["Sword"] and l:find("sword",1,true) then return true end
-        if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not hasHumanoid(m) and not l:find("cultist",1,true) then return true end
-        if selectedSet["Crossbow"] and nm == "Crossbow" then return true end
+        if selectedSet["Spear"] and l:find("spear",1,true) and not hasHumanoid(m) then return true end
+        if selectedSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then return true end
+        if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then return true end
         if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
         if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
         if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
