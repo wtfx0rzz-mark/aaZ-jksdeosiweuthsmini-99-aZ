@@ -107,23 +107,28 @@ return function(C, R, UI)
             local root = hrp(); if not root then return end
             local ch   = lp.Character
             local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
+
             prefetchRing(targetCF)
             requestStreamAt(targetCF)
             waitGameplayResumed(1.0)
+
             local hadNoclip = isNoclipNow()
             local snap
             if not hadNoclip then
                 snap = snapshotCollide()
                 setCollideAll(false)
             end
+
             if ch then pcall(function() ch:PivotTo(targetCF) end) end
             pcall(function() root.CFrame = targetCF end)
             if STICK_CLEAR_VEL then zeroAssembly(root) end
+
             if dropMode then
                 if not hadNoclip then setCollideAll(true, snap) end
                 waitGameplayResumed(1.0)
                 return
             end
+
             local t0 = os.clock()
             while (os.clock() - t0) < STICK_DURATION do
                 if ch then pcall(function() ch:PivotTo(targetCF) end) end
@@ -137,7 +142,10 @@ return function(C, R, UI)
                 if STICK_CLEAR_VEL then zeroAssembly(root) end
                 Run.Heartbeat:Wait()
             end
-            if not hadNoclip then setCollideAll(true, snap) end
+
+            if not hadNoclip then
+                setCollideAll(true, snap)
+            end
             if STICK_CLEAR_VEL then zeroAssembly(root) end
             waitGameplayResumed(1.0)
         end
@@ -182,6 +190,7 @@ return function(C, R, UI)
             prefetchRing(upCF)
             requestStreamAt(upCF)
             waitGameplayResumed(1.0)
+
             local root = hrp(); if not root then return end
             local snap = snapshotCollide()
             setCollideAll(false)
@@ -226,9 +235,11 @@ return function(C, R, UI)
             local items = WS:FindFirstChild("Items");      if items then table.insert(ex, items) end
             local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
             params.FilterDescendantsInstances = ex
+
             local start = pos + Vector3.new(0, 5, 0)
             local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
             if hit then return hit.Position end
+
             hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
             return (hit and hit.Position) or pos
         end
@@ -347,6 +358,7 @@ return function(C, R, UI)
             local ch   = lp.Character
             local head = ch and ch:FindFirstChild("Head")
             if not head then return root.Position end
+
             local castFrom = head.Position + root.CFrame.LookVector * AHEAD_DIST
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
@@ -356,6 +368,7 @@ return function(C, R, UI)
             else
                 params.FilterDescendantsInstances = { lp.Character }
             end
+
             local hit = WS:Raycast(castFrom, Vector3.new(0, -RAY_DEPTH, 0), params)
             return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
         end
@@ -508,8 +521,21 @@ return function(C, R, UI)
             end)
         end
         local function disableGod() godOn = false; if godHB then godHB:Disconnect() godHB = nil end end
+        tab:Toggle({ Title = "Godmode", Value = true, Callback = function(state) if state then enableGod() else disableGod() end end })
+        task.defer(enableGod)
 
-        local godToggle = tab:Toggle({ Title = "Godmode", Value = true, Callback = function(state) if state then enableGod() else disableGod() end end })
+        local infJumpOn, infConn = true, nil
+        local function enableInfJump()
+            infJumpOn = true
+            if infConn then infConn:Disconnect() end
+            infConn = UIS.JumpRequest:Connect(function()
+                local h = getHumanoid()
+                if h then pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end) end
+            end)
+        end
+        local function disableInfJump() infJumpOn = false; if infConn then infConn:Disconnect(); infConn = nil end end
+        tab:Toggle({ Title = "Infinite Jump", Value = true, Callback = function(state) if state then enableInfJump() else disableInfJump() end end })
+        enableInfJump()
 
         local INSTANT_HOLD, TRIGGER_COOLDOWN = 0.2, 0.4
         local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
@@ -563,14 +589,15 @@ return function(C, R, UI)
             if hiddenConn then hiddenConn:Disconnect(); hiddenConn = nil end
             for p,_ in pairs(promptDurations) do restorePrompt(p) end
         end
-
-        local instantToggle = tab:Toggle({ Title = "Instant Interact", Value = true, Callback = function(state) if state then enableInstantInteract() else disableInstantInteract() end end })
+        enableInstantInteract()
+        tab:Toggle({ Title = "Instant Interact", Value = true, Callback = function(state) if state then enableInstantInteract() else disableInstantInteract() end end })
 
         local FLASHLIGHT_PREF = { "Strong Flashlight", "Old Flashlight" }
         local MONSTER_NAMES   = { "Deer", "Ram", "Owl" }
         local STUN_RADIUS     = 24
         local HIT_BURST       = 2
         local OFF_PULSE_EVERY = 1.5
+        local OFF_PULSE_LEN   = 1/90
 
         local autoStunOn, autoStunThread = false, nil
         local lastFlashState, lastFlashName = nil, nil
@@ -673,13 +700,14 @@ return function(C, R, UI)
             autoStunOn = false
         end
 
-        local autoStunToggle = tab:Toggle({
+        tab:Toggle({
             Title = "Auto Stun Monster",
             Value = true,
             Callback = function(state)
                 if state then enableAutoStun() else disableAutoStun() end
             end
         })
+        task.defer(enableAutoStun)
 
         local noShadowsOn, lightConn = false, nil
         local origGlobalShadows = nil
@@ -707,7 +735,7 @@ return function(C, R, UI)
             end
         end
 
-        local noShadowsToggle = tab:Toggle({ Title = "Disable Shadows", Value = false, Callback = function(state) if state then enableNoShadows() else disableNoShadows() end end })
+        tab:Toggle({ Title = "Disable Shadows", Value = false, Callback = function(state) if state then enableNoShadows() else disableNoShadows() end end })
 
         local noPauseOn, prevPauseMode
         local function enableNoStreamingPause()
@@ -718,9 +746,12 @@ return function(C, R, UI)
                 WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled
             end)
         end
+
         enableNoStreamingPause()
 
-        local function itemsFolder() return WS:FindFirstChild("Items") end
+        local function itemsFolder()
+            return WS:FindFirstChild("Items")
+        end
         local function collectSaplingsSnapshot()
             local items = itemsFolder(); if not items then return {} end
             local list = {}
@@ -823,22 +854,11 @@ return function(C, R, UI)
         Players.LocalPlayer.CharacterAdded:Connect(function()
             if edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
             if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
+            if infJumpOn and not infConn then enableInfJump() end
             if autoStunOn and not autoStunThread then enableAutoStun() end
             if noShadowsOn and not lightConn then enableNoShadows() end
             enableNoStreamingPause()
             if loadDefenseOnDefault then enableLoadDefense() end
-        end)
-
-        task.defer(function()
-            if godToggle and godToggle.Set then pcall(function() godToggle:Set(true) end) end
-            if godToggle and godToggle.SetValue then pcall(function() godToggle:SetValue(true) end) end
-            enableGod()
-            if instantToggle and instantToggle.Set then pcall(function() instantToggle:Set(true) end) end
-            if instantToggle and instantToggle.SetValue then pcall(function() instantToggle:SetValue(true) end) end
-            enableInstantInteract()
-            if autoStunToggle and autoStunToggle.Set then pcall(function() autoStunToggle:Set(true) end) end
-            if autoStunToggle and autoStunToggle.SetValue then pcall(function() autoStunToggle:SetValue(true) end) end
-            enableAutoStun()
         end)
     end
     local ok, err = pcall(run)
