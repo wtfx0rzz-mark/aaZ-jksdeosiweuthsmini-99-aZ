@@ -573,6 +573,7 @@ return function(C, R, UI)
 
     local function itemsRootOrNil() return WS:FindFirstChild("Items") end
 
+    -- ONLY CHANGES IN THIS BLOCK: add Flashlight and Forest+Fragment logic; keep Blueprint loose CI.
     local function canPick(m, center, radius, nameSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
         local itemsFolder = itemsRootOrNil()
@@ -617,7 +618,9 @@ return function(C, R, UI)
             elseif nameSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then
             elseif nameSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then
             elseif nameSet["Blueprint"] and l:find("blueprint",1,true) then
+            elseif nameSet["Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then
             elseif nameSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then
+            elseif nameSet["Forest Gem"] and (l:find("forest gem",1,true) or (l:find("forest",1,true) and l:find("fragment",1,true))) then
             elseif nameSet["Tusk"] and l:find("tusk",1,true) then
             else
                 return false
@@ -627,6 +630,7 @@ return function(C, R, UI)
         local mp = mainPart(m); if not mp then return false end
         return (mp.Position - center).Magnitude <= radius
     end
+    -- END CHANGES
 
     local function getCandidates(center, radius, nameSet, jobId)
         local params = OverlapParams.new()
@@ -752,12 +756,14 @@ return function(C, R, UI)
 
     local function itemsRootOrNil2() return WS:FindFirstChild("Items") end
 
+    -- ONLY CHANGES IN THIS BLOCK mirror canPick(): add Flashlight and Forest+Fragment logic.
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil2()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         local nm = m and m.Name or ""
+        local l  = nm:lower()
+
         if selectedSet[nm] then return true end
-        local l = nm:lower()
         if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
         if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then return true end
         if selectedSet["Sapling"] and nm == "Sapling" then return true end
@@ -771,10 +777,13 @@ return function(C, R, UI)
         if selectedSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then return true end
         if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then return true end
         if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
+        if selectedSet["Flashlight"] and l:find("flashlight",1,true) then return true end
         if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
+        if selectedSet["Forest Gem"] and (l:find("forest gem",1,true) or (l:find("forest",1,true) and l:find("fragment",1,true))) then return true end
         if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
         return false
     end
+    -- END CHANGES
 
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
