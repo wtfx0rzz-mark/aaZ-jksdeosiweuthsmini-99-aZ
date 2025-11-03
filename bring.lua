@@ -9,7 +9,7 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    local AMOUNT_TO_BRING       = 500
+    local AMOUNT_TO_BRING       = 1000
     local CONVEYOR_MAX_ACTIVE   = 10
     local PER_ITEM_DELAY        = 1.0
     local COLLIDE_OFF_SEC       = 0.22
@@ -37,7 +37,7 @@ return function(C, R, UI)
     }
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {
-        "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe",
+        "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe","Hammer",
         "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire",
         "Sword"
     }
@@ -236,6 +236,7 @@ return function(C, R, UI)
         end
         return sortedFarthest(out)
     end
+    private = nil
     local function collectCultists(limit)
         local out, n = {}, 0
         local root = itemsRoot(); if not root then return out end
@@ -573,7 +574,6 @@ return function(C, R, UI)
 
     local function itemsRootOrNil() return WS:FindFirstChild("Items") end
 
-    -- ONLY CHANGES IN THIS BLOCK: add Flashlight and Forest+Fragment logic; keep Blueprint loose CI.
     local function canPick(m, center, radius, nameSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
         local itemsFolder = itemsRootOrNil()
@@ -630,7 +630,6 @@ return function(C, R, UI)
         local mp = mainPart(m); if not mp then return false end
         return (mp.Position - center).Magnitude <= radius
     end
-    -- END CHANGES
 
     local function getCandidates(center, radius, nameSet, jobId)
         local params = OverlapParams.new()
@@ -756,7 +755,6 @@ return function(C, R, UI)
 
     local function itemsRootOrNil2() return WS:FindFirstChild("Items") end
 
-    -- ONLY CHANGES IN THIS BLOCK mirror canPick(): add Flashlight and Forest+Fragment logic.
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil2()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
@@ -783,7 +781,6 @@ return function(C, R, UI)
         if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
         return false
     end
-    -- END CHANGES
 
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
