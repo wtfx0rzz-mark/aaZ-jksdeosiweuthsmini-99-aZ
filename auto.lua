@@ -1026,6 +1026,10 @@ return function(C, R, UI)
                 if type(n) ~= "string" then return false end
                 return (n == "Snow Chest") or (n:match("^Snow Chest%d+$") ~= nil)
             end
+            local function isHalloweenChestName(n)
+                if type(n) ~= "string" then return false end
+                return (n == "Halloween Chest") or (n:match("^Halloween Chest%d+$") ~= nil)
+            end
 
             local function chestOpened(m)
                 if not m then return false end
@@ -1047,7 +1051,7 @@ return function(C, R, UI)
                 if not (m and m:IsA("Model")) then return end
                 if not isChestName(m.Name) then return end
                 local pos = chestPos(m); if not pos then return end
-                local excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or false
+                local excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or isHalloweenChestName(m.Name) or false
                 local rec = chests[m]
                 if not rec then
                     chests[m] = { pos = pos, opened = chestOpened(m), excluded = excluded }
@@ -1108,7 +1112,7 @@ return function(C, R, UI)
                 r.pos = chestPos(m) or r.pos
                 r.opened = chestOpened(m)
                 if m and m.Parent then
-                    r.excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or r.excluded or false
+                    r.excluded = EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or isHalloweenChestName(m.Name) or r.excluded or false
                 end
             end
 
@@ -1246,7 +1250,7 @@ return function(C, R, UI)
         do
             local deleteOn = false
             local addConn, remConn
-            local tracked = setmetatable({}, { __mode = "k" }) -- model -> initiallyOpened:boolean
+            local tracked = setmetatable({}, { __mode = "k" })
 
             local function isChestName(n)
                 if type(n) ~= "string" then return false end
