@@ -972,7 +972,7 @@ return function(C, R, UI)
             local plantRF   = getRemote("RequestPlantItem"); if not plantRF then return end
             local pos = computePlantPosFromModel(m); if not pos then return end
             if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
-            task.wait(0.05)
+            task.wait(0.025)
             local ok = pcall(function()
                 if plantRF:IsA("RemoteFunction") then
                     return plantRF:InvokeServer(m, pos)
@@ -990,7 +990,7 @@ return function(C, R, UI)
                     end
                 end)
             end
-            task.wait(0.05)
+            task.wait(0.025)
             if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
         end
         local function actionPlantAllSaplings()
