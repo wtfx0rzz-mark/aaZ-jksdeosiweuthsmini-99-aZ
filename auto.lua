@@ -330,6 +330,9 @@ return function(C, R, UI)
         local lostBtn  = makeEdgeBtn("LostEdge",    "Lost Child", 4)
         local campBtn  = makeEdgeBtn("CampEdge",    "Campfire", 5)
 
+        local showPhaseEdge, showPlantEdge = false, false
+        phaseBtn.Visible = showPhaseEdge
+        plantBtn.Visible = showPlantEdge
         campBtn.Visible = true
 
         phaseBtn.MouseButton1Click:Connect(function()
@@ -368,7 +371,6 @@ return function(C, R, UI)
             local ch   = lp.Character
             local head = ch and ch:FindFirstChild("Head")
             if not head then return root.Position end
-
             local castFrom = head.Position + root.CFrame.LookVector * AHEAD_DIST
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
@@ -378,7 +380,6 @@ return function(C, R, UI)
             else
                 params.FilterDescendantsInstances = { lp.Character }
             end
-
             local hit = WS:Raycast(castFrom, Vector3.new(0, -RAY_DEPTH, 0), params)
             return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
         end
@@ -415,6 +416,23 @@ return function(C, R, UI)
             if stopDrag then pcall(function() stopDrag:FireServer(sapling) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
         end
         plantBtn.MouseButton1Click:Connect(function() plantNearestSaplingInFront() end)
+
+        tab:Toggle({
+            Title = "Edge Button: Phase 10",
+            Value = false,
+            Callback = function(state)
+                showPhaseEdge = state
+                if phaseBtn then phaseBtn.Visible = state end
+            end
+        })
+        tab:Toggle({
+            Title = "Edge Button: Plant Sapling",
+            Value = false,
+            Callback = function(state)
+                showPlantEdge = state
+                if plantBtn then plantBtn.Visible = state end
+            end
+        })
 
         local MAX_TO_SAVE, savedCount = 4, 0
         local autoLostEnabled = true
@@ -621,7 +639,6 @@ return function(C, R, UI)
             end)
             return ok
         end
-
         local function enableAutoStun()
             if autoStunOn then return end
             autoStunOn = true
@@ -728,7 +745,6 @@ return function(C, R, UI)
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
-        -- Auto Collect Coins
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
@@ -943,8 +959,6 @@ return function(C, R, UI)
 
         local PLANT_START_DELAY = 1.0
         local PLANT_Y_EPSILON   = 0.15
-        local PLANT_PER_SEC     = 4  -- planting rate; raise to plant faster
-
         local function computePlantPosFromModel(m)
             local mp = mainPart(m); if not mp then return nil end
             local g  = groundBelow(mp.Position)
@@ -982,15 +996,13 @@ return function(C, R, UI)
         local function actionPlantAllSaplings()
             task.wait(PLANT_START_DELAY)
             local snap = collectSaplingsSnapshot()
-            local interval = (PLANT_PER_SEC and PLANT_PER_SEC > 0) and (1/PLANT_PER_SEC) or 0
             for i=1,#snap do
                 local m = snap[i]
                 if m and m.Parent then plantModelInPlace(m) end
-                if interval > 0 then task.wait(interval) else Run.Heartbeat:Wait() end
+                Run.Heartbeat:Wait()
             end
         end
 
-        -- Find Unopened Chests
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
         tab:Toggle({
@@ -1334,6 +1346,9 @@ return function(C, R, UI)
             local playerGui = lp:WaitForChild("PlayerGui")
             local edgeGui = playerGui:FindFirstChild("EdgeButtons")
             if edgeGui and edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
+            if phaseBtn then phaseBtn.Visible = showPhaseEdge end
+            if plantBtn then plantBtn.Visible = showPlantEdge end
+            if campBtn then campBtn.Visible = true end
             if godOn then if not godHB then enableGod() end task.delay(0.2, fireGod) end
             if infJumpOn and not infConn then enableInfJump() end
             if autoStunOn and not autoStunThread then enableAutoStun() end
