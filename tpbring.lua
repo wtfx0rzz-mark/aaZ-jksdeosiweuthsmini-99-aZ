@@ -10,7 +10,6 @@ return function(C, R, UI)
 
     local lp = C.LocalPlayer or Players.LocalPlayer
 
-    -- === helpers ============================================================
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
@@ -80,13 +79,11 @@ return function(C, R, UI)
         return f and f:FindFirstChild(name) or nil
     end
 
-    -- === small tree detection ==============================================
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
     local function isSmallTreeModel(m)
         return m and m:IsA("Model") and TREE_NAMES[m.Name] == true
     end
 
-    -- === edge buttons host ==================================================
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -141,17 +138,14 @@ return function(C, R, UI)
     local getLogsBtn = makeEdgeBtn("GetLogsEdge", "Get Logs", 20)
     local stopBtn    = makeEdgeBtn("StopLogsEdge", "STOP",     21)
 
-    -- Visibility state driven by main UI button and running state
     local running = false
-    local edgeArmed = false  -- set true by the main UI button, cleared on STOP
-
+    local edgeArmed = false
     local function applyEdgeVisibility()
         getLogsBtn.Visible = (edgeArmed and not running)
         stopBtn.Visible    = running
     end
     applyEdgeVisibility()
 
-    -- === orb ================================================================
     local orb, orbCF
     local function createOrbAtPlayer()
         local root = hrp(); if not root then return end
@@ -171,7 +165,6 @@ return function(C, R, UI)
         orb = p
     end
 
-    -- === tree + log flow ====================================================
     local function nearestSmallTree(origin)
         local best, bestD = nil, math.huge
         for _,d in ipairs(WS:GetDescendants()) do
@@ -262,7 +255,7 @@ return function(C, R, UI)
 
     local function getLogsLoop()
         running = true
-        applyEdgeVisibility() -- hides Get Logs, shows STOP
+        applyEdgeVisibility()
         while running do
             local root = hrp(); if not root then break end
             local tree = nearestSmallTree(root.Position)
@@ -275,11 +268,10 @@ return function(C, R, UI)
             Run.Heartbeat:Wait()
         end
         running = false
-        edgeArmed = false      -- hide Get Logs until main UI button pressed again
-        applyEdgeVisibility()  -- hides STOP and Get Logs
+        edgeArmed = false
+        applyEdgeVisibility()
     end
 
-    -- === edge button wiring =================================================
     getLogsBtn.MouseButton1Click:Connect(function()
         if running then return end
         createOrbAtPlayer()
@@ -287,22 +279,20 @@ return function(C, R, UI)
     end)
     stopBtn.MouseButton1Click:Connect(function()
         running = false
-        -- visibility handled by loop exit
     end)
 
-    -- === main UI button on Auto tab ========================================
-    local AutoTab = UI.Tabs.Auto
-    assert(AutoTab, "get_logs.lua: Auto tab not found")
-    AutoTab:Button({
+    local Tabs = UI and UI.Tabs or {}
+    local tab  = Tabs.Auto
+    assert(tab, "get_logs.lua: Auto tab not found")
+    tab:Button({
         Title = "Get Logs",
         Callback = function()
             if running then return end
             edgeArmed = true
-            applyEdgeVisibility() -- shows side Get Logs button only
+            applyEdgeVisibility()
         end
     })
 
-    -- === respawn handling ===================================================
     Players.LocalPlayer.CharacterAdded:Connect(function()
         local pg = lp:WaitForChild("PlayerGui")
         if edgeGui and edgeGui.Parent ~= pg then edgeGui.Parent = pg end
