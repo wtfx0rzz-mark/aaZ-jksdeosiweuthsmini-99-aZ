@@ -728,9 +728,7 @@ return function(C, R, UI)
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
-        ----------------------------------------------------------------
         -- Auto Collect Coins
-        ----------------------------------------------------------------
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
@@ -945,6 +943,8 @@ return function(C, R, UI)
 
         local PLANT_START_DELAY = 1.0
         local PLANT_Y_EPSILON   = 0.15
+        local PLANT_PER_SEC     = 4  -- planting rate; raise to plant faster
+
         local function computePlantPosFromModel(m)
             local mp = mainPart(m); if not mp then return nil end
             local g  = groundBelow(mp.Position)
@@ -982,16 +982,15 @@ return function(C, R, UI)
         local function actionPlantAllSaplings()
             task.wait(PLANT_START_DELAY)
             local snap = collectSaplingsSnapshot()
+            local interval = (PLANT_PER_SEC and PLANT_PER_SEC > 0) and (1/PLANT_PER_SEC) or 0
             for i=1,#snap do
                 local m = snap[i]
                 if m and m.Parent then plantModelInPlace(m) end
-                Run.Heartbeat:Wait()
+                if interval > 0 then task.wait(interval) else Run.Heartbeat:Wait() end
             end
         end
 
-        ----------------------------------------------------------------
-        -- Find Unopened Chests (Snow Chest excluded). Hinge-based front placement. No camera locking.
-        ----------------------------------------------------------------
+        -- Find Unopened Chests
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
         tab:Toggle({
@@ -1246,7 +1245,6 @@ return function(C, R, UI)
             end
         end
 
-        -- NEW: Delete Chests After Opening (default OFF) — added below Find Unopened Chests
         do
             local deleteOn = false
             local addConn, remConn
@@ -1324,7 +1322,6 @@ return function(C, R, UI)
                 end
             })
         end
-        ----------------------------------------------------------------
 
         tab:Section({ Title = "Saplings" })
         tab:Button({ Title = "Drop Saplings", Callback = actionDropSaplings })
