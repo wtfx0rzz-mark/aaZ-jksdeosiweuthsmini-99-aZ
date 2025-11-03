@@ -728,6 +728,9 @@ return function(C, R, UI)
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
+        ----------------------------------------------------------------
+        -- Auto Collect Coins
+        ----------------------------------------------------------------
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
@@ -986,6 +989,9 @@ return function(C, R, UI)
             end
         end
 
+        ----------------------------------------------------------------
+        -- Find Unopened Chests (Snow Chest excluded). Hinge-based front placement. No camera locking.
+        ----------------------------------------------------------------
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
         tab:Toggle({
@@ -1235,6 +1241,86 @@ return function(C, R, UI)
                 nextChestBtn.Visible = false
             end
         end
+
+        -- NEW: Delete Chests After Opening (default OFF) — added below Find Unopened Chests
+        do
+            local deleteOn = false
+            local addConn, remConn
+            local tracked = setmetatable({}, { __mode = "k" }) -- model -> initiallyOpened:boolean
+
+            local function isChestName(n)
+                if type(n) ~= "string" then return false end
+                return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
+            end
+            local function chestJustOpened(m)
+                if not m then return false end
+                if m:GetAttribute("LocalOpened") == true then return true end
+                for k, v in pairs(m:GetAttributes()) do
+                    if tostring(k):match("Opened$") and v == true then return true end
+                end
+                return false
+            end
+
+            local function watchChest(m)
+                if not (m and m:IsA("Model") and isChestName(m.Name)) then return end
+                if tracked[m] ~= nil then return end
+                tracked[m] = chestJustOpened(m)
+
+                local function tryDelete()
+                    if not deleteOn then return end
+                    if not m or not m.Parent then return end
+                    local wasOpenedAtStart = tracked[m]
+                    if chestJustOpened(m) and (not wasOpenedAtStart) then
+                        task.defer(function()
+                            if m and m.Parent then pcall(function() m:Destroy() end) end
+                        end)
+                    end
+                end
+
+                m:GetAttributeChangedSignal("LocalOpened"):Connect(tryDelete)
+                for k,_ in pairs(m:GetAttributes()) do
+                    if tostring(k):match("Opened$") then
+                        m:GetAttributeChangedSignal(k):Connect(tryDelete)
+                    end
+                end
+                m.AncestryChanged:Connect(function(_, parent)
+                    if not parent then tracked[m] = nil end
+                end)
+            end
+
+            local function scanAll()
+                local items = itemsFolder(); if not items then return end
+                for _,child in ipairs(items:GetChildren()) do
+                    watchChest(child)
+                end
+            end
+
+            local function enableDelete()
+                if deleteOn then return end
+                deleteOn = true
+                scanAll()
+                local items = itemsFolder()
+                if items then
+                    addConn = items.ChildAdded:Connect(watchChest)
+                    remConn = items.ChildRemoved:Connect(function(m) tracked[m] = nil end)
+                end
+            end
+
+            local function disableDelete()
+                deleteOn = false
+                if addConn then addConn:Disconnect(); addConn = nil end
+                if remConn then remConn:Disconnect(); remConn = nil end
+            end
+
+            tab:Toggle({
+                Title = "Delete Chests After Opening",
+                Value = false,
+                Callback = function(state)
+                    if state then enableDelete() else disableDelete() end
+                end
+            })
+        end
+        ----------------------------------------------------------------
 
         tab:Section({ Title = "Saplings" })
         tab:Button({ Title = "Drop Saplings", Callback = actionDropSaplings })
