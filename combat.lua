@@ -240,60 +240,6 @@ return function(C, R, UI)
     end
 
     local lastHitAt = setmetatable({}, {__mode="k"})
-    local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
-        local toolName
-        if isTree and C.State.Toggles.BigTreeAura then
-            local bt = hasBigTreeTool()
-            if bt then
-                toolName = bt
-            else
-                C.State.Toggles.BigTreeAura = false
-            end
-        end
-        if not toolName then
-            for _, n in ipairs(TUNE.ChopPrefer) do
-                if findInInventory(n) then toolName = n break end
-            end
-        end
-        if not toolName then task.wait(0.35) return end
-        local tool = ensureEquipped(toolName)
-        if not tool then task.wait(0.35) return end
-
-        if not isTree then
-            local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
-            for i = 1, cap do
-                local mdl = targetModels[i]
-                local t0 = lastHitAt[mdl] or 0
-                if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
-                    local hitPart = hitPartGetter(mdl)
-                    if hitPart then
-                        local impactCF = hitPart.CFrame
-                        local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
-                        HitTarget(mdl, tool, hitId, impactCF)
-                        lastHitAt[mdl] = tick()
-                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
-                    end
-                end
-            end
-            task.wait(swingDelay)
-            return
-        end
-
-        for _, mdl in ipairs(targetModels) do
-            task.spawn(function()
-                local hitPart = hitPartGetter(mdl)
-                if not hitPart then return end
-                local impactCF = impactCFForTree(mdl, hitPart)
-                local hitId = nextPerTreeHitId(mdl)
-                pcall(function()
-                    local bucket = attrBucket(mdl)
-                    if bucket then bucket:SetAttribute(hitId, true) end
-                end)
-                HitTarget(mdl, tool, hitId, impactCF)
-            end)
-        end
-        task.wait(swingDelay)
-    end
 
     local function modelOf(inst)
         if not inst then return nil end
@@ -330,6 +276,106 @@ return function(C, R, UI)
                 return false
             end
         end
+    end
+
+    -- Character weapon preference and cooldowns
+    local CHAR_WEAPON_PREF = {
+        { "Cultist King Mace", 1.0 },
+        { "Morningstar",       1.0 },
+        { "Obsidiron Hammer",  1.0 },
+        { "Infernal Sword",    0.5 },
+        { "Ice Sword",         0.5 },
+        { "Laser Sword",       0.5 },
+        { "Katana",            0.4 },
+        { "Trident",           0.6 },
+        { "Poison Spear",      0.5 },
+        { "Spear",             0.5 },
+        { "Strong Axe",        nil },
+        { "Chainsaw",          nil },
+        { "Good Axe",          nil },
+        { "Old Axe",           nil },
+    }
+
+    local function selectBestCharWeapon()
+        for _, pair in ipairs(CHAR_WEAPON_PREF) do
+            local name, cd = pair[1], pair[2]
+            if findInInventory(name) then
+                if cd == nil then cd = TUNE.CHOP_SWING_DELAY end
+                return name, cd
+            end
+        end
+        return nil, nil
+    end
+
+    local lastSwingAtByWeapon = {}
+
+    local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
+        local toolName
+        if isTree and C.State.Toggles.BigTreeAura then
+            local bt = hasBigTreeTool()
+            if bt then
+                toolName = bt
+            else
+                C.State.Toggles.BigTreeAura = false
+            end
+        end
+        if not toolName then
+            for _, n in ipairs(TUNE.ChopPrefer) do
+                if findInInventory(n) then toolName = n break end
+            end
+        end
+        if not toolName then task.wait(0.35) return end
+        local tool = ensureEquipped(toolName)
+        if not tool then task.wait(0.35) return end
+
+        if not isTree then
+            local preferredName, weaponCD = selectBestCharWeapon()
+            if preferredName then
+                tool = ensureEquipped(preferredName)
+                if not tool then task.wait(0.35) return end
+                toolName = preferredName
+            end
+            local cd = weaponCD or TUNE.CHOP_SWING_DELAY
+            local now = os.clock()
+            local lastSwing = lastSwingAtByWeapon[toolName] or 0
+            if now - lastSwing < cd then
+                task.wait(math.max(0.01, cd - (now - lastSwing)))
+                now = os.clock()
+            end
+            local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
+            for i = 1, cap do
+                local mdl = targetModels[i]
+                local t0 = lastHitAt[mdl] or 0
+                if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
+                    local hitPart = hitPartGetter(mdl)
+                    if hitPart then
+                        local impactCF = hitPart.CFrame
+                        local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                        HitTarget(mdl, tool, hitId, impactCF)
+                        lastHitAt[mdl] = tick()
+                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                    end
+                end
+            end
+            lastSwingAtByWeapon[toolName] = now
+            task.wait(cd)
+            return
+        end
+
+        for _, mdl in ipairs(targetModels) do
+            task.spawn(function()
+                local hitPart = hitPartGetter(mdl)
+                if not hitPart then return end
+                local impactCF = impactCFForTree(mdl, hitPart)
+                local hitId = nextPerTreeHitId(mdl)
+                pcall(function()
+                    local bucket = attrBucket(mdl)
+                    if bucket then bucket:SetAttribute(hitId, true) end
+                end)
+                HitTarget(mdl, tool, hitId, impactCF)
+            end)
+        end
+        task.wait(swingDelay)
     end
 
     local function startCharacterAura()
@@ -464,21 +510,20 @@ return function(C, R, UI)
         while true do task.wait(2.0) check() end
     end)
 
-CombatTab:Slider({
-    Title = "Distance",
-    Value = { Min = 0, Max = 200, Default = 100 },
-    Callback = function(v)
-        local nv = v
-        if type(v) == "table" then
-            nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max
+    CombatTab:Slider({
+        Title = "Distance",
+        Value = { Min = 0, Max = 200, Default = 100 },
+        Callback = function(v)
+            local nv = v
+            if type(v) == "table" then
+                nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max
+            end
+            nv = tonumber(nv)
+            if nv then
+                C.State.AuraRadius = math.clamp(nv, 0, 200)
+            end
         end
-        nv = tonumber(nv)
-        if nv then
-            C.State.AuraRadius = math.clamp(nv, 0, 200)
-        end
-    end
-})
-
+    })
 
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
 end
