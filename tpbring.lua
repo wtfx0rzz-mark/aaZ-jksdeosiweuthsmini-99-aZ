@@ -1,18 +1,12 @@
+-- File: modules/tpbring.lua
 return function(C, R, UI)
-    local Players = C.Services.Players
-    local WS      = C.Services.WS
-    local RS      = C.Services.RS
-    local Run     = C.Services.Run or game:GetService("RunService")
-    local lp      = Players.LocalPlayer
+    C  = C  or _G.C
+    UI = UI or _G.UI
+    assert(UI and UI.Tabs and UI.Tabs.TPBring, "tpbring.lua: TPBring tab missing")
 
-    local Tabs = UI and UI.Tabs or {}
-    local tab  = Tabs.Bring
-    assert(tab, "TPBring tab not found in UI")
-
-
-    local section = bringTab:Section({ Title = "TP Bring" })
-
-    section:Button({
+    local tab = UI.Tabs.TPBring
+    tab:Section({ Title = "TP Bring" })
+    tab:Button({
         Title = "Get Logs",
         Callback = function() end
     })
