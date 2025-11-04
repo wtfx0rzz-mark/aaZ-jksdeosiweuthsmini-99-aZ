@@ -18,18 +18,36 @@ return function(C, R, UI)
         if not (m and m:IsA("Model")) then return nil end
         return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
     end
-    local function zeroAssembly(root)
-        if not root then return end
-        root.AssemblyLinearVelocity  = Vector3.new()
-        root.AssemblyAngularVelocity = Vector3.new()
+    local function zeroVel(p)
+        if not p then return end
+        p.AssemblyLinearVelocity  = Vector3.new()
+        p.AssemblyAngularVelocity = Vector3.new()
+    end
+    local function setModelCollide(m, on, snap)
+        if not m then return end
+        if on and snap then
+            for part,can in pairs(snap) do
+                if part and part.Parent then part.CanCollide = can end
+            end
+            return
+        end
+        for _,d in ipairs(m:GetDescendants()) do
+            if d:IsA("BasePart") then d.CanCollide = false end
+        end
+    end
+    local function snapCollide(m)
+        local t = {}
+        for _,d in ipairs(m:GetDescendants()) do
+            if d:IsA("BasePart") then t[d] = d.CanCollide end
+        end
+        return t
     end
 
-    local startDrag = nil
-    local stopDrag  = nil
+    local startDrag, stopDrag
     do
         local f = RS:FindFirstChild("RemoteEvents")
-        startDrag = f and f:FindFirstChild("RequestStartDraggingItem")
-        stopDrag  = f and f:FindFirstChild("StopDraggingItem")
+        startDrag = f and f:FindChild("RequestStartDraggingItem") or f and f:FindFirstChild("RequestStartDraggingItem")
+        stopDrag  = f and f:FindChild("StopDraggingItem")         or f and f:FindFirstChild("StopDraggingItem")
     end
 
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
@@ -81,21 +99,26 @@ return function(C, R, UI)
         return b
     end
 
-    local running = false
-    local orbPart = nil
-    local hbConn  = nil
-    local stopBtn = makeEdgeBtn("TpBringStop", "STOP", 50)
+    local STOP_BTN   = makeEdgeBtn("TpBringStop", "STOP", 50)
+    local running    = false
+    local orb        = nil
+    local hb         = nil
 
-    local ORB_OFFSET_AHEAD = 6
-    local ORB_HEIGHT       = 12
-    local CYCLE_INTERVAL   = 0.05
-    local SCAN_RADIUS      = 80
-    local LIFT_OFFSET_Y    = 2.5
+    local ORB_AHEAD      = 6
+    local ORB_HEIGHT     = 12
+    local ORB_SIZE       = 2
+    local SCAN_RADIUS    = 50
+    local STEP_INTERVAL  = 0.05
+    local ARRIVE_DIST    = 2.2
+    local LIFT_OVER_ORB  = 2.5
+    local RESEEN_COOLDWN = 1.0
+
+    local seenAt = setmetatable({}, {__mode="k"})
 
     local function ensureOrb()
-        if orbPart and orbPart.Parent then return orbPart end
+        if orb and orb.Parent then return orb end
         local root = hrp(); if not root then return nil end
-        local pos  = root.Position + root.CFrame.LookVector*ORB_OFFSET_AHEAD + Vector3.new(0, ORB_HEIGHT, 0)
+        local pos  = root.Position + root.CFrame.LookVector*ORB_AHEAD + Vector3.new(0, ORB_HEIGHT, 0)
         local p = Instance.new("Part")
         p.Name = "TP_Orb"
         p.Shape = Enum.PartType.Ball
@@ -105,10 +128,10 @@ return function(C, R, UI)
         p.CanCollide = false
         p.CanTouch = false
         p.CanQuery = false
-        p.Size = Vector3.new(2,2,2)
+        p.Size = Vector3.new(ORB_SIZE, ORB_SIZE, ORB_SIZE)
         p.CFrame = CFrame.new(pos)
         p.Parent = WS
-        orbPart = p
+        orb = p
         return p
     end
     local function orbPos()
@@ -116,11 +139,11 @@ return function(C, R, UI)
         return o and o.Position or nil
     end
     local function destroyOrb()
-        if orbPart then pcall(function() orbPart:Destroy() end) end
-        orbPart = nil
+        if orb then pcall(function() orb:Destroy() end) end
+        orb = nil
     end
 
-    local function isLogModel(m)
+    local function isLog(m)
         if not (m and m:IsA("Model")) then return false end
         local n = tostring(m.Name)
         if n == "Log" or n == "TreeLog" or n == "Wood Log" then return true end
@@ -130,66 +153,87 @@ return function(C, R, UI)
     local function itemsFolder()
         return WS:FindFirstChild("Items")
     end
-    local function nearbyLogs(center, r)
+    local function collectNearbyLogs(center)
         local out = {}
         local items = itemsFolder(); if not (items and center) then return out end
+        local now = os.clock()
         for _,m in ipairs(items:GetChildren()) do
-            if isLogModel(m) then
+            if isLog(m) then
                 local mp = mainPart(m)
-                if mp and (mp.Position - center).Magnitude <= r then
-                    out[#out+1] = m
+                if mp and (mp.Position - center).Magnitude <= SCAN_RADIUS then
+                    local t = seenAt[m]
+                    if not t or (now - t) > RESEEN_COOLDWN then
+                        out[#out+1] = m
+                        seenAt[m] = now
+                    end
                 end
             end
         end
         return out
     end
 
-    local function dragToOrb(m, target)
-        if not (m and m.Parent and target) then return end
+    local function dragOnce(m)
+        local o = orbPos(); if not (m and m.Parent and o) then return end
+        local mp = mainPart(m); if not mp then return end
+
+        local snap = snapCollide(m)
+        setModelCollide(m, false)
+
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
         Run.Heartbeat:Wait()
-        local lift = CFrame.new(target + Vector3.new(0, LIFT_OFFSET_Y, 0))
+
+        local destAbove = CFrame.new(o + Vector3.new(0, LIFT_OVER_ORB, 0))
         pcall(function()
-            if m:IsA("Model") then m:PivotTo(lift)
-            else local p = mainPart(m); if p then p.CFrame = lift end end
+            if m:IsA("Model") then m:PivotTo(destAbove)
+            else local p = mainPart(m); if p then p.CFrame = destAbove end end
         end)
-        local root = hrp(); if root then zeroAssembly(root) end
+
         Run.Heartbeat:Wait()
+
+        local close = (mainPart(m).Position - o).Magnitude <= ARRIVE_DIST
         if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+
+        local p = mainPart(m)
+        if p then zeroVel(p) end
+        setModelCollide(m, true, snap)
+
+        if close then
+            pcall(function()
+                if m:IsA("Model") then m:PivotTo(CFrame.new(o + Vector3.new(0, 0.01, 0)))
+                else local pr = mainPart(m); if pr then pr.CFrame = CFrame.new(o + Vector3.new(0, 0.01, 0)) end end
+            end)
+            local pr = mainPart(m)
+            if pr then zeroVel(pr) end
+        end
     end
 
-    local function cycle()
-        local oPos = orbPos(); if not oPos then return end
+    local function tickCycle()
         local root = hrp(); if not root then return end
-        local logs = nearbyLogs(root.Position, SCAN_RADIUS)
+        ensureOrb()
+        local logs = collectNearbyLogs(root.Position)
         for i=1,#logs do
             if not running then return end
-            local m = logs[i]
-            if m and m.Parent then
-                dragToOrb(m, oPos)
-            end
-            task.wait(CYCLE_INTERVAL)
+            if logs[i] and logs[i].Parent then dragOnce(logs[i]) end
+            task.wait(STEP_INTERVAL)
         end
     end
 
     local function stop()
         running = false
-        if hbConn then hbConn:Disconnect(); hbConn = nil end
-        stopBtn.Visible = false
+        if hb then hb:Disconnect(); hb = nil end
+        STOP_BTN.Visible = false
         destroyOrb()
     end
-
-    stopBtn.MouseButton1Click:Connect(stop)
+    STOP_BTN.MouseButton1Click:Connect(stop)
 
     local function start()
         if running then return end
         running = true
         ensureOrb()
-        stopBtn.Visible = true
-        if hbConn then hbConn:Disconnect() end
-        hbConn = Run.Heartbeat:Connect(function()
-            if not running then return end
-            cycle()
+        STOP_BTN.Visible = true
+        if hb then hb:Disconnect() end
+        hb = Run.Heartbeat:Connect(function()
+            if running then tickCycle() end
         end)
     end
 
@@ -202,7 +246,9 @@ return function(C, R, UI)
     })
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
-        if stopBtn and running then stopBtn.Visible = true end
-        if running then ensureOrb() end
+        if running then
+            ensureOrb()
+            STOP_BTN.Visible = true
+        end
     end)
 end
