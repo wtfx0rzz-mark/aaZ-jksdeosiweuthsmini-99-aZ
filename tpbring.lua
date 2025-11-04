@@ -1,4 +1,3 @@
--- File: modules/tpbring.lua
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
