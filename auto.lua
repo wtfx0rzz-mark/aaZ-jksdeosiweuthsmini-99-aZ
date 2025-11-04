@@ -748,7 +748,7 @@ return function(C, R, UI)
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
-        local COIN_RADIUS      = 10
+        local COIN_RADIUS      = 20
         local COIN_INTERVAL    = 0.12
         local COIN_TTL         = 1.0
         local COIN_FORWARD     = 2.0
@@ -789,14 +789,26 @@ return function(C, R, UI)
             return n and n:match("^Mossy Coin%d+$") ~= nil
         end
 
-        local function findCoinStack(inst)
+        local function findCoinCarrier(inst)
             local cur = inst
             for _ = 1, 8 do
-                if not cur then return nil end
+                if not cur then break end
                 if cur:IsA("Model") and cur.Name == "Coin Stack" then return cur end
                 if cur:IsA("Model") and isMossyName(cur.Name) and cur.Parent and cur.Parent:IsA("Model") and cur.Parent.Name == "Coin Stack" then
                     return cur.Parent
                 end
+                cur = cur.Parent
+            end
+            return nil
+        end
+
+        local function findMossyOrStack(inst)
+            local stack = findCoinCarrier(inst)
+            if stack then return stack end
+            local cur = inst
+            for _ = 1, 8 do
+                if not cur then break end
+                if cur:IsA("Model") and isMossyName(cur.Name) then return cur end
                 cur = cur.Parent
             end
             return nil
@@ -821,13 +833,21 @@ return function(C, R, UI)
             return true
         end
 
-        local function tryRemote(stack)
+        local function tryRemote(targetModel)
             local remote = RS:WaitForChild("RemoteEvents"):WaitForChild("RequestCollectCoints")
             local ok = false
             do
-                local s, r = pcall(function() return remote:InvokeServer(stack) end)
+                local s, r = pcall(function() return remote:InvokeServer(targetModel) end)
                 ok = s and (r ~= nil or true)
                 if ok then return true end
+            end
+            do
+                local stack = findCoinCarrier(targetModel)
+                if stack then
+                    local s, r = pcall(function() return remote:InvokeServer(stack) end)
+                    ok = s and (r ~= nil or true)
+                    if ok then return true end
+                end
             end
             do
                 local ghost = getNil("Coin Stack", "Model")
@@ -867,16 +887,16 @@ return function(C, R, UI)
                 for i=1,#coinDirs do
                     local res = WS:Raycast(origin, coinDirs[i] * COIN_RADIUS, coinParams)
                     if res and res.Instance then
-                        local stack = findCoinStack(res.Instance)
-                        if stack and stack.Parent then
-                            local pos = (stack.PrimaryPart and stack.PrimaryPart.Position) or stack:GetPivot().Position
+                        local target = findMossyOrStack(res.Instance)
+                        if target and target.Parent then
+                            local pos = (target.PrimaryPart and target.PrimaryPart.Position) or target:GetPivot().Position
                             if (pos - origin).Magnitude <= COIN_RADIUS then
-                                local t = coinSeen[stack]
+                                local t = coinSeen[target]
                                 if not t or now - t > COIN_TTL then
-                                    local done = triggerPromptOn(stack)
-                                    if not done then done = clickDetectorOn(stack) end
-                                    if not done then tryRemote(stack) end
-                                    coinSeen[stack] = now
+                                    local done = triggerPromptOn(target)
+                                    if not done then done = clickDetectorOn(target) end
+                                    if not done then tryRemote(target) end
+                                    coinSeen[target] = now
                                 end
                             end
                         end
@@ -1037,6 +1057,7 @@ return function(C, R, UI)
                 if type(n) ~= "string" then return false end
                 return (n == "Snow Chest") or (n:match("^Snow Chest%d+$") ~= nil)
             end
+            private_isHalloweenChestName = nil
             local function isHalloweenChestName(n)
                 if type(n) ~= "string" then return false end
                 return (n == "Halloween Chest") or (n:match("^Halloween Chest%d+$") ~= nil)
@@ -1262,6 +1283,11 @@ return function(C, R, UI)
             local addConn, remConn
             local tracked = setmetatable({}, { __mode = "k" })
 
+            local DIAMOND_PAIR_DIST   = 9.8
+            local DIAMOND_PAIR_TOL    = 2.0
+
+            local deleteExcl = setmetatable({}, { __mode = "k" })
+
             local function isChestName(n)
                 if type(n) ~= "string" then return false end
                 return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
@@ -1274,6 +1300,45 @@ return function(C, R, UI)
                 end
                 return false
             end
+            local function chestPos(m)
+                local mp = mainPart(m)
+                if mp then return mp.Position end
+                local ok, cf = pcall(function() return m:GetPivot() end)
+                return ok and cf.Position or nil
+            end
+            local function locateDiamondAndNeighbor()
+                deleteExcl = setmetatable({}, { __mode = "k" })
+                local items = itemsFolder(); if not items then return end
+                local diamond, dpos = nil, nil
+                local chests = {}
+                for _,m in ipairs(items:GetChildren()) do
+                    if m:IsA("Model") and isChestName(m.Name) then
+                        chests[#chests+1] = m
+                        if m.Name == "Stronghold Diamond Chest" then
+                            diamond = m
+                            dpos = chestPos(m)
+                        end
+                    end
+                end
+                if not (diamond and dpos) then return end
+                deleteExcl[diamond] = true
+                local bestM, bestD = nil, math.huge
+                for _,m in ipairs(chests) do
+                    if m ~= diamond then
+                        local p = chestPos(m)
+                        if p then
+                            local dist = (p - dpos).Magnitude
+                            if math.abs(dist - DIAMOND_PAIR_DIST) <= DIAMOND_PAIR_TOL then
+                                deleteExcl[m] = true
+                            end
+                            if dist < bestD then bestD, bestM = dist, m end
+                        end
+                    end
+                end
+                if not next(deleteExcl) and bestM then
+                    deleteExcl[bestM] = true
+                end
+            end
 
             local function watchChest(m)
                 if not (m and m:IsA("Model") and isChestName(m.Name)) then return end
@@ -1283,6 +1348,7 @@ return function(C, R, UI)
                 local function tryDelete()
                     if not deleteOn then return end
                     if not m or not m.Parent then return end
+                    if deleteExcl[m] then return end
                     local wasOpenedAtStart = tracked[m]
                     if chestJustOpened(m) and (not wasOpenedAtStart) then
                         task.defer(function()
@@ -1312,18 +1378,31 @@ return function(C, R, UI)
             local function enableDelete()
                 if deleteOn then return end
                 deleteOn = true
+                locateDiamondAndNeighbor()
                 scanAll()
                 local items = itemsFolder()
                 if items then
-                    addConn = items.ChildAdded:Connect(watchChest)
-                    remConn = items.ChildRemoved:Connect(function(m) tracked[m] = nil end)
+                    addConn = items.ChildAdded:Connect(function(m)
+                        if m and m:IsA("Model") then
+                            if m.Name == "Stronghold Diamond Chest" or isChestName(m.Name) then
+                                locateDiamondAndNeighbor()
+                            end
+                        end
+                        watchChest(m)
+                    end)
+                    remConn = items.ChildRemoved:Connect(function(m)
+                        tracked[m] = nil
+                        if m and (m.Name == "Stronghold Diamond Chest" or isChestName(m.Name)) then
+                            task.delay(0, locateDiamondAndNeighbor)
+                        end
+                    end)
                 end
             end
 
             local function disableDelete()
                 deleteOn = false
-                if addConn then addConn:Disconnect(); addConn = nil end
-                if remConn then remConn:Disconnect(); remConn = nil end
+                if addConn then addConn:Disconnect() addConn = nil end
+                if remConn then remConn:Disconnect() remConn = nil end
             end
 
             tab:Toggle({
@@ -1336,8 +1415,8 @@ return function(C, R, UI)
         end
 
         tab:Section({ Title = "Saplings" })
-        tab:Button({ Title = "Drop Saplings", Callback = actionDropSaplings })
-        tab:Button({ Title = "Plant All Saplings", Callback = actionPlantAllSaplings })
+        tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
+        tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
 
         local loadDefenseOnDefault = true
         if loadDefenseOnDefault then enableLoadDefenseSafe() end
