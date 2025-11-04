@@ -18,7 +18,7 @@ return function(C, R, UI)
         if not (m and m:IsA("Model")) then return nil end
         return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
     end
-    local function getAllParts(m)
+    local function allParts(m)
         local t = {}
         if not m then return t end
         for _,d in ipairs(m:GetDescendants()) do
@@ -26,31 +26,29 @@ return function(C, R, UI)
         end
         return t
     end
-    local function bboxHeight(m)
-        if m and m:IsA("Model") then
-            local s = m:GetExtentsSize()
-            return s.Y
-        end
-        local p = mainPart(m)
-        return p and p.Size.Y or 2
+    local function setPivot(m, cf)
+        if m:IsA("Model") then m:PivotTo(cf) else local p=mainPart(m); if p then p.CFrame = cf end end
     end
     local function zeroAssembly(m)
-        for _,p in ipairs(getAllParts(m)) do
+        for _,p in ipairs(allParts(m)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
         end
     end
-    local function setCollide(m, on, snap)
-        if on and snap then
-            for part,can in pairs(snap) do if part and part.Parent then part.CanCollide = can end end
-            return
-        end
+    local function snapshotCollide(m)
         local s = {}
-        for _,p in ipairs(getAllParts(m)) do s[p]=p.CanCollide; p.CanCollide=false end
+        for _,p in ipairs(allParts(m)) do s[p] = p.CanCollide end
         return s
     end
-    local function setPivot(m, cf)
-        if m:IsA("Model") then m:PivotTo(cf) else local p=mainPart(m); if p then p.CFrame = cf end end
+    local function setCollideFromSnapshot(snap)
+        for part,can in pairs(snap or {}) do
+            if part and part.Parent then part.CanCollide = can end
+        end
+    end
+    local function setNoCollide(m)
+        local s = {}
+        for _,p in ipairs(allParts(m)) do s[p]=p.CanCollide; p.CanCollide=false end
+        return s
     end
 
     local startDrag, stopDrag = nil, nil
@@ -113,74 +111,54 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local ORB_OFFSET_Y        = 12
-    local ORB_AHEAD           = 4
+    -- Controls how fast logs travel toward the orb (studs per second).
+    local DRAG_SPEED = 28
+
     local PICK_RADIUS         = 50
-    local CONVEYOR_MAX_ACTIVE = 10
-    local START_STAGGER       = 0.15
-    local STEP_WAIT           = 0.03
-    local DRAG_SPEED          = 18
-    local VERTICAL_MULT       = 1.35
-    local ORB_JITTER_CLEAR    = 0.25
+    local ORB_HEIGHT          = 20
+    local MAX_CONCURRENT      = 12
+    local START_STAGGER       = 0.05
+    local STEP_WAIT           = 0.02
+    local VERTICAL_MULT       = 1.4
+    local ARRIVAL_DROP_OFFSET = 1.0
+    local INFLT_ATTR          = "OrbInFlightAt"
+    local JOB_ATTR            = "OrbJob"
 
-    local INFLT_ATTR = "OrbInFlightAt"
-    local JOB_ATTR   = "OrbJob"
-    local DELIVER_ATTR = "DeliveredAtOrb"
+    local running   = false
+    local hb        = nil
+    local orb       = nil
+    local orbPosVec = nil
 
-    local running  = false
-    local hb       = nil
-    local orb      = nil
+    local inflight = {}  -- [Model] = {snap=..., job=..., conn=...}
 
-    local function ensureOrb()
-        if orb and orb.Parent then return orb end
+    local function spawnOrbAt(pos)
+        if orb then pcall(function() orb:Destroy() end) end
         local o = Instance.new("Part")
-        o.Name = "tp_orb"
+        o.Name = "tp_orb_fixed"
         o.Shape = Enum.PartType.Ball
         o.Size = Vector3.new(1.5,1.5,1.5)
         o.Material = Enum.Material.Neon
         o.Color = Color3.fromRGB(80,180,255)
         o.Anchored, o.CanCollide, o.CanTouch, o.CanQuery = true,false,false,false
+        o.CFrame = CFrame.new(pos + Vector3.new(0, ORB_HEIGHT, 0))
         o.Parent = WS
         local l = Instance.new("PointLight"); l.Range = 16; l.Brightness = 2.5; l.Parent = o
         orb = o
-        return o
+        orbPosVec = orb.Position
     end
-    local function updateOrb()
-        local o = ensureOrb(); local r = hrp(); if not (o and r) then return end
-        local pos = r.Position + r.CFrame.LookVector*ORB_AHEAD + Vector3.new(0, ORB_OFFSET_Y, 0)
-        o.CFrame = CFrame.new(pos)
+    local function destroyOrb()
+        if orb then pcall(function() orb:Destroy() end) orb=nil end
+        orbPosVec = nil
     end
-    local function orbPos()
-        return (orb and orb.Parent) and orb.Position or nil
-    end
-    local function destroyOrb() if orb then pcall(function() orb:Destroy() end) orb=nil end end
 
     local function itemsRoot() return WS:FindFirstChild("Items") end
-    local function isLog(m)
+    local function isLogModel(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or "")
         return n=="Log" or n=="TreeLog" or n=="Wood Log" or (n:match("^Log%d+$") ~= nil)
     end
-    local function canPick(m, center, radius, jobId)
-        if not (m and m.Parent and m:IsA("Model")) then return false end
-        if not isLog(m) then return false end
-        local mp = mainPart(m); if not mp then return false end
-        local del = m:GetAttribute(DELIVER_ATTR)
-        if del and tostring(del) == tostring(jobId) then return false end
-        local tIn = m:GetAttribute(INFLT_ATTR)
-        local jIn = m:GetAttribute(JOB_ATTR)
-        if tIn then
-            if jIn and tostring(jIn) ~= tostring(jobId) then
-                if os.clock() - tIn < 6.0 then return false else pcall(function() m:SetAttribute(INFLT_ATTR,nil) m:SetAttribute(JOB_ATTR,nil) end) end
-            elseif os.clock() - tIn < 6.0 then
-                return false
-            else
-                pcall(function() m:SetAttribute(INFLT_ATTR,nil) m:SetAttribute(JOB_ATTR,nil) end)
-            end
-        end
-        return (mp.Position - center).Magnitude <= radius
-    end
-    local function getCandidates(center, radius, jobId)
+
+    local function nearbyCandidates(center, radius, jobId)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
@@ -188,134 +166,152 @@ return function(C, R, UI)
         local uniq, out = {}, {}
         for _,p in ipairs(parts) do
             local m = p:FindFirstAncestorOfClass("Model")
-            if m and not uniq[m] and canPick(m, center, radius, jobId) then uniq[m]=true; out[#out+1]=m end
+            if m and not uniq[m] and isLogModel(m) and m.Parent and not inflight[m] then
+                local tIn = m:GetAttribute(INFLT_ATTR)
+                local jIn = m:GetAttribute(JOB_ATTR)
+                if tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < 6.0 then
+                    -- skip; owned by another job recently
+                else
+                    uniq[m]=true; out[#out+1]=m
+                end
+            end
         end
         return out
     end
 
-    local function moveVerticalToY(m, targetY, lookDir, keepNoCollide)
-        local snap = keepNoCollide and nil or setCollide(m, false)
+    local function dropClean(m, dest)
+        if not m or not m.Parent then return end
         zeroAssembly(m)
-        while running and m and m.Parent do
-            local pivot = m:IsA("Model") and m:GetPivot() or (mainPart(m) and mainPart(m).CFrame)
-            if not pivot then break end
-            local pos = pivot.Position
-            local dy = targetY - pos.Y
-            if math.abs(dy) <= 0.4 then break end
-            local stepY = math.sign(dy) * math.min(DRAG_SPEED * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
-            local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
-            setPivot(m, CFrame.new(newPos, newPos + (lookDir or Vector3.zAxis)))
-            zeroAssembly(m)
-            task.wait(STEP_WAIT)
-        end
-        if not keepNoCollide then setCollide(m, true, snap) end
-    end
-    local function moveHorizontalToXZ(m, destXZ, yFixed, keepNoCollide)
-        local snap = keepNoCollide and nil or setCollide(m, false)
-        zeroAssembly(m)
-        while running and m and m.Parent do
-            local pivot = m:IsA("Model") and m:GetPivot() or (mainPart(m) and mainPart(m).CFrame)
-            if not pivot then break end
-            local pos = pivot.Position
-            local delta = Vector3.new(destXZ.X - pos.X, 0, destXZ.Z - pos.Z)
-            local dist = delta.Magnitude
-            if dist <= 1.0 then break end
-            local step = math.min(DRAG_SPEED * STEP_WAIT, dist)
-            local dir = delta.Unit
-            local newPos = Vector3.new(pos.X, yFixed or pos.Y, pos.Z) + dir * step
-            setPivot(m, CFrame.new(newPos, newPos + dir))
-            zeroAssembly(m)
-            task.wait(STEP_WAIT)
-        end
-        if not keepNoCollide then setCollide(m, true, snap) end
-    end
-    local function dropFromOrbClean(m, oPos, jobId, origSnap, H)
-        zeroAssembly(m)
-        local above = oPos + Vector3.new(0, math.max(0.5, H * 0.25), 0)
-        setPivot(m, CFrame.new(above))
-        for _,p in ipairs(getAllParts(m)) do
+        setPivot(m, CFrame.new(dest + Vector3.new(0, ARRIVAL_DROP_OFFSET, 0)))
+        for _,p in ipairs(allParts(m)) do
             p.Anchored = false
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
             pcall(function() p:SetNetworkOwner(nil) end)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
-        setCollide(m, true, origSnap)
-        pcall(function()
-            m:SetAttribute(INFLT_ATTR, nil)
-            m:SetAttribute(JOB_ATTR, nil)
-            m:SetAttribute(DELIVER_ATTR, tostring(jobId))
-        end)
-        task.delay(ORB_JITTER_CLEAR, function()
-            if m and m.Parent then zeroAssembly(m) end
-        end)
-    end
-
-    local function startConveyor(m, oPos, jobId)
-        if not running or not m or not m.Parent or not oPos then return end
-        pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) m:SetAttribute(JOB_ATTR, tostring(jobId)) end)
-        local mp = mainPart(m); if not mp then return end
-        local H = bboxHeight(m)
-        local riserY = oPos.Y - 1.0 + math.clamp(H * 0.45, 0.8, 3.0)
-        local lookDir = (Vector3.new(oPos.X, mp.Position.Y, oPos.Z) - mp.Position)
-        lookDir = (lookDir.Magnitude > 0.001) and lookDir.Unit or Vector3.zAxis
-
-        local snapOrig = setCollide(m, false)
         zeroAssembly(m)
-
-        if startDrag then pcall(function() startDrag:FireServer(m) end) end
-        moveVerticalToY(m, riserY, lookDir, true)
-        moveHorizontalToXZ(m, Vector3.new(oPos.X, 0, oPos.Z), riserY, true)
-        if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
-
-        dropFromOrbClean(m, oPos, jobId, snapOrig, H)
     end
 
-    local function runConveyorWave(centerPos, oPos, jobId)
-        local picked = getCandidates(centerPos, PICK_RADIUS, jobId)
-        if #picked == 0 then return 0 end
-        local active = 0
-        local function spawnOne(m)
-            if not running then return end
-            if m and m.Parent then
-                active += 1
+    local function restoreModelState(m)
+        local rec = inflight[m]; if not rec then return end
+        if rec.conn then rec.conn:Disconnect() end
+        if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+        setCollideFromSnapshot(rec.snap)
+        pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
+        inflight[m] = nil
+    end
+
+    local function startConveyor(m, jobId)
+        if not (running and m and m.Parent and orbPosVec) then return end
+        local mp = mainPart(m); if not mp then return end
+
+        pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
+        pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
+
+        local snap = setNoCollide(m)
+        zeroAssembly(m)
+        if startDrag then pcall(function() startDrag:FireServer(m) end) end
+
+        local rec = { snap = snap, job = jobId, conn = nil }
+        inflight[m] = rec
+
+        rec.conn = Run.Heartbeat:Connect(function(dt)
+            if not (running and m and m.Parent and orbPosVec) then
+                restoreModelState(m)
+                return
+            end
+            local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
+            if not pivot then
+                restoreModelState(m)
+                return
+            end
+
+            local pos = pivot.Position
+            local delta = orbPosVec - pos
+            local dist = delta.Magnitude
+            if dist <= 1.0 then
+                if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+                dropClean(m, orbPosVec)
+                setCollideFromSnapshot(snap)
+                pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
+                if rec.conn then rec.conn:Disconnect() end
+                inflight[m] = nil
+                return
+            end
+
+            local step = math.min(DRAG_SPEED * dt, dist)
+            local dir = (dist > 0.001) and delta.Unit or Vector3.new()
+            local newPos = pos + dir * step
+
+            -- vertical bias for smoother flight
+            newPos = Vector3.new(newPos.X, pos.Y + dir.Y * (DRAG_SPEED * VERTICAL_MULT * dt), newPos.Z)
+
+            setPivot(m, CFrame.new(newPos, newPos + dir))
+            zeroAssembly(m)
+        end)
+    end
+
+    local activeCount = 0
+    local function wave(center)
+        local jobId = tostring(os.clock())
+        local list = nearbyCandidates(center, PICK_RADIUS, jobId)
+        for i=1,#list do
+            if not running then break end
+            while running and activeCount >= MAX_CONCURRENT do Run.Heartbeat:Wait() end
+            local m = list[i]
+            if m and m.Parent and not inflight[m] then
+                activeCount += 1
                 task.spawn(function()
-                    startConveyor(m, oPos, jobId)
-                    active -= 1
+                    startConveyor(m, jobId)
+                    -- activeCount will decrement when the HB loop finishes, but add a safety timer:
+                    task.delay(8, function()
+                        if inflight[m] then activeCount = math.max(0, activeCount-1) end
+                    end)
+                    -- If completed earlier, decrement now:
+                    local t0 = os.clock()
+                    while running and inflight[m] and os.clock() - t0 < 8 do Run.Heartbeat:Wait() end
+                    if not inflight[m] then activeCount = math.max(0, activeCount-1) end
                 end)
+                task.wait(START_STAGGER)
             end
         end
-        for i=1,#picked do
-            if not running then break end
-            while running and active >= CONVEYOR_MAX_ACTIVE do Run.Heartbeat:Wait() end
-            spawnOne(picked[i])
-            task.wait(START_STAGGER)
-        end
-        local deadline = os.clock() + math.max(5, START_STAGGER * #picked + 5)
-        while running and active > 0 and os.clock() < deadline do Run.Heartbeat:Wait() end
-        return #picked
     end
 
     local function stopAll()
         running = false
         if hb then hb:Disconnect(); hb=nil end
         STOP_BTN.Visible = false
+        for m,_ in pairs(inflight) do
+            if m and m.Parent then
+                -- release safely at current position and restore colliders
+                local rec = inflight[m]
+                if rec and rec.conn then rec.conn:Disconnect() end
+                if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+                setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
+                dropClean(m, (mainPart(m) and mainPart(m).Position) or Vector3.new())
+                pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
+                inflight[m] = nil
+            end
+        end
+        activeCount = 0
         destroyOrb()
     end
+
     STOP_BTN.MouseButton1Click:Connect(stopAll)
 
     local function startAll()
         if running then return end
+        local r = hrp(); if not r then return end
+        spawnOrbAt(r.Position)
         running = true
         STOP_BTN.Visible = true
+
         if hb then hb:Disconnect() end
         hb = Run.Heartbeat:Connect(function()
             if not running then return end
-            local r = hrp(); if not r then return end
-            updateOrb()
-            local oP = orbPos(); if not oP then return end
-            local jobId = ("%d-%d"):format(os.time(), math.random(1,1e6))
-            runConveyorWave(r.Position, oP, jobId)
+            local root = hrp(); if not root then return end
+            wave(root.Position)
         end)
     end
 
@@ -328,9 +324,10 @@ return function(C, R, UI)
     })
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
-        if running then
-            ensureOrb()
-            STOP_BTN.Visible = true
+        if running and orb and not orb.Parent then
+            destroyOrb()
+            local r = hrp()
+            if r then spawnOrbAt(r.Position) end
         end
     end)
 end
