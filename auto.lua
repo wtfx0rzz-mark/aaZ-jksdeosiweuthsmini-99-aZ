@@ -118,28 +118,23 @@ return function(C, R, UI)
             local root = hrp(); if not root then return end
             local ch   = lp.Character
             local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
-
             prefetchRing(targetCF)
             requestStreamAt(targetCF)
             waitGameplayResumed(1.0)
-
             local hadNoclip = isNoclipNow()
             local snap
             if not hadNoclip then
                 snap = snapshotCollide()
                 setCollideAll(false)
             end
-
             if ch then pcall(function() ch:PivotTo(targetCF) end) end
             pcall(function() root.CFrame = targetCF end)
             if STICK_CLEAR_VEL then zeroAssembly(root) end
-
             if dropMode then
                 if not hadNoclip then setCollideAll(true, snap) end
                 waitGameplayResumed(1.0)
                 return
             end
-
             local t0 = os.clock()
             while (os.clock() - t0) < STICK_DURATION do
                 if ch then pcall(function() ch:PivotTo(targetCF) end) end
@@ -153,7 +148,6 @@ return function(C, R, UI)
                 if STICK_CLEAR_VEL then zeroAssembly(root) end
                 Run.Heartbeat:Wait()
             end
-
             if not hadNoclip then
                 setCollideAll(true, snap)
             end
@@ -245,11 +239,9 @@ return function(C, R, UI)
             local items = WS:FindFirstChild("Items");      if items then table.insert(ex, items) end
             local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
             params.FilterDescendantsInstances = ex
-
             local start = pos + Vector3.new(0, 5, 0)
             local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
             if hit then return hit.Position end
-
             hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
             return (hit and hit.Position) or pos
         end
@@ -1063,6 +1055,7 @@ return function(C, R, UI)
                 return (n == "Halloween Chest") or (n:match("^Halloween Chest%d+$") ~= nil)
             end
 
+            private_chestOpened = nil
             local function chestOpened(m)
                 if not m then return false end
                 local attrs = m:GetAttributes()
@@ -1187,7 +1180,6 @@ return function(C, R, UI)
             local function teleportNearChest(m)
                 local mp = mainPart(m); if not mp then return end
                 local chestCenter = mp.Position
-
                 local hingePos = hingeBackCenter(m)
                 local dir
                 if hingePos then
@@ -1207,11 +1199,9 @@ return function(C, R, UI)
                         dir = (-mp.CFrame.LookVector).Unit
                     end
                 end
-
                 local desired = chestCenter + dir * FRONT_DIST
                 local ground = groundBelow(desired)
                 local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
-
                 teleportSticky(CFrame.new(standPos, chestCenter), true)
             end
 
@@ -1280,7 +1270,7 @@ return function(C, R, UI)
 
         do
             local deleteOn = false
-            local addConn, remConn
+            local addConn, remConn, delHB
             local tracked = setmetatable({}, { __mode = "k" })
 
             local DIAMOND_PAIR_DIST   = 9.8
@@ -1344,23 +1334,10 @@ return function(C, R, UI)
                 if not (m and m:IsA("Model") and isChestName(m.Name)) then return end
                 if tracked[m] ~= nil then return end
                 tracked[m] = chestJustOpened(m)
-
-                local function tryDelete()
-                    if not deleteOn then return end
-                    if not m or not m.Parent then return end
-                    if deleteExcl[m] then return end
-                    local wasOpenedAtStart = tracked[m]
-                    if chestJustOpened(m) and (not wasOpenedAtStart) then
-                        task.defer(function()
-                            if m and m.Parent then pcall(function() m:Destroy() end) end
-                        end)
-                    end
-                end
-
-                m:GetAttributeChangedSignal("LocalOpened"):Connect(tryDelete)
+                m:GetAttributeChangedSignal("LocalOpened"):Connect(function() end)
                 for k,_ in pairs(m:GetAttributes()) do
                     if tostring(k):match("Opened$") then
-                        m:GetAttributeChangedSignal(k):Connect(tryDelete)
+                        m:GetAttributeChangedSignal(k):Connect(function() end)
                     end
                 end
                 m.AncestryChanged:Connect(function(_, parent)
@@ -1397,12 +1374,26 @@ return function(C, R, UI)
                         end
                     end)
                 end
+                delHB = Run.Heartbeat:Connect(function()
+                    for m, wasOpened in pairs(tracked) do
+                        if m and m.Parent and not deleteExcl[m] then
+                            local nowOpened = chestJustOpened(m)
+                            if nowOpened and not wasOpened then
+                                tracked[m] = true
+                                task.defer(function()
+                                    if m and m.Parent then pcall(function() m:Destroy() end) end
+                                end)
+                            end
+                        end
+                    end
+                end)
             end
 
             local function disableDelete()
                 deleteOn = false
                 if addConn then addConn:Disconnect() addConn = nil end
                 if remConn then remConn:Disconnect() remConn = nil end
+                if delHB then delHB:Disconnect() delHB = nil end
             end
 
             tab:Toggle({
