@@ -61,13 +61,12 @@ return function(C, R, UI)
         end
     end
 
-    local function groundBelowFiltered(fromPos, excludeList)
+    local function groundRay(fromPos, exclude)
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = excludeList or {}
-        local a = WS:Raycast(fromPos + Vector3.new(0, 200, 0), Vector3.new(0, -10000, 0), params)
-        if a then return a.Position end
-        return fromPos
+        params.FilterDescendantsInstances = exclude or {}
+        local hit = WS:Raycast(fromPos, Vector3.new(0, -10000, 0), params)
+        return hit and hit.Position or fromPos
     end
 
     local function teleportClean(cf)
@@ -114,14 +113,25 @@ return function(C, R, UI)
         return best
     end
 
+    -- New: raycast from trunk downward; choose offset away from trunk toward player
     local function safeLandingCF(tree)
-        local tp = mainPart(tree); if not tp then return nil end
-        local center = tp.Position
-        local dir = -tp.CFrame.LookVector
-        local stand = center + dir.Unit * 4.0
-        local ground = groundBelowFiltered(stand, { lp.Character, tree })
-        local pos = Vector3.new(stand.X, ground.Y + 2.6, stand.Z)
-        return CFrame.new(pos, center)
+        local trunk = mainPart(tree); if not trunk then return nil end
+        local trunkPos = trunk.Position
+
+        local playerRoot = hrp()
+        local towardPlayer = playerRoot and (playerRoot.Position - trunkPos) or (-trunk.CFrame.LookVector)
+        if towardPlayer.Magnitude < 0.001 then towardPlayer = Vector3.new(1,0,0) end
+        towardPlayer = Vector3.new(towardPlayer.X, 0, towardPlayer.Z).Unit
+
+        local offsetDist = 5.5
+        local standXZ = trunkPos + towardPlayer * offsetDist
+
+        local groundFromTrunk = groundRay(trunkPos + Vector3.new(0, 200, 0), { lp.Character, tree })
+        local groundAtStand   = groundRay(Vector3.new(standXZ.X, trunkPos.Y + 200, standXZ.Z), { lp.Character, tree })
+        local groundY = groundAtStand.Y or groundFromTrunk.Y or trunkPos.Y
+
+        local landing = Vector3.new(standXZ.X, groundY + 2.4, standXZ.Z)
+        return CFrame.new(landing, trunkPos)
     end
 
     local function itemsFolder()
@@ -132,6 +142,7 @@ return function(C, R, UI)
         return f and f:FindFirstChild(name) or nil
     end
 
+    -- Drag utilities
     local function startDragRemote(model)
         local re = RS:FindFirstChild("RemoteEvents")
         local r  = re and (re:FindFirstChild("RequestStartDraggingItem") or re:FindFirstChild("StartDraggingItem"))
@@ -179,10 +190,12 @@ return function(C, R, UI)
     local STEP_WAIT     = 0.03
     local VERTICAL_MULT = 1.35
 
+    local running = false -- checked inside movers for immediate cancel
+
     local function moveVerticalToY(model, targetY, lookDir, keepNoCollide)
         local snap = keepNoCollide and nil or setCollide(model, false)
         zeroVel(model)
-        while model and model.Parent do
+        while running and model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
             if not pivot then break end
             local pos = pivot.Position
@@ -200,7 +213,7 @@ return function(C, R, UI)
     local function moveHorizontalToXZ(model, destXZ, yFixed, keepNoCollide)
         local snap = keepNoCollide and nil or setCollide(model, false)
         zeroVel(model)
-        while model and model.Parent do
+        while running and model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
             if not pivot then break end
             local pos = pivot.Position
@@ -231,6 +244,7 @@ return function(C, R, UI)
     end
 
     local function moveItemToOrb(model, orbCF)
+        if not running then return end
         if not (model and model.Parent and orbCF) then return end
         local stopEvt = startDragRemote(model)
         Run.Heartbeat:Wait()
@@ -242,8 +256,8 @@ return function(C, R, UI)
 
         local snapOrig = setCollide(model, false)
         zeroVel(model)
-        moveVerticalToY(model, riserY, lookDir, true)
-        moveHorizontalToXZ(model, Vector3.new(orbCF.Position.X, 0, orbCF.Position.Z), riserY, true)
+        moveVerticalToY(model, riserY, lookDir, true); if not running then setCollide(model, true, snapOrig) stopDragRemote(stopEvt, model) return end
+        moveHorizontalToXZ(model, Vector3.new(orbCF.Position.X, 0, orbCF.Position.Z), riserY, true); if not running then setCollide(model, true, snapOrig) stopDragRemote(stopEvt, model) return end
         setCollide(model, true, snapOrig)
         dropFromOrbSmooth(model, orbCF.Position, H)
         stopDragRemote(stopEvt, model)
@@ -274,7 +288,7 @@ return function(C, R, UI)
             addConn = items.ChildAdded:Connect(function(c) consider(c) end)
             for _,c in ipairs(items:GetChildren()) do consider(c) end
         end
-        while os.clock() < deadline do
+        while running and os.clock() < deadline do
             if not treeGone then
                 treeGone = (not treeModel) or (not treeModel.Parent)
             end
@@ -374,17 +388,16 @@ return function(C, R, UI)
         return b
     end
 
-    local running = false
-    local jobAnchorCF = nil
-    local orb = nil
     local Conns = {}
-
     local function disconnectAll()
         for k,cn in pairs(Conns) do
             if cn and cn.Disconnect then cn:Disconnect() end
             Conns[k] = nil
         end
     end
+
+    local orb, jobAnchorCF
+    local stopBtnRef -- keep to hide instantly
 
     local function startJob()
         if running then return end
@@ -393,14 +406,19 @@ return function(C, R, UI)
         local _, stack = ensureEdgeUi()
         local stopBtn = makeEdgeBtn(stack, "StopLogsEdge", "STOP", 21)
         stopBtn.Visible = true
+        stopBtnRef = stopBtn
         stopBtn.MouseButton1Click:Connect(function()
+            -- Immediate cancel and UI hide
             running = false
+            if stopBtnRef then stopBtnRef.Visible = false end
+            disconnectAll()
         end)
 
         if orb then pcall(function() orb:Destroy() end) orb = nil end
         orb = createOrbAtPlayer()
         local orbCF = orb and orb.CFrame or nil
 
+        -- Sticky fallback to job anchor while running
         if not Conns.guard then
             Conns.guard = Run.Heartbeat:Connect(function()
                 if not running then return end
@@ -429,6 +447,7 @@ return function(C, R, UI)
                 if not running then break end
                 if logItem and logItem.Parent and orbCF then
                     moveItemToOrb(logItem, orbCF)
+                    if not running then break end
                 end
 
                 Run.Heartbeat:Wait()
@@ -436,11 +455,8 @@ return function(C, R, UI)
 
             running = false
             jobAnchorCF = nil
-            pcall(function()
-                local _, stk = ensureEdgeUi()
-                local sb = stk and stk:FindFirstChild("StopLogsEdge")
-                if sb then sb.Visible = false end
-            end)
+            if stopBtnRef then stopBtnRef.Visible = false end
+            disconnectAll()
         end)
     end
 
