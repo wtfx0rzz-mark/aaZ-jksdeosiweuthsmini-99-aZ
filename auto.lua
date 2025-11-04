@@ -118,23 +118,28 @@ return function(C, R, UI)
             local root = hrp(); if not root then return end
             local ch   = lp.Character
             local targetCF = cf + Vector3.new(0, TELEPORT_UP_NUDGE, 0)
+
             prefetchRing(targetCF)
             requestStreamAt(targetCF)
             waitGameplayResumed(1.0)
+
             local hadNoclip = isNoclipNow()
             local snap
             if not hadNoclip then
                 snap = snapshotCollide()
                 setCollideAll(false)
             end
+
             if ch then pcall(function() ch:PivotTo(targetCF) end) end
             pcall(function() root.CFrame = targetCF end)
             if STICK_CLEAR_VEL then zeroAssembly(root) end
+
             if dropMode then
                 if not hadNoclip then setCollideAll(true, snap) end
                 waitGameplayResumed(1.0)
                 return
             end
+
             local t0 = os.clock()
             while (os.clock() - t0) < STICK_DURATION do
                 if ch then pcall(function() ch:PivotTo(targetCF) end) end
@@ -148,6 +153,7 @@ return function(C, R, UI)
                 if STICK_CLEAR_VEL then zeroAssembly(root) end
                 Run.Heartbeat:Wait()
             end
+
             if not hadNoclip then
                 setCollideAll(true, snap)
             end
@@ -239,9 +245,11 @@ return function(C, R, UI)
             local items = WS:FindFirstChild("Items");      if items then table.insert(ex, items) end
             local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
             params.FilterDescendantsInstances = ex
+
             local start = pos + Vector3.new(0, 5, 0)
             local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
             if hit then return hit.Position end
+
             hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
             return (hit and hit.Position) or pos
         end
@@ -1055,7 +1063,6 @@ return function(C, R, UI)
                 return (n == "Halloween Chest") or (n:match("^Halloween Chest%d+$") ~= nil)
             end
 
-            private_chestOpened = nil
             local function chestOpened(m)
                 if not m then return false end
                 local attrs = m:GetAttributes()
@@ -1180,6 +1187,7 @@ return function(C, R, UI)
             local function teleportNearChest(m)
                 local mp = mainPart(m); if not mp then return end
                 local chestCenter = mp.Position
+
                 local hingePos = hingeBackCenter(m)
                 local dir
                 if hingePos then
@@ -1199,9 +1207,11 @@ return function(C, R, UI)
                         dir = (-mp.CFrame.LookVector).Unit
                     end
                 end
+
                 local desired = chestCenter + dir * FRONT_DIST
                 local ground = groundBelow(desired)
                 local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
+
                 teleportSticky(CFrame.new(standPos, chestCenter), true)
             end
 
@@ -1270,19 +1280,19 @@ return function(C, R, UI)
 
         do
             local deleteOn = false
-            local addConn, remConn, delHB
-            local tracked = setmetatable({}, { __mode = "k" })
-
-            local DIAMOND_PAIR_DIST   = 9.8
-            local DIAMOND_PAIR_TOL    = 2.0
-
+            local addConn, remConn, sweepHB
+            local tracked   = setmetatable({}, { __mode = "k" })
             local deleteExcl = setmetatable({}, { __mode = "k" })
+
+            local DIAMOND_PAIR_DIST = 9.8
+            local DIAMOND_PAIR_TOL  = 2.0
 
             local function isChestName(n)
                 if type(n) ~= "string" then return false end
                 return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
             end
-            local function chestJustOpened(m)
+
+            local function chestOpened(m)
                 if not m then return false end
                 if m:GetAttribute("LocalOpened") == true then return true end
                 for k, v in pairs(m:GetAttributes()) do
@@ -1290,20 +1300,23 @@ return function(C, R, UI)
                 end
                 return false
             end
+
             local function chestPos(m)
                 local mp = mainPart(m)
                 if mp then return mp.Position end
                 local ok, cf = pcall(function() return m:GetPivot() end)
                 return ok and cf.Position or nil
             end
+
             local function locateDiamondAndNeighbor()
                 deleteExcl = setmetatable({}, { __mode = "k" })
                 local items = itemsFolder(); if not items then return end
+
                 local diamond, dpos = nil, nil
-                local chests = {}
+                local all = {}
                 for _,m in ipairs(items:GetChildren()) do
                     if m:IsA("Model") and isChestName(m.Name) then
-                        chests[#chests+1] = m
+                        all[#all+1] = m
                         if m.Name == "Stronghold Diamond Chest" then
                             diamond = m
                             dpos = chestPos(m)
@@ -1311,9 +1324,11 @@ return function(C, R, UI)
                     end
                 end
                 if not (diamond and dpos) then return end
+
                 deleteExcl[diamond] = true
+
                 local bestM, bestD = nil, math.huge
-                for _,m in ipairs(chests) do
+                for _,m in ipairs(all) do
                     if m ~= diamond then
                         local p = chestPos(m)
                         if p then
@@ -1330,19 +1345,38 @@ return function(C, R, UI)
                 end
             end
 
+            local function deleteIfOpenedNow(m)
+                if not deleteOn then return end
+                if not (m and m.Parent) then return end
+                if not isChestName(m.Name) then return end
+                if deleteExcl[m] then return end
+                if chestOpened(m) then
+                    task.defer(function()
+                        if m and m.Parent then pcall(function() m:Destroy() end) end
+                    end)
+                end
+            end
+
             local function watchChest(m)
                 if not (m and m:IsA("Model") and isChestName(m.Name)) then return end
-                if tracked[m] ~= nil then return end
-                tracked[m] = chestJustOpened(m)
-                m:GetAttributeChangedSignal("LocalOpened"):Connect(function() end)
+                if tracked[m] then return end
+                tracked[m] = true
+
+                m:GetAttributeChangedSignal("LocalOpened"):Connect(function()
+                    deleteIfOpenedNow(m)
+                end)
                 for k,_ in pairs(m:GetAttributes()) do
                     if tostring(k):match("Opened$") then
-                        m:GetAttributeChangedSignal(k):Connect(function() end)
+                        m:GetAttributeChangedSignal(k):Connect(function()
+                            deleteIfOpenedNow(m)
+                        end)
                     end
                 end
                 m.AncestryChanged:Connect(function(_, parent)
                     if not parent then tracked[m] = nil end
                 end)
+
+                deleteIfOpenedNow(m)
             end
 
             local function scanAll()
@@ -1352,11 +1386,23 @@ return function(C, R, UI)
                 end
             end
 
+            local function sweepDeleteOpened()
+                if not deleteOn then return end
+                local items = itemsFolder(); if not items then return end
+                for _,m in ipairs(items:GetChildren()) do
+                    if m:IsA("Model") and isChestName(m.Name) then
+                        deleteIfOpenedNow(m)
+                    end
+                end
+            end
+
             local function enableDelete()
                 if deleteOn then return end
                 deleteOn = true
                 locateDiamondAndNeighbor()
                 scanAll()
+                sweepDeleteOpened()
+
                 local items = itemsFolder()
                 if items then
                     addConn = items.ChildAdded:Connect(function(m)
@@ -1364,8 +1410,8 @@ return function(C, R, UI)
                             if m.Name == "Stronghold Diamond Chest" or isChestName(m.Name) then
                                 locateDiamondAndNeighbor()
                             end
+                            watchChest(m)
                         end
-                        watchChest(m)
                     end)
                     remConn = items.ChildRemoved:Connect(function(m)
                         tracked[m] = nil
@@ -1374,26 +1420,18 @@ return function(C, R, UI)
                         end
                     end)
                 end
-                delHB = Run.Heartbeat:Connect(function()
-                    for m, wasOpened in pairs(tracked) do
-                        if m and m.Parent and not deleteExcl[m] then
-                            local nowOpened = chestJustOpened(m)
-                            if nowOpened and not wasOpened then
-                                tracked[m] = true
-                                task.defer(function()
-                                    if m and m.Parent then pcall(function() m:Destroy() end) end
-                                end)
-                            end
-                        end
-                    end
+
+                if sweepHB then sweepHB:Disconnect() end
+                sweepHB = Run.Heartbeat:Connect(function()
+                    sweepDeleteOpened()
                 end)
             end
 
             local function disableDelete()
                 deleteOn = false
-                if addConn then addConn:Disconnect() addConn = nil end
-                if remConn then remConn:Disconnect() remConn = nil end
-                if delHB then delHB:Disconnect() delHB = nil end
+                if addConn   then addConn:Disconnect();   addConn = nil end
+                if remConn   then remConn:Disconnect();   remConn = nil end
+                if sweepHB   then sweepHB:Disconnect();   sweepHB = nil end
             end
 
             tab:Toggle({
