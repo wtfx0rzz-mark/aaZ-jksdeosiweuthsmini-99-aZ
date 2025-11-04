@@ -5,9 +5,8 @@ return function(C, R, UI)
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
 
-    local lp = Players.LocalPlayer
-    local Tabs = UI and UI.Tabs or {}
-    local tab  = Tabs.TPBring
+    local lp  = Players.LocalPlayer
+    local tab = UI and UI.Tabs and UI.Tabs.TPBring
     assert(tab, "TPBring tab missing")
 
     local function hrp()
@@ -45,6 +44,9 @@ return function(C, R, UI)
             if part and part.Parent then part.CanCollide = can end
         end
     end
+    local function setAnchored(m, on)
+        for _,p in ipairs(allParts(m)) do p.Anchored = on end
+    end
     local function setNoCollide(m)
         local s = {}
         for _,p in ipairs(allParts(m)) do s[p]=p.CanCollide; p.CanCollide=false end
@@ -58,6 +60,15 @@ return function(C, R, UI)
             startDrag = re:FindFirstChild("RequestStartDraggingItem")
             stopDrag  = re:FindFirstChild("StopDraggingItem")
         end
+    end
+
+    local function groundBelow(pos)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+        local start = pos + Vector3.new(0, 200, 0)
+        local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
+        return (hit and hit.Position) or pos
     end
 
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
@@ -76,7 +87,6 @@ return function(C, R, UI)
         stack.Position = UDim2.new(1,-6,0,6)
         stack.Size = UDim2.new(0,130,1,-12)
         stack.BackgroundTransparency = 1
-        stack.BorderSizePixel = 0
         stack.Parent = edgeGui
         local list = Instance.new("UIListLayout")
         list.FillDirection = Enum.FillDirection.Vertical
@@ -102,9 +112,7 @@ return function(C, R, UI)
             b.Parent = stack
             local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0,8); corner.Parent = b
         else
-            b.Text = label
-            b.LayoutOrder = order or b.LayoutOrder
-            b.Visible = false
+            b.Text = label; b.LayoutOrder = order or b.LayoutOrder; b.Visible = false
         end
         return b
     end
@@ -112,15 +120,14 @@ return function(C, R, UI)
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
     -- Controls how fast logs travel toward the orb (studs per second).
-    local DRAG_SPEED = 28
+    local DRAG_SPEED = 36
 
     local PICK_RADIUS         = 50
     local ORB_HEIGHT          = 20
     local MAX_CONCURRENT      = 12
     local START_STAGGER       = 0.05
     local STEP_WAIT           = 0.02
-    local VERTICAL_MULT       = 1.4
-    local ARRIVAL_DROP_OFFSET = 1.0
+    local ARRIVE_EPS          = 1.2
     local INFLT_ATTR          = "OrbInFlightAt"
     local JOB_ATTR            = "OrbJob"
 
@@ -129,7 +136,7 @@ return function(C, R, UI)
     local orb       = nil
     local orbPosVec = nil
 
-    local inflight = {}  -- [Model] = {snap=..., job=..., conn=...}
+    local inflight = {}  -- [Model] = {snap=..., conn=...}
 
     local function spawnOrbAt(pos)
         if orb then pcall(function() orb:Destroy() end) end
@@ -151,13 +158,11 @@ return function(C, R, UI)
         orbPosVec = nil
     end
 
-    local function itemsRoot() return WS:FindFirstChild("Items") end
     local function isLogModel(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or "")
         return n=="Log" or n=="TreeLog" or n=="Wood Log" or (n:match("^Log%d+$") ~= nil)
     end
-
     local function nearbyCandidates(center, radius, jobId)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -170,7 +175,7 @@ return function(C, R, UI)
                 local tIn = m:GetAttribute(INFLT_ATTR)
                 local jIn = m:GetAttribute(JOB_ATTR)
                 if tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < 6.0 then
-                    -- skip; owned by another job recently
+                    -- skip recent other job
                 else
                     uniq[m]=true; out[#out+1]=m
                 end
@@ -179,24 +184,20 @@ return function(C, R, UI)
         return out
     end
 
-    local function dropClean(m, dest)
-        if not m or not m.Parent then return end
+    local function dropToGroundAt(m, aroundPos)
+        if not (m and m.Parent) then return end
+        local g = groundBelow(aroundPos or (mainPart(m) and mainPart(m).Position) or Vector3.new())
+        local pos = Vector3.new(g.X, g.Y + 1.25, g.Z)
+        setPivot(m, CFrame.new(pos))
         zeroAssembly(m)
-        setPivot(m, CFrame.new(dest + Vector3.new(0, ARRIVAL_DROP_OFFSET, 0)))
-        for _,p in ipairs(allParts(m)) do
-            p.Anchored = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-            pcall(function() p:SetNetworkOwner(nil) end)
-            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-        end
-        zeroAssembly(m)
+        setAnchored(m, false)
     end
 
     local function restoreModelState(m)
         local rec = inflight[m]; if not rec then return end
         if rec.conn then rec.conn:Disconnect() end
         if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+        setAnchored(m, false)
         setCollideFromSnapshot(rec.snap)
         pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
         inflight[m] = nil
@@ -210,30 +211,35 @@ return function(C, R, UI)
         pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
 
         local snap = setNoCollide(m)
+        setAnchored(m, true)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
 
-        local rec = { snap = snap, job = jobId, conn = nil }
+        local rec = { snap = snap, conn = nil }
         inflight[m] = rec
 
         rec.conn = Run.Heartbeat:Connect(function(dt)
             if not (running and m and m.Parent and orbPosVec) then
                 restoreModelState(m)
+                dropToGroundAt(m)
                 return
             end
+
             local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
             if not pivot then
                 restoreModelState(m)
                 return
             end
 
-            local pos = pivot.Position
-            local delta = orbPosVec - pos
+            local pos  = pivot.Position
+            local delta= orbPosVec - pos
             local dist = delta.Magnitude
-            if dist <= 1.0 then
+
+            if dist <= ARRIVE_EPS then
                 if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
-                dropClean(m, orbPosVec)
+                setAnchored(m, false)
                 setCollideFromSnapshot(snap)
+                dropToGroundAt(m, orbPosVec)
                 pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
                 if rec.conn then rec.conn:Disconnect() end
                 inflight[m] = nil
@@ -241,14 +247,9 @@ return function(C, R, UI)
             end
 
             local step = math.min(DRAG_SPEED * dt, dist)
-            local dir = (dist > 0.001) and delta.Unit or Vector3.new()
+            local dir  = (dist > 1e-3) and delta.Unit or Vector3.new()
             local newPos = pos + dir * step
-
-            -- vertical bias for smoother flight
-            newPos = Vector3.new(newPos.X, pos.Y + dir.Y * (DRAG_SPEED * VERTICAL_MULT * dt), newPos.Z)
-
             setPivot(m, CFrame.new(newPos, newPos + dir))
-            zeroAssembly(m)
         end)
     end
 
@@ -264,14 +265,7 @@ return function(C, R, UI)
                 activeCount += 1
                 task.spawn(function()
                     startConveyor(m, jobId)
-                    -- activeCount will decrement when the HB loop finishes, but add a safety timer:
-                    task.delay(8, function()
-                        if inflight[m] then activeCount = math.max(0, activeCount-1) end
-                    end)
-                    -- If completed earlier, decrement now:
-                    local t0 = os.clock()
-                    while running and inflight[m] and os.clock() - t0 < 8 do Run.Heartbeat:Wait() end
-                    if not inflight[m] then activeCount = math.max(0, activeCount-1) end
+                    task.delay(8, function() activeCount = math.max(0, activeCount-1) end)
                 end)
                 task.wait(START_STAGGER)
             end
@@ -282,17 +276,14 @@ return function(C, R, UI)
         running = false
         if hb then hb:Disconnect(); hb=nil end
         STOP_BTN.Visible = false
-        for m,_ in pairs(inflight) do
-            if m and m.Parent then
-                -- release safely at current position and restore colliders
-                local rec = inflight[m]
-                if rec and rec.conn then rec.conn:Disconnect() end
-                if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
-                setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
-                dropClean(m, (mainPart(m) and mainPart(m).Position) or Vector3.new())
-                pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
-                inflight[m] = nil
-            end
+        for m,rec in pairs(inflight) do
+            if rec and rec.conn then rec.conn:Disconnect() end
+            if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+            setAnchored(m, false)
+            setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
+            dropToGroundAt(m)
+            pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
+            inflight[m] = nil
         end
         activeCount = 0
         destroyOrb()
@@ -306,7 +297,6 @@ return function(C, R, UI)
         spawnOrbAt(r.Position)
         running = true
         STOP_BTN.Visible = true
-
         if hb then hb:Disconnect() end
         hb = Run.Heartbeat:Connect(function()
             if not running then return end
