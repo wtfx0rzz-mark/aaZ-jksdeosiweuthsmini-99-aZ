@@ -7,7 +7,7 @@ return function(C, R, UI)
     local lp  = Players.LocalPlayer
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
--- Tyre is spelled incorrectly intentionally. Do not change.
+
     local junkItems    = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -48,10 +48,61 @@ return function(C, R, UI)
     local PLACE_BATCH    = 12
     local PLACE_YIELD_FN = function() Run.Heartbeat:Wait() end
 
-    local gatherOn = false
-    local scanConn, hoverConn = nil, nil
-    local gathered, list = {}, {}
-    local cultistCount = 0
+    local function getRemote(...)
+        local f = RS:FindFirstChild("RemoteEvents")
+        if not f then return nil end
+        for i=1,select("#", ...) do
+            local n = select(i, ...)
+            local x = f:FindFirstChild(n)
+            if x then return x end
+        end
+        return nil
+    end
+
+    local RF_Start = getRemote("RequestStartDraggingItem","StartDraggingItem")
+    local RF_Stop  = getRemote("RequestStopDraggingItem","StopDraggingItem","StopDraggingItemRemote")
+    local HEARTBEAT = Run.Heartbeat
+
+    local DragActive = {}
+    local DRAG_TTL   = 3.0
+
+    local function dragSafeStop(m)
+        if not (m and RF_Stop) then return end
+        pcall(function() RF_Stop:FireServer(m) end)
+    end
+
+    local function dragTrackRelease(m)
+        local rec = DragActive[m]
+        if not rec then return end
+        DragActive[m] = nil
+        for _,c in ipairs(rec.conns) do pcall(function() c:Disconnect() end) end
+        dragSafeStop(m)
+    end
+
+    local function dragStart(m)
+        if not (m and m.Parent and RF_Start) then return false end
+        if DragActive[m] then DragActive[m].t0 = os.clock(); return true end
+        local ok = pcall(function() RF_Start:FireServer(m) end)
+        if not ok then return false end
+        local conns = {}
+        conns[#conns+1] = m.AncestryChanged:Connect(function(_, parent) if not parent then dragTrackRelease(m) end end)
+        conns[#conns+1] = m:GetPropertyChangedSignal("Parent"):Connect(function() if not m.Parent then dragTrackRelease(m) end end)
+        DragActive[m] = { t0 = os.clock(), conns = conns }
+        return true
+    end
+
+    local function dragStop(m)
+        dragTrackRelease(m)
+    end
+
+    HEARTBEAT:Connect(function()
+        local now = os.clock()
+        for m, rec in pairs(DragActive) do
+            if (not m) or (not m.Parent) or (now - rec.t0) > DRAG_TTL then
+                dragTrackRelease(m)
+            end
+        end
+    end)
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -83,29 +134,6 @@ return function(C, R, UI)
         return nl:find("cultist",1,true) and hasHumanoid(m)
     end
 
-    local function getRemote(...)
-        local f = RS:FindFirstChild("RemoteEvents")
-        if not f then return nil end
-        for i=1,select("#", ...) do
-            local n = select(i, ...)
-            local x = f:FindFirstChild(n)
-            if x then return x end
-        end
-        return nil
-    end
-    local function startDrag(m)
-        local ev = getRemote("RequestStartDraggingItem","StartDraggingItem")
-        if not ev then return end
-        pcall(function() ev:FireServer(m) end)
-        pcall(function() ev:FireServer(Instance.new("Model")) end)
-    end
-    local function stopDrag(m)
-        local ev = getRemote("RequestStopDraggingItem","StopDraggingItem")
-        if not ev then return end
-        pcall(function() ev:FireServer(m or Instance.new("Model")) end)
-        pcall(function() ev:FireServer(Instance.new("Model")) end)
-    end
-
     local function setNoCollideModel(m, on)
         for _,d in ipairs(m:GetDescendants()) do
             if d:IsA("BasePart") then
@@ -124,6 +152,11 @@ return function(C, R, UI)
         end
     end
 
+    local gatherOn = false
+    local scanConn, hoverConn = nil, nil
+    local gathered, list = {}, {}
+    local cultistCount = 0
+
     local function addGather(m)
         if gathered[m] then return end
         gathered[m] = true
@@ -140,6 +173,21 @@ return function(C, R, UI)
         for m,_ in pairs(gathered) do gathered[m]=nil end
         table.clear(list)
         cultistCount = 0
+    end
+
+    local function releaseAll()
+        for _,m in ipairs(list) do
+            if m and m.Parent then
+                dragStop(m)
+                setNoCollideModel(m, false)
+                setAnchoredModel(m, false)
+                local mp = mainPart(m)
+                if mp then
+                    pcall(function() mp:SetNetworkOwner(nil) end)
+                    pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+                end
+            end
+        end
     end
 
     local function anySelection()
@@ -188,6 +236,8 @@ return function(C, R, UI)
     end
 
     local lastScan = 0
+    local START_YIELD = 0.06
+
     local function captureIfNear()
         local now = os.clock()
         if now - lastScan < scanInterval then return end
@@ -209,13 +259,13 @@ return function(C, R, UI)
                 local mp = mainPart(m); if not mp then break end
                 if (mp.Position - origin).Magnitude > rad then break end
 
-                startDrag(m)
-                task.wait(0.02)
+                if not dragStart(m) then break end
+                task.wait(START_YIELD)
                 pcall(function() mp:SetNetworkOwner(lp) end)
                 setNoCollideModel(m, true)
                 setAnchoredModel(m, true)
                 addGather(m)
-                stopDrag(m)
+                dragStop(m)
             until true
         end
     end
@@ -265,19 +315,18 @@ return function(C, R, UI)
         local idx0   = i - 1
         local layer  = math.floor(idx0 / LAYER_SIZE)
         local inLayer= idx0 % LAYER_SIZE
-
         local angle  = (inLayer / LAYER_SIZE) * math.pi * 2
         local r      = (0.25 + (inLayer % 7) * 0.07) * PILE_RADIUS
         local x      = math.cos(angle) * r + (math.random() - 0.5) * 0.12
         local z      = math.sin(angle) * r + (math.random() - 0.5) * 0.12
         local y      = layer * LAYER_HEIGHT
-
         return baseCF * CFrame.new(x, y, z)
     end
 
     local function finalizePileDrop(items)
         for _,m in ipairs(items) do
             if m and m.Parent then
+                dragStop(m)
                 setNoCollideModel(m, false)
                 local mp = mainPart(m)
                 if mp then
@@ -295,7 +344,6 @@ return function(C, R, UI)
                 end
             end
         end
-
         local n = #items
         local i = 1
         while i <= n do
@@ -320,26 +368,24 @@ return function(C, R, UI)
         local baseCF = groundAheadCF(); if not baseCF then return end
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
         stopGather()
-
         local n = #list
         local cfs = table.create(n)
         for i = 1, n do cfs[i] = pileCF(i, baseCF) end
-
         local placed = 0
         for i = 1, n do
             local m = list[i]
             if m and m.Parent then
-                startDrag(m)
+                dragStart(m)
+                task.wait(START_YIELD)
                 setAnchoredModel(m, true)
                 setNoCollideModel(m, true)
                 pivotModel(m, cfs[i])
-                stopDrag(m)
+                dragStop(m)
                 placed += 1
                 if placed % PLACE_BATCH == 0 then PLACE_YIELD_FN() end
             end
         end
-
-        task.wait(0.03)
+        task.wait(0.05)
         finalizePileDrop(list)
         clearAll()
     end
@@ -482,6 +528,7 @@ return function(C, R, UI)
 
     lp.CharacterAdded:Connect(function()
         if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
+        releaseAll()
         if gatherOn then task.defer(function() stopGather(); startGather() end) end
     end)
 end
