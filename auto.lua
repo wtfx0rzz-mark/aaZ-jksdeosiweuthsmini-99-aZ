@@ -1308,6 +1308,28 @@ return function(C, R, UI)
                 return ok and cf.Position or nil
             end
 
+            local function safeHideThenDestroy(m)
+                if not (m and m.Parent) then return end
+                for _,d in ipairs(m:GetDescendants()) do
+                    if d:IsA("ProximityPrompt") then
+                        pcall(function() d.Enabled = false end)
+                    elseif d:IsA("ClickDetector") then
+                        pcall(function() d.MaxActivationDistance = 0 end)
+                    elseif d:IsA("BasePart") then
+                        pcall(function()
+                            d.CanCollide = false
+                            d.CanTouch   = false
+                            d.CanQuery   = false
+                            d.Anchored   = true
+                            d.Transparency = 1
+                        end)
+                    end
+                end
+                task.delay((TRIGGER_COOLDOWN or 0.4) + 0.25, function()
+                    if m and m.Parent then pcall(function() m:Destroy() end) end
+                end)
+            end
+
             local function locateDiamondAndNeighbor()
                 deleteExcl = setmetatable({}, { __mode = "k" })
                 local items = itemsFolder(); if not items then return end
@@ -1351,9 +1373,7 @@ return function(C, R, UI)
                 if not isChestName(m.Name) then return end
                 if deleteExcl[m] then return end
                 if chestOpened(m) then
-                    task.defer(function()
-                        if m and m.Parent then pcall(function() m:Destroy() end) end
-                    end)
+                    safeHideThenDestroy(m)
                 end
             end
 
