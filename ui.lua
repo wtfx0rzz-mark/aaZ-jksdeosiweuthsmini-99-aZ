@@ -40,6 +40,7 @@ local Tabs = {
     Auto   = Window:Tab({ Title = "Auto",   Icon = "cpu",   Desc = "Automation" }),
     Visuals   = Window:Tab({ Title = "Visuals",   Icon = "eye",   Desc = "Visuals" }),
     TPBring   = Window:Tab({ Title = "TPBring",   Icon = "backpack",   Desc = "TP Bring" }),
+    Debug   = Window:Tab({ Title = "Debug",   Icon = "ant",   Desc = "Debug" })
 }
 
 return {
