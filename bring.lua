@@ -34,7 +34,7 @@ return function(C, R, UI)
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
-    local fuelItems = {"Log","Chair","Coal","Fuel Canister","Oil Barrel"}
+    local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel","Chair"}
     local foodItems = {
         "Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot",
         "Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"
