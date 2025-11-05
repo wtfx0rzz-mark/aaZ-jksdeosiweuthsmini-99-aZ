@@ -23,7 +23,7 @@ return function(C, R, UI)
         "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire"
     }
     local ammoMisc     = {
-        "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
+        "Revolver Ammo","Rifle Ammo","Giant Sack","Infernal Sack","Good Sack","Mossy Coin","Hammer","Cultist","Sapling",
         "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute"
     }
     local pelts        = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
