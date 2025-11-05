@@ -110,7 +110,6 @@ return function(C, R, UI)
         end
     end
 
-    -- New: direct drag remote triggers (no physics/ownership changes)
     local function startDragAll()
         if not RF_Start then return end
         local list = nearbyItems()
@@ -206,6 +205,113 @@ return function(C, R, UI)
         end
     end
 
+    local function groundBelow(pos)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local ex = { lp.Character }
+        local map = WS:FindFirstChild("Map")
+        if map then
+            local fol = map:FindFirstChild("Foliage")
+            if fol then table.insert(ex, fol) end
+        end
+        local items = WS:FindFirstChild("Items"); if items then table.insert(ex, items) end
+        params.FilterDescendantsInstances = ex
+        local start = pos + Vector3.new(0, 5, 0)
+        local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
+        if hit then return hit.Position end
+        hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
+        return (hit and hit.Position) or pos
+    end
+
+    local function zeroAssembly(root)
+        if not root then return end
+        root.AssemblyLinearVelocity  = Vector3.new()
+        root.AssemblyAngularVelocity = Vector3.new()
+    end
+
+    local function findBodyModel()
+        local chars = WS:FindFirstChild("Characters") or WS
+        local root = hrp()
+        local best, bestD = nil, math.huge
+        for _,m in ipairs(chars:GetChildren()) do
+            if m:IsA("Model") and m.Name:match("%sBody$") then
+                local p = mainPart(m)
+                if p then
+                    if root then
+                        local d = (p.Position - root.Position).Magnitude
+                        if d < bestD then bestD, best = d, m end
+                    else
+                        best = m; break
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    local function tpPlayerToBody()
+        local m = findBodyModel(); if not m then return end
+        local p = mainPart(m); if not p then return end
+        local g = groundBelow(p.Position)
+        local dest = Vector3.new(p.Position.X, g.Y + 2.5, p.Position.Z)
+        local root = hrp(); if not root then return end
+        local look = (p.Position - root.Position)
+        if look.Magnitude < 1e-3 then look = root.CFrame.LookVector end
+        local cf = CFrame.new(dest, dest + look.Unit)
+        pcall(function() (lp.Character or {}).PrimaryPart.CFrame = cf end)
+        pcall(function() root.CFrame = cf end)
+        zeroAssembly(root)
+    end
+
+    local function tpBodyToMe()
+        local m = findBodyModel(); if not m then return end
+        local p0 = hrp(); if not p0 then return end
+        local g = groundBelow(p0.Position)
+        local pos = Vector3.new(g.X, g.Y + 1.5, g.Z)
+        local cf = CFrame.new(pos, pos + p0.CFrame.LookVector)
+        pcall(function() m:PivotTo(cf) end)
+    end
+
+    local function fireCenterPart(fire)
+        return fire:FindFirstChild("Center")
+            or fire:FindFirstChild("InnerTouchZone")
+            or mainPart(fire)
+            or fire.PrimaryPart
+    end
+
+    local function resolveCampfireModel()
+        local map = WS:FindFirstChild("Map")
+        local cg  = map and map:FindFirstChild("Campground")
+        local mf  = cg and cg:FindFirstChild("MainFire")
+        if mf then return mf end
+        for _,d in ipairs(WS:GetDescendants()) do
+            if d:IsA("Model") then
+                local n = (d.Name or ""):lower()
+                if n == "mainfire" or n == "campfire" or n == "camp fire" then
+                    return d
+                end
+            end
+        end
+        return nil
+    end
+
+    local function sendBodyToCamp()
+        local m = findBodyModel(); if not m then return end
+        local fire = resolveCampfireModel(); if not fire then return end
+        local c = fireCenterPart(fire); if not c then return end
+        local look = c.CFrame.LookVector
+        local zone = fire:FindFirstChild("InnerTouchZone")
+        local offset = 4
+        if zone and zone:IsA("BasePart") then
+            offset = math.max(zone.Size.X, zone.Size.Z) * 0.5 + 2
+        end
+        local target = c.Position + look * offset
+        local g = groundBelow(target)
+        local pos = Vector3.new(target.X, g.Y + 1.5, target.Z)
+        local cf = CFrame.new(pos, c.Position)
+        pcall(function() m:PivotTo(cf) end)
+    end
+
     tab:Section({ Title = "Item Recovery" })
     tab:Button({ Title = "Own All Items",       Callback = function() ownAll() end })
     tab:Button({ Title = "Disown All Items",    Callback = function() disownAll() end })
@@ -218,4 +324,9 @@ return function(C, R, UI)
     tab:Section({ Title = "Drag Remotes" })
     tab:Button({ Title = "Start Drag Nearby",   Callback = function() startDragAll() end })
     tab:Button({ Title = "Stop Drag Nearby",    Callback = function() stopDragAll() end })
+
+    tab:Section({ Title = "Body Tests" })
+    tab:Button({ Title = "TP To Body",          Callback = function() tpPlayerToBody() end })
+    tab:Button({ Title = "TP Body To Me",       Callback = function() tpBodyToMe() end })
+    tab:Button({ Title = "Send Body To Camp",   Callback = function() sendBodyToCamp() end })
 end
