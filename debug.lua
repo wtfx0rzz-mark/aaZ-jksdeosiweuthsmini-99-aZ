@@ -3,7 +3,6 @@ return function(C, R, UI)
     local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
-    local LogService = game:GetService("LogService")
 
     local lp  = Players.LocalPlayer
     local tabs = UI and UI.Tabs
@@ -111,6 +110,45 @@ return function(C, R, UI)
         end
     end
 
+    -- Gentle wake for likely-sleeping assemblies (near-zero motion)
+    local function wakeGentle()
+        local list = nearbyItems()
+        local lin = 0.05
+        local ang = 0.05
+        for _,m in ipairs(list) do
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") and not p.Anchored then
+                    local lv = p.AssemblyLinearVelocity
+                    local av = p.AssemblyAngularVelocity
+                    if lv.Magnitude < 0.02 and av.Magnitude < 0.02 then
+                        p.AssemblyLinearVelocity  = lv + Vector3.new((math.random()-0.5)*lin, (math.random()-0.5)*lin, (math.random()-0.5)*lin)
+                        p.AssemblyAngularVelocity = av + Vector3.new((math.random()-0.5)*ang, (math.random()-0.5)*ang, (math.random()-0.5)*ang)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Very small lateral offsets to break perfect contacts
+    local function deoverlap()
+        local list = nearbyItems()
+        for _,m in ipairs(list) do
+            local p = mainPart(m)
+            if p and not p.Anchored then
+                local cf = (m:IsA("Model") and m:GetPivot()) or p.CFrame
+                local jitter = 0.03
+                local dx = (math.random()-0.5)*jitter
+                local dz = (math.random()-0.5)*jitter
+                if m:IsA("Model") then
+                    m:PivotTo(cf + Vector3.new(dx, 0, dz))
+                else
+                    p.CFrame = cf + Vector3.new(dx, 0, dz)
+                end
+            end
+        end
+    end
+
+    -- Subtle nudge for all items (smaller than before)
     local function nudgeAll()
         local list = nearbyItems()
         for _,m in ipairs(list) do
@@ -119,30 +157,47 @@ return function(C, R, UI)
         Run.Heartbeat:Wait()
         for _,m in ipairs(list) do
             for _,p in ipairs(m:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    p.AssemblyLinearVelocity = p.AssemblyLinearVelocity + Vector3.new(0, 4, 0)
+                if p:IsA("BasePart") and not p.Anchored then
+                    p.AssemblyLinearVelocity  = p.AssemblyLinearVelocity  + Vector3.new(0, 0.6, 0)
+                    p.AssemblyAngularVelocity = p.AssemblyAngularVelocity + Vector3.new(0, 0.3*(math.random()-0.5), 0)
                 end
             end
         end
     end
 
-    local function clearConsole()
-        local pg = lp:FindFirstChildOfClass("PlayerGui")
-        if pg then
-            local cg = pg:FindFirstChild("ConsoleGui")
-            if cg then
-                local frame = cg:FindFirstChild("ConsoleFrame")
-                local area  = frame and frame:FindFirstChild("ConsoleArea")
-                local text  = area and area:FindFirstChild("ConsoleText")
-                if text and text:IsA("TextLabel") then text.Text = "" end
+    -- Take client ownership without drag
+    local function mineOwnership()
+        local list = nearbyItems()
+        for _,m in ipairs(list) do
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.Anchored = false
+                    pcall(function() p:SetNetworkOwner(lp) end)
+                end
             end
         end
-        local ok, rc = pcall(function() return getgenv and getgenv().rconsoleclear end)
-        if ok and type(rc)=="function" then pcall(rc) end
     end
 
-    tab:Button({ Title = "Own All Items",    Callback = function() ownAll() end })
-    tab:Button({ Title = "Disown All Items", Callback = function() disownAll() end })
-    tab:Button({ Title = "Nudge Items",      Callback = function() nudgeAll() end })
-    tab:Button({ Title = "Clear console logs", Callback = function() clearConsole() end })
+    -- Hand ownership back to server without drag
+    local function serverOwnership()
+        local list = nearbyItems()
+        for _,m in ipairs(list) do
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.Anchored = false
+                    pcall(function() p:SetNetworkOwner(nil) end)
+                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                end
+            end
+        end
+    end
+
+    tab:Section({ Title = "Item Recovery" })
+    tab:Button({ Title = "Own All Items",       Callback = function() ownAll() end })
+    tab:Button({ Title = "Disown All Items",    Callback = function() disownAll() end })
+    tab:Button({ Title = "Wake (Gentle)",       Callback = function() wakeGentle() end })
+    tab:Button({ Title = "De-overlap",          Callback = function() deoverlap() end })
+    tab:Button({ Title = "Nudge Items",         Callback = function() nudgeAll() end })
+    tab:Button({ Title = "Mine Ownership",      Callback = function() mineOwnership() end })
+    tab:Button({ Title = "Server Ownership",    Callback = function() serverOwnership() end })
 end
