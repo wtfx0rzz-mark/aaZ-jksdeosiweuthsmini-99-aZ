@@ -6,8 +6,8 @@ return function(C, R, UI)
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
 
     local lp  = Players.LocalPlayer
-    local tab = UI and UI.Tabs and UI.Tabs.TPBring
-    assert(tab, "TPBring tab missing")
+    local tab = UI and UI.Tabs and (UI.Tabs.TPBring or UI.Tabs.Bring or UI.Tabs.Auto or UI.Tabs.Main)
+    if not tab then return end
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -119,24 +119,27 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    -- Controls how fast logs travel toward the orb (studs per second).
     local DRAG_SPEED = 36
+    local PICK_RADIUS    = 50
+    local ORB_HEIGHT     = 20
+    local MAX_CONCURRENT = 12
+    local START_STAGGER  = 0.05
+    local STEP_WAIT      = 0.02
 
-    local PICK_RADIUS         = 50
-    local ORB_HEIGHT          = 20
-    local MAX_CONCURRENT      = 12
-    local START_STAGGER       = 0.05
-    local STEP_WAIT           = 0.02
-    local ARRIVE_EPS          = 1.2
-    local INFLT_ATTR          = "OrbInFlightAt"
-    local JOB_ATTR            = "OrbJob"
+    local LAND_MIN = 1.2
+    local LAND_MAX = 3.0
+    local ARRIVE_EPS_H = 1.25
+    local STALL_SEC    = 0.6
+
+    local INFLT_ATTR = "OrbInFlightAt"
+    local JOB_ATTR   = "OrbJob"
 
     local running   = false
     local hb        = nil
     local orb       = nil
     local orbPosVec = nil
 
-    local inflight = {}  -- [Model] = {snap=..., conn=...}
+    local inflight = {}
 
     local function spawnOrbAt(pos)
         if orb then pcall(function() orb:Destroy() end) end
@@ -163,6 +166,7 @@ return function(C, R, UI)
         local n = (m.Name or "")
         return n=="Log" or n=="TreeLog" or n=="Wood Log" or (n:match("^Log%d+$") ~= nil)
     end
+
     local function nearbyCandidates(center, radius, jobId)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -203,9 +207,30 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
+    local function hash01(str)
+        local h = 2166136261
+        for i=1,#str do
+            h = (h ~ string.byte(str,i)) * 16777619 % 2^32
+        end
+        return (h % 100000) / 100000
+    end
+    local function landingOffset(m, jobId)
+        local key = (typeof(m.GetDebugId)=="function" and m:GetDebugId() or (m.Name or "")) .. tostring(jobId)
+        local r1 = hash01(key .. "a")
+        local r2 = hash01(key .. "b")
+        local ang = r1 * math.pi * 2
+        local rad = LAND_MIN + (LAND_MAX - LAND_MIN) * r2
+        return Vector3.new(math.cos(ang)*rad, 0, math.sin(ang)*rad)
+    end
+
     local function startConveyor(m, jobId)
         if not (running and m and m.Parent and orbPosVec) then return end
         local mp = mainPart(m); if not mp then return end
+
+        local off = landingOffset(m, jobId)
+        local target = function()
+            return (orbPosVec or mp.Position) + off
+        end
 
         pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
         pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
@@ -215,7 +240,7 @@ return function(C, R, UI)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
 
-        local rec = { snap = snap, conn = nil }
+        local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock() }
         inflight[m] = rec
 
         rec.conn = Run.Heartbeat:Connect(function(dt)
@@ -231,25 +256,38 @@ return function(C, R, UI)
                 return
             end
 
-            local pos  = pivot.Position
-            local delta= orbPosVec - pos
-            local dist = delta.Magnitude
+            local pos = pivot.Position
+            local tgt = target()
 
-            if dist <= ARRIVE_EPS then
+            local delta = Vector3.new(tgt.X - pos.X, 0, tgt.Z - pos.Z)
+            local distH = delta.Magnitude
+
+            if distH <= ARRIVE_EPS_H then
                 if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
                 setAnchored(m, false)
                 setCollideFromSnapshot(snap)
-                dropToGroundAt(m, orbPosVec)
+                dropToGroundAt(m, tgt)
                 pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
                 if rec.conn then rec.conn:Disconnect() end
                 inflight[m] = nil
                 return
             end
 
-            local step = math.min(DRAG_SPEED * dt, dist)
-            local dir  = (dist > 1e-3) and delta.Unit or Vector3.new()
+            if distH >= rec.lastD - 0.02 then
+                if os.clock() - rec.lastT >= STALL_SEC then
+                    off = landingOffset(m, tostring(jobId) .. tostring(os.clock()))
+                    rec.lastT = os.clock()
+                end
+            else
+                rec.lastT = os.clock()
+            end
+            rec.lastD = distH
+
+            local step = math.min(DRAG_SPEED * dt, distH)
+            local dir  = distH > 1e-3 and (delta / distH) or Vector3.new()
             local newPos = pos + dir * step
-            setPivot(m, CFrame.new(newPos, newPos + dir))
+            local look = dir.Magnitude > 0 and dir or Vector3.new(0,0,1)
+            setPivot(m, CFrame.new(newPos, newPos + look))
         end)
     end
 
