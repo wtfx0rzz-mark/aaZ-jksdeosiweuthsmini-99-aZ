@@ -7,6 +7,7 @@ return function(C, R, UI)
 
     local lp  = Players.LocalPlayer
     local tab = UI and UI.Tabs and (UI.Tabs.TPBring or UI.Tabs.Bring or UI.Tabs.Auto or UI.Tabs.Main)
+    if not tab then return end
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -31,6 +32,8 @@ return function(C, R, UI)
         for _,p in ipairs(allParts(m)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
+            p.RotVelocity             = Vector3.new()
+            p.Velocity                = Vector3.new()
         end
     end
     local function snapshotCollide(m)
@@ -118,19 +121,23 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local DRAG_SPEED    = 36
-    local PICK_RADIUS   = 50
-    local ORB_HEIGHT    = 20
-    local MAX_CONCURRENT= 12
-    local START_STAGGER = 0.05
+    local DRAG_SPEED     = 48
+    local PICK_RADIUS    = 50
+    local ORB_HEIGHT     = 20
+    local MAX_CONCURRENT = 14
+    local START_STAGGER  = 0.04
+    local STEP_WAIT      = 0.016
 
-    local LAND_MIN   = 1.2
-    local LAND_MAX   = 3.0
-    local ARRIVE_EPS_H = 1.25
+    local LAND_MIN = 1.2
+    local LAND_MAX = 3.0
+    local ARRIVE_EPS_H = 1.0
     local STALL_SEC    = 0.6
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
+    local DONE_ATTR  = "OrbDelivered"
+
+    local CURRENT_RUN_ID = nil
 
     local running   = false
     local hb        = nil
@@ -138,7 +145,6 @@ return function(C, R, UI)
     local orbPosVec = nil
 
     local inflight = {}
-    local activeCount = 0
 
     local function spawnOrbAt(pos)
         if orb then pcall(function() orb:Destroy() end) end
@@ -175,11 +181,14 @@ return function(C, R, UI)
         for _,p in ipairs(parts) do
             local m = p:FindFirstAncestorOfClass("Model")
             if m and not uniq[m] and isLogModel(m) and m.Parent and not inflight[m] then
-                local tIn = m:GetAttribute(INFLT_ATTR)
-                local jIn = m:GetAttribute(JOB_ATTR)
-                if tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < 6.0 then
-                else
-                    uniq[m]=true; out[#out+1]=m
+                local done = m:GetAttribute(DONE_ATTR)
+                if done ~= CURRENT_RUN_ID then
+                    local tIn = m:GetAttribute(INFLT_ATTR)
+                    local jIn = m:GetAttribute(JOB_ATTR)
+                    if tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < 6.0 then
+                    else
+                        uniq[m]=true; out[#out+1]=m
+                    end
                 end
             end
         end
@@ -205,24 +214,10 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
-    local bxor = bit32 and bit32.bxor or function(a,b)
-        local res, bit, p = 0, 1, 0
-        while a > 0 or b > 0 do
-            local aa = a % 2
-            local bb = b % 2
-            if (aa + bb) == 1 then res = res + bit end
-            a = (a - aa) / 2
-            b = (b - bb) / 2
-            bit = bit * 2
-            p = p + 1
-            if p > 32 then break end
-        end
-        return res
-    end
-    local function hash01(str)
-        local h = 2166136261
-        for i=1,#str do
-            h = (bxor(h, string.byte(str,i)) * 16777619) % 2^32
+    local function hash01(s)
+        local h = 131071
+        for i = 1, #s do
+            h = (h*131 + string.byte(s, i)) % 1000003
         end
         return (h % 100000) / 100000
     end
@@ -259,31 +254,33 @@ return function(C, R, UI)
             if not (running and m and m.Parent and orbPosVec) then
                 restoreModelState(m)
                 dropToGroundAt(m)
-                activeCount = math.max(0, activeCount-1)
                 return
             end
 
             local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
             if not pivot then
                 restoreModelState(m)
-                activeCount = math.max(0, activeCount-1)
                 return
             end
 
             local pos = pivot.Position
             local tgt = target()
-            local delta = Vector3.new(tgt.X - pos.X, 0, tgt.Z - pos.Z)
-            local distH = delta.Magnitude
+
+            local flatDelta = Vector3.new(tgt.X - pos.X, 0, tgt.Z - pos.Z)
+            local distH = flatDelta.Magnitude
 
             if distH <= ARRIVE_EPS_H then
                 if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
                 setAnchored(m, false)
                 setCollideFromSnapshot(snap)
                 dropToGroundAt(m, tgt)
-                pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
+                pcall(function()
+                    m:SetAttribute(INFLT_ATTR, nil)
+                    m:SetAttribute(JOB_ATTR, nil)
+                    m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
+                end)
                 if rec.conn then rec.conn:Disconnect() end
                 inflight[m] = nil
-                activeCount = math.max(0, activeCount-1)
                 return
             end
 
@@ -298,13 +295,15 @@ return function(C, R, UI)
             rec.lastD = distH
 
             local step = math.min(DRAG_SPEED * dt, distH)
-            local dir  = distH > 1e-3 and (delta / distH) or Vector3.new()
-            local newPos = pos + dir * step
+            local dir  = distH > 1e-3 and (flatDelta / distH) or Vector3.new()
+            local lift = math.clamp(distH/12, 0, 2.5)
+            local newPos = Vector3.new(pos.X, math.max(pos.Y, (orbPosVec and (orbPosVec.Y - 1.0) or pos.Y)) + lift*0.02, pos.Z) + dir * step
             local look = dir.Magnitude > 0 and dir or Vector3.new(0,0,1)
             setPivot(m, CFrame.new(newPos, newPos + look))
         end)
     end
 
+    local activeCount = 0
     local function wave(center)
         local jobId = tostring(os.clock())
         local list = nearbyCandidates(center, PICK_RADIUS, jobId)
@@ -316,6 +315,7 @@ return function(C, R, UI)
                 activeCount += 1
                 task.spawn(function()
                     startConveyor(m, jobId)
+                    task.delay(8, function() activeCount = math.max(0, activeCount-1) end)
                 end)
                 task.wait(START_STAGGER)
             end
@@ -344,6 +344,7 @@ return function(C, R, UI)
     local function startAll()
         if running then return end
         local r = hrp(); if not r then return end
+        CURRENT_RUN_ID = tostring(os.clock())
         spawnOrbAt(r.Position)
         running = true
         STOP_BTN.Visible = true
@@ -352,18 +353,17 @@ return function(C, R, UI)
             if not running then return end
             local root = hrp(); if not root then return end
             wave(root.Position)
+            task.wait(STEP_WAIT)
         end)
     end
 
-    if tab then
-        tab:Button({
-            Title = "Get Logs",
-            Callback = function()
-                if running then return end
-                startAll()
-            end
-        })
-    end
+    tab:Button({
+        Title = "Get Logs",
+        Callback = function()
+            if running then return end
+            startAll()
+        end
+    })
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if running and orb and not orb.Parent then
