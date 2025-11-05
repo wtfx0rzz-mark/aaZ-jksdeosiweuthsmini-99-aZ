@@ -110,7 +110,25 @@ return function(C, R, UI)
         end
     end
 
-    -- Gentle wake for likely-sleeping assemblies (near-zero motion)
+    -- New: direct drag remote triggers (no physics/ownership changes)
+    local function startDragAll()
+        if not RF_Start then return end
+        local list = nearbyItems()
+        for _,m in ipairs(list) do
+            pcall(function() RF_Start:FireServer(m) end)
+            Run.Heartbeat:Wait()
+        end
+    end
+
+    local function stopDragAll()
+        if not RF_Stop then return end
+        local list = nearbyItems()
+        for _,m in ipairs(list) do
+            pcall(function() RF_Stop:FireServer(m) end)
+            Run.Heartbeat:Wait()
+        end
+    end
+
     local function wakeGentle()
         local list = nearbyItems()
         local lin = 0.05
@@ -129,7 +147,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Very small lateral offsets to break perfect contacts
     local function deoverlap()
         local list = nearbyItems()
         for _,m in ipairs(list) do
@@ -148,7 +165,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Subtle nudge for all items (smaller than before)
     local function nudgeAll()
         local list = nearbyItems()
         for _,m in ipairs(list) do
@@ -165,7 +181,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Take client ownership without drag
     local function mineOwnership()
         local list = nearbyItems()
         for _,m in ipairs(list) do
@@ -178,7 +193,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Hand ownership back to server without drag
     local function serverOwnership()
         local list = nearbyItems()
         for _,m in ipairs(list) do
@@ -200,4 +214,8 @@ return function(C, R, UI)
     tab:Button({ Title = "Nudge Items",         Callback = function() nudgeAll() end })
     tab:Button({ Title = "Mine Ownership",      Callback = function() mineOwnership() end })
     tab:Button({ Title = "Server Ownership",    Callback = function() serverOwnership() end })
+
+    tab:Section({ Title = "Drag Remotes" })
+    tab:Button({ Title = "Start Drag Nearby",   Callback = function() startDragAll() end })
+    tab:Button({ Title = "Stop Drag Nearby",    Callback = function() stopDragAll() end })
 end
