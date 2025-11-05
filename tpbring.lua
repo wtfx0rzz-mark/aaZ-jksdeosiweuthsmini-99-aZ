@@ -123,7 +123,6 @@ return function(C, R, UI)
     local ORB_HEIGHT    = 20
     local MAX_CONCURRENT= 12
     local START_STAGGER = 0.05
-    local STEP_WAIT     = 0.02
 
     local LAND_MIN   = 1.2
     local LAND_MAX   = 3.0
@@ -206,10 +205,24 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
+    local bxor = bit32 and bit32.bxor or function(a,b)
+        local res, bit, p = 0, 1, 0
+        while a > 0 or b > 0 do
+            local aa = a % 2
+            local bb = b % 2
+            if (aa + bb) == 1 then res = res + bit end
+            a = (a - aa) / 2
+            b = (b - bb) / 2
+            bit = bit * 2
+            p = p + 1
+            if p > 32 then break end
+        end
+        return res
+    end
     local function hash01(str)
         local h = 2166136261
         for i=1,#str do
-            h = (h ~ string.byte(str,i)) * 16777619 % 2^32
+            h = (bxor(h, string.byte(str,i)) * 16777619) % 2^32
         end
         return (h % 100000) / 100000
     end
