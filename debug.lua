@@ -75,6 +75,35 @@ return function(C, R, UI)
         m:SetAttribute("PickedUp", nil)
     end
 
+    local function snapshotCollision(m)
+        local t = {}
+        for _,p in ipairs(m:GetDescendants()) do
+            if p:IsA("BasePart") then
+                t[p] = {CanCollide=p.CanCollide, CanQuery=p.CanQuery, CanTouch=p.CanTouch}
+            end
+        end
+        return t
+    end
+    local function setCollisionOff(m)
+        for _,p in ipairs(m:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.CanCollide = false
+                p.CanQuery   = false
+                p.CanTouch   = false
+            end
+        end
+    end
+    local function restoreCollision(m, snap)
+        if not snap then return end
+        for part,st in pairs(snap) do
+            if part and part.Parent then
+                part.CanCollide = st.CanCollide
+                part.CanQuery   = st.CanQuery
+                part.CanTouch   = st.CanTouch
+            end
+        end
+    end
+
     local function ownAll()
         local list = nearbyItems()
         for _,m in ipairs(list) do
@@ -237,17 +266,20 @@ return function(C, R, UI)
         zeroAssembly(root)
     end
 
-    local function bringBodiesFast()  -- start drag -> pivot to player -> stop drag (all bodies)
+    local function bringBodiesFast()
         local root = hrp(); if not root then return end
         local bodies = allBodyModels(); if #bodies == 0 then return end
         local targetPos = groundBelow(root.Position + root.CFrame.LookVector * 2)
         local cf = CFrame.new(Vector3.new(targetPos.X, targetPos.Y + 1.5, targetPos.Z), root.Position)
 
         for _,m in ipairs(bodies) do
+            local snap = snapshotCollision(m)
+            setCollisionOff(m)
             if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
             Run.Heartbeat:Wait()
             pcall(function() m:PivotTo(cf) end)
             Run.Heartbeat:Wait()
+            restoreCollision(m, snap)
             if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
             setPhysicsRestore(m)
             Run.Heartbeat:Wait()
@@ -282,7 +314,6 @@ return function(C, R, UI)
     local function sendBodyToCamp()
         local m = findNearestBody(); if not m then return end
         local fire = resolveCampfireModel(); if not fire then return end
-        if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
         local c = fireCenterPart(fire); if not c then return end
         local look = c.CFrame.LookVector
         local zone = fire:FindFirstChild("InnerTouchZone")
@@ -292,8 +323,14 @@ return function(C, R, UI)
         local g = groundBelow(target)
         local pos = Vector3.new(target.X, g.Y + 1.5, target.Z)
         local cf = CFrame.new(pos, c.Position)
+
+        local snap = snapshotCollision(m)
+        setCollisionOff(m)
+        if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
+        Run.Heartbeat:Wait()
         pcall(function() m:PivotTo(cf) end)
         Run.Heartbeat:Wait()
+        restoreCollision(m, snap)
         if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
         setPhysicsRestore(m)
     end
