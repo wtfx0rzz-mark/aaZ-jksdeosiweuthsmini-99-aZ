@@ -250,6 +250,54 @@ return function(C, R, UI)
         return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
     end
 
+    local function treeModelOf(inst)
+        local current = inst
+        while current do
+            if current:IsA("Model") then
+                local name = current.Name
+                if TREE_NAMES[name] or isBigTreeName(name) then
+                    return current
+                end
+            end
+            current = current.Parent
+        end
+        return nil
+    end
+
+    local function visibleTreeFromHRP(hrp, treeModel, maxHops, targetPart)
+        if not (hrp and treeModel) then return false end
+        targetPart = targetPart or bestTreeHitPart(treeModel)
+        if not targetPart then return false end
+        local start = hrp.Position
+        local dest = targetPart.Position
+        local excluded = {}
+        if lp.Character then
+            excluded[#excluded+1] = lp.Character
+        end
+        local hops = math.max(0, tonumber(maxHops) or 0)
+        while true do
+            local dir = dest - start
+            if dir.Magnitude < 0.1 then return true end
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = excluded
+            local hit = WS:Raycast(start, dir, params)
+            if not hit then return true end
+            local inst = hit.Instance
+            if inst:IsDescendantOf(treeModel) then return true end
+            local blockingTree = treeModelOf(inst)
+            if blockingTree and hops > 0 then
+                excluded[#excluded+1] = blockingTree
+                local mag = dir.Magnitude
+                if mag <= 0 then return false end
+                start = hit.Position + (dir / mag) * 0.05
+                hops = hops - 1
+            else
+                return false
+            end
+        end
+    end
+
     local function visibleFromHRP(hrp, targetPart, maxHops, excludeSelf)
         if not (hrp and targetPart) then return false end
         local start = hrp.Position
@@ -449,7 +497,23 @@ return function(C, R, UI)
                             batch[i] = allTrees[idx]
                         end
                         C.State._treeCursor = C.State._treeCursor + batchSize
-                        chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                        local hopsTree = math.max(0, tonumber(TUNE.RAY_MAX_HOPS_TREE) or 0)
+                        local filtered = {}
+                        for _, tree in ipairs(batch) do
+                            local hitPart = bestTreeHitPart(tree)
+                            if hitPart then
+                                local dist = (hitPart.Position - origin).Magnitude
+                                local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
+                                if los or dist <= CLOSE_FAILSAFE then
+                                    filtered[#filtered+1] = tree
+                                end
+                            end
+                        end
+                        if #filtered > 0 then
+                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                        else
+                            task.wait(0.3)
+                        end
                     else
                         task.wait(0.3)
                     end
