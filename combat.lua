@@ -292,6 +292,7 @@ return function(C, R, UI)
         { "Spear",             0.5 },
         { "Strong Axe",        nil },
         { "Chainsaw",          nil },
+        { "Ice Axe",           nil },
         { "Good Axe",          nil },
         { "Old Axe",           nil },
     }
