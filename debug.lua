@@ -291,11 +291,11 @@ return function(C, R, UI)
                     p.AssemblyLinearVelocity = dir * FAST_PULL_SPEED
                 end
             end
-            local step = math.min(d, FAST_PULL_SPEED * Run.Heartbeat.Wait())
+            local dt = Run.Heartbeat:Wait()
+            local step = math.min(d, FAST_PULL_SPEED * dt)
             local cf = (body:IsA("Model") and body:GetPivot()) or bp.CFrame
             local nxt = CFrame.new(bp.Position + dir * step, target)
             if body:IsA("Model") then pcall(function() body:PivotTo(nxt) end) else pcall(function() bp.CFrame = nxt end) end
-            Run.Heartbeat:Wait()
         end
     end
 
@@ -331,6 +331,7 @@ return function(C, R, UI)
     local function sendBodyToCamp()
         local m = findBodyModel(); if not m then return end
         local fire = resolveCampfireModel(); if not fire then return end
+        if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
         local c = fireCenterPart(fire); if not c then return end
         local look = c.CFrame.LookVector
         local zone = fire:FindFirstChild("InnerTouchZone")
@@ -343,6 +344,9 @@ return function(C, R, UI)
         local pos = Vector3.new(target.X, g.Y + 1.5, target.Z)
         local cf = CFrame.new(pos, c.Position)
         pcall(function() m:PivotTo(cf) end)
+        Run.Heartbeat:Wait()
+        if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
+        setPhysicsRestore(m)
     end
 
     tab:Section({ Title = "Item Recovery" })
@@ -359,8 +363,8 @@ return function(C, R, UI)
     tab:Button({ Title = "Stop Drag Nearby",    Callback = function() stopDragAll() end })
 
     tab:Section({ Title = "Body Tests" })
-    tab:Button({ Title = "TP To Body",          Callback = function() tpPlayerToBody() end })
+    tab:Button({ Title = "TP To Body",             Callback = function() tpPlayerToBody() end })
     tab:Button({ Title = "Bring Body (Fast Drag)", Callback = function() bringBodyFast() end })
-    tab:Button({ Title = "Release Body",        Callback = function() releaseBody() end })
-    tab:Button({ Title = "Send Body To Camp",   Callback = function() sendBodyToCamp() end })
+    tab:Button({ Title = "Release Body",           Callback = function() releaseBody() end })
+    tab:Button({ Title = "Send Body To Camp",      Callback = function() sendBodyToCamp() end })
 end
