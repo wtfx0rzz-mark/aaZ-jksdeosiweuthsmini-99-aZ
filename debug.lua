@@ -292,47 +292,74 @@ return function(C, R, UI)
         setPhysicsRestore(m)
     end
 
+    local CAMP_CACHE = nil
     local function fireCenterPart(fire)
-        return fire:FindFirstChild("Center")
+        if not fire then return nil end
+        local c = fire:FindFirstChild("Center")
             or fire:FindFirstChild("InnerTouchZone")
-            or mainPart(fire)
+            or fire:FindFirstChildWhichIsA("BasePart")
             or fire.PrimaryPart
+        if c and c:IsA("BasePart") then return c end
+        return nil
     end
     local function resolveCampfireModel()
+        if CAMP_CACHE and CAMP_CACHE.Parent then return CAMP_CACHE end
+        local function nameHit(n)
+            n = (n or ""):lower()
+            if n == "mainfire" then return true end
+            if n == "campfire" or n == "camp fire" then return true end
+            if n:find("main") and n:find("fire") then return true end
+            if n:find("camp") and n:find("fire") then return true end
+            return false
+        end
         local map = WS:FindFirstChild("Map")
         local cg  = map and map:FindFirstChild("Campground")
-        local mf  = cg and cg:FindFirstChild("MainFire")
-        if mf then return mf end
-        for _,d in ipairs(WS:GetDescendants()) do
-            if d:IsA("Model") then
-                local n = (d.Name or ""):lower()
-                if n == "mainfire" or n == "campfire" or n == "camp fire" then return d end
+        local mf  = cg and (cg:FindFirstChild("MainFire") or cg:FindFirstChild("Campfire") or cg:FindFirstChild("CampFire"))
+        if mf then CAMP_CACHE = mf return mf end
+        if map then
+            for _,d in ipairs(map:GetDescendants()) do
+                if d:IsA("Model") and nameHit(d.Name) then CAMP_CACHE = d return d end
             end
+        end
+        for _,d in ipairs(WS:GetDescendants()) do
+            if d:IsA("Model") and nameHit(d.Name) then CAMP_CACHE = d return d end
         end
         return nil
     end
-    local function sendBodyToCamp()
-        local m = findNearestBody(); if not m then return end
-        local fire = resolveCampfireModel(); if not fire then return end
-        local c = fireCenterPart(fire); if not c then return end
-        local look = c.CFrame.LookVector
-        local zone = fire:FindFirstChild("InnerTouchZone")
-        local offset = 4
-        if zone and zone:IsA("BasePart") then offset = math.max(zone.Size.X, zone.Size.Z) * 0.5 + 2 end
-        local target = c.Position + look * offset
-        local g = groundBelow(target)
-        local pos = Vector3.new(target.X, g.Y + 1.5, target.Z)
-        local cf = CFrame.new(pos, c.Position)
-
-        local snap = snapshotCollision(m)
-        setCollisionOff(m)
-        if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
-        Run.Heartbeat:Wait()
-        pcall(function() m:PivotTo(cf) end)
-        Run.Heartbeat:Wait()
-        restoreCollision(m, snap)
-        if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
-        setPhysicsRestore(m)
+    local function campTargetCF()
+        local fire = resolveCampfireModel(); if not fire then return nil end
+        local c = fireCenterPart(fire); if not c then return nil end
+        local size = Vector3.new()
+        pcall(function()
+            local min, max = fire:GetBoundingBox()
+            size = (max - min)
+        end)
+        local pad = math.max(size.X, size.Z)
+        if pad == 0 then
+            local zone = fire:FindFirstChild("InnerTouchZone")
+            if zone and zone:IsA("BasePart") then pad = math.max(zone.Size.X, zone.Size.Z) end
+        end
+        if pad == 0 then pad = 6 end
+        local posAhead = c.Position + c.CFrame.LookVector * (pad * 0.5 + 2)
+        local g = groundBelow(posAhead)
+        local pos = Vector3.new(posAhead.X, g.Y + 1.5, posAhead.Z)
+        return CFrame.new(pos, c.Position)
+    end
+    local function sendBodiesToCamp()
+        local bodies = allBodyModels(); if #bodies == 0 then return end
+        local cf = campTargetCF(); if not cf then return end
+        for _,m in ipairs(bodies) do
+            local snap = snapshotCollision(m)
+            setCollisionOff(m)
+            if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
+            Run.Heartbeat:Wait()
+            pcall(function() m:PivotTo(cf) end)
+            Run.Heartbeat:Wait()
+            restoreCollision(m, snap)
+            if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
+            setPhysicsRestore(m)
+            Run.Heartbeat:Wait()
+        end
     end
 
     tab:Section({ Title = "Item Recovery" })
@@ -349,8 +376,8 @@ return function(C, R, UI)
     tab:Button({ Title = "Stop Drag Nearby",    Callback = function() stopDragAll() end })
 
     tab:Section({ Title = "Body Tests" })
-    tab:Button({ Title = "TP To Body",             Callback = function() tpPlayerToBody() end })
-    tab:Button({ Title = "Bring Body (Fast Drag)", Callback = function() bringBodiesFast() end })
-    tab:Button({ Title = "Release Body",           Callback = function() releaseBody() end })
-    tab:Button({ Title = "Send Body To Camp",      Callback = function() sendBodyToCamp() end })
+    tab:Button({ Title = "TP To Body",                 Callback = function() tpPlayerToBody() end })
+    tab:Button({ Title = "Bring Body (Fast Drag)",     Callback = function() bringBodiesFast() end })
+    tab:Button({ Title = "Release Body",               Callback = function() releaseBody() end })
+    tab:Button({ Title = "Send All Bodies To Camp",    Callback = function() sendBodiesToCamp() end })
 end
