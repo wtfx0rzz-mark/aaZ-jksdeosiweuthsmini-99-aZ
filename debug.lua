@@ -263,13 +263,46 @@ return function(C, R, UI)
         zeroAssembly(root)
     end
 
-    local function tpBodyToMe()
-        local m = findBodyModel(); if not m then return end
-        local p0 = hrp(); if not p0 then return end
-        local g = groundBelow(p0.Position)
-        local pos = Vector3.new(g.X, g.Y + 1.5, g.Z)
-        local cf = CFrame.new(pos, pos + p0.CFrame.LookVector)
-        pcall(function() m:PivotTo(cf) end)
+    local FAST_PULL_SPEED = 120
+    local FAST_PULL_TIME  = 4.0
+    local FAST_STOP_DIST  = 3.0
+
+    local function bringBodyFast()
+        local body = findBodyModel(); if not body then return end
+        local root = hrp(); if not root then return end
+        if RF_Start then pcall(function() RF_Start:FireServer(body) end) end
+        for _,p in ipairs(body:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.Anchored = false
+                pcall(function() p:SetNetworkOwner(lp) end)
+            end
+        end
+        local t0 = os.clock()
+        while os.clock() - t0 < FAST_PULL_TIME do
+            if not (body and body.Parent and root and root.Parent) then break end
+            local bp = mainPart(body); if not bp then break end
+            local target = root.Position + root.CFrame.LookVector * 1.0
+            local dir = (target - bp.Position)
+            local d   = dir.Magnitude
+            if d <= FAST_STOP_DIST then break end
+            dir = dir.Unit
+            for _,p in ipairs(body:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.AssemblyLinearVelocity = dir * FAST_PULL_SPEED
+                end
+            end
+            local step = math.min(d, FAST_PULL_SPEED * Run.Heartbeat.Wait())
+            local cf = (body:IsA("Model") and body:GetPivot()) or bp.CFrame
+            local nxt = CFrame.new(bp.Position + dir * step, target)
+            if body:IsA("Model") then pcall(function() body:PivotTo(nxt) end) else pcall(function() bp.CFrame = nxt end) end
+            Run.Heartbeat:Wait()
+        end
+    end
+
+    local function releaseBody()
+        local body = findBodyModel(); if not body then return end
+        if RF_Stop then pcall(function() RF_Stop:FireServer(body) end) end
+        setPhysicsRestore(body)
     end
 
     local function fireCenterPart(fire)
@@ -327,6 +360,7 @@ return function(C, R, UI)
 
     tab:Section({ Title = "Body Tests" })
     tab:Button({ Title = "TP To Body",          Callback = function() tpPlayerToBody() end })
-    tab:Button({ Title = "TP Body To Me",       Callback = function() tpBodyToMe() end })
+    tab:Button({ Title = "Bring Body (Fast Drag)", Callback = function() bringBodyFast() end })
+    tab:Button({ Title = "Release Body",        Callback = function() releaseBody() end })
     tab:Button({ Title = "Send Body To Camp",   Callback = function() sendBodyToCamp() end })
 end
