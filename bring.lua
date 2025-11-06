@@ -248,6 +248,7 @@ return function(C, R, UI)
     local DRAG_SETTLE  = 0.06
     local ACTION_HOLD  = 0.12
     local CONSUME_WAIT = 1.0
+    local JOB_HARD_TIMEOUT_S = 60
 
     local function awaitConsumedOrMoved(model, timeout)
         local t0 = os.clock()
@@ -653,12 +654,15 @@ return function(C, R, UI)
         return #picked
     end
 
-    local function runConveyorJob(centerPos, orbPos, targets, jobId)
-        while true do
-            local moved = runConveyorWave(centerPos, orbPos, targets, jobId)
-            if moved == 0 then break end
-        end
+local function runConveyorJob(centerPos, orbPos, targets, jobId)
+    local t0 = os.clock()
+    while true do
+        if os.clock() - t0 >= JOB_HARD_TIMEOUT_S then break end
+        local moved = runConveyorWave(centerPos, orbPos, targets, jobId)
+        if moved == 0 then break end
     end
+end
+
 
     -- =====================================================================
     -- User actions
