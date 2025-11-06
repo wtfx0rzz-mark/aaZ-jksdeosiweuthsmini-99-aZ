@@ -41,7 +41,6 @@ return function(C, R, UI)
             root.AssemblyAngularVelocity = Vector3.new()
         end
 
-        -- ===== Teleport + Recovery
         local STICK_DURATION    = 0.35
         local STICK_EXTRA_FR    = 2
         local STICK_CLEAR_VEL   = true
@@ -274,7 +273,6 @@ return function(C, R, UI)
             waitGameplayResumed(1.0)
         end
 
-        -- ===== Campfire resolve
         local function fireCenterPart(fire)
             return fire:FindFirstChild("Center")
                 or fire:FindFirstChild("InnerTouchZone")
@@ -312,7 +310,6 @@ return function(C, R, UI)
             return CFrame.new(finalPos, center.Position)
         end
 
-        -- ===== Edge buttons
         local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
         if not edgeGui then
@@ -372,9 +369,12 @@ return function(C, R, UI)
         local campBtn  = makeEdgeBtn("CampEdge",    "Campfire", 5)
 
         local showPhaseEdge, showPlantEdge = false, false
+        local showTeleportEdge, showCampEdge = false, true
+
         phaseBtn.Visible = showPhaseEdge
         plantBtn.Visible = showPlantEdge
-        campBtn.Visible = true
+        tpBtn.Visible    = showTeleportEdge
+        campBtn.Visible  = showCampEdge
 
         phaseBtn.MouseButton1Click:Connect(function()
             local root = hrp(); if not root then return end
@@ -406,7 +406,6 @@ return function(C, R, UI)
             if cf then teleportWithDive(cf) end
         end)
 
-        -- ===== Plant sapling in front (edge)
         local AHEAD_DIST, RAY_DEPTH = 3, 2000
         local function groundAhead(root)
             if not root then return nil end
@@ -462,6 +461,7 @@ return function(C, R, UI)
             Title = "Edge Button: Phase 10",
             Value = false,
             Callback = function(state)
+                showPhaseEdge = state
                 if phaseBtn then phaseBtn.Visible = state end
             end
         })
@@ -469,11 +469,27 @@ return function(C, R, UI)
             Title = "Edge Button: Plant Sapling",
             Value = false,
             Callback = function(state)
+                showPlantEdge = state
                 if plantBtn then plantBtn.Visible = state end
             end
         })
+        tab:Toggle({
+            Title = "Edge Button: Teleport",
+            Value = false,
+            Callback = function(state)
+                showTeleportEdge = state
+                if tpBtn then tpBtn.Visible = state end
+            end
+        })
+        tab:Toggle({
+            Title = "Edge Button: Campfire",
+            Value = true,
+            Callback = function(state)
+                showCampEdge = state
+                if campBtn then campBtn.Visible = state end
+            end
+        })
 
-        -- ===== Lost child helper
         local MAX_TO_SAVE, savedCount = 4, 0
         local autoLostEnabled = true
         local lostEligible  = setmetatable({}, {__mode="k"})
@@ -516,7 +532,6 @@ return function(C, R, UI)
         end
         lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
 
-        -- ===== Godmode
         local godOn, godHB, godAcc = false, nil, 0
         local GOD_INTERVAL = 0.5
         local function fireGod()
@@ -538,7 +553,6 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Godmode", Value = true, Callback = function(state) if state then enableGod() else disableGod() end end })
         task.defer(enableGod)
 
-        -- ===== Infinite jump
         local infJumpOn, infConn = true, nil
         local function enableInfJump()
             infJumpOn = true
@@ -552,7 +566,6 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Infinite Jump", Value = true, Callback = function(state) if state then enableInfJump() else disableInfJump() end end })
         enableInfJump()
 
-        -- ===== Instant interact
         local INSTANT_HOLD, TRIGGER_COOLDOWN = 0.2, 0.4
         local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
         local EXCLUDE_ANCESTOR_SUBSTR = { "closetdoors", "closet", "door", "landmarks" }
@@ -608,7 +621,6 @@ return function(C, R, UI)
         enableInstantInteract()
         tab:Toggle({ Title = "Instant Interact", Value = true, Callback = function(state) if state then enableInstantInteract() else disableInstantInteract() end end })
 
-        -- ===== Flashlight auto-stun
         local FLASHLIGHT_PREF = { "Strong Flashlight", "Old Flashlight" }
         local MONSTER_NAMES   = { "Deer", "Ram", "Owl" }
         local STUN_RADIUS     = 24
@@ -720,7 +732,6 @@ return function(C, R, UI)
         })
         task.defer(enableAutoStun)
 
-        -- ===== Lighting and trees
         local noShadowsOn, lightConn = false, nil
         local origGlobalShadows = nil
         local lightOrig = setmetatable({}, {__mode = "k"})
@@ -786,7 +797,6 @@ return function(C, R, UI)
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
-        -- ===== Auto collect coins
         local COIN_RADIUS      = 20
         local COIN_INTERVAL    = 0.12
         local COIN_TTL         = 1.0
@@ -942,7 +952,6 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
 
-        -- ===== Prevent streaming pause
         local noPauseOn, prevPauseMode
         local function enableNoStreamingPause()
             if noPauseOn then return end
@@ -954,7 +963,6 @@ return function(C, R, UI)
         end
         enableNoStreamingPause()
 
-        -- ===== Saplings helpers
         local function itemsFolder() return WS:FindFirstChild("Items") end
         local function collectSaplingsSnapshot()
             local items = itemsFolder(); if not items then return {} end
@@ -1065,7 +1073,6 @@ return function(C, R, UI)
             end
         end
 
-        -- ===== Chest finder + edge button
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
         tab:Toggle({
@@ -1333,7 +1340,6 @@ return function(C, R, UI)
             end
         end
 
-        -- ===== Delete chests after opening (with diamond pair exclusion)
         do
             local deleteOn = false
             local addConn, remConn, sweepHB
@@ -1495,12 +1501,10 @@ return function(C, R, UI)
             })
         end
 
-        -- ===== Sapling actions
         tab:Section({ Title = "Saplings" })
         tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
         tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
 
-        -- ===== Load defense on spawn + reapply toggles on respawn
         local function enableLoadDefenseSafe()
             local f = nil
             if type(enableLoadDefense) == "function" then f = enableLoadDefense end
@@ -1517,9 +1521,10 @@ return function(C, R, UI)
             local playerGui = lp:WaitForChild("PlayerGui")
             local edgeGui = playerGui:FindFirstChild("EdgeButtons")
             if edgeGui and edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
-            if phaseBtn then phaseBtn.Visible = false end
-            if plantBtn then plantBtn.Visible = false end
-            if campBtn then campBtn.Visible = true end
+            if phaseBtn then phaseBtn.Visible = showPhaseEdge end
+            if plantBtn then plantBtn.Visible = showPlantEdge end
+            if tpBtn    then tpBtn.Visible    = showTeleportEdge end
+            if campBtn  then campBtn.Visible  = showCampEdge end
             if noShadowsOn and not lightConn then enableNoShadows() end
             if loadDefenseOnDefault then enableLoadDefenseSafe() end
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
