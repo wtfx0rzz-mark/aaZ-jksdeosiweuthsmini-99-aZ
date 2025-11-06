@@ -40,12 +40,12 @@ return function(C, R, UI)
     local PILE_RADIUS    = 1.25
     local LAYER_SIZE     = 14
     local LAYER_HEIGHT   = 0.35
-    local UNANCHOR_BATCH = 6
-    local UNANCHOR_STEP  = 0.03
+    local UNANCHOR_BATCH = 8
+    local UNANCHOR_STEP  = 0.04
     local NUDGE_DOWN     = 4
     local CULTIST_LIMIT  = 10
 
-    local PLACE_BATCH    = 12
+    local PLACE_BATCH    = 8
     local PLACE_YIELD_FN = function() Run.Heartbeat:Wait() end
 
     local function getRemote(...)
@@ -324,71 +324,89 @@ return function(C, R, UI)
     end
 
     local function finalizePileDrop(items)
-        for _,m in ipairs(items) do
-            if m and m.Parent then
-                dragStop(m)
-                setNoCollideModel(m, false)
-                local mp = mainPart(m)
-                if mp then
-                    pcall(function() mp:SetNetworkOwner(nil) end)
-                    pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
-                    pcall(function() mp.CollisionGroupId = 0 end)
-                end
-                for _,p in ipairs(m:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        p.AssemblyLinearVelocity  = Vector3.new()
-                        p.AssemblyAngularVelocity = Vector3.new()
-                        p.CanCollide = true; p.CanTouch = true; p.CanQuery = true
-                        p.Massless   = false
-                    end
+    -- phase 1: restore physics properties
+    for _,m in ipairs(items) do
+        if m and m.Parent then
+            dragStop(m)
+            setNoCollideModel(m, false)
+            local mp = mainPart(m)
+            if mp then
+                pcall(function() mp:SetNetworkOwner(nil) end)
+                pcall(function() if mp.SetNetworkOwnershipAuto then mp:SetNetworkOwnershipAuto() end end)
+                pcall(function() mp.CollisionGroupId = 0 end)
+            end
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.AssemblyLinearVelocity  = Vector3.new()
+                    p.AssemblyAngularVelocity = Vector3.new()
+                    p.CanCollide = true
+                    p.CanTouch   = true
+                    p.CanQuery   = true
+                    p.Massless   = false
                 end
             end
-        end
-        local n = #items
-        local i = 1
-        while i <= n do
-            for j = i, math.min(i + UNANCHOR_BATCH - 1, n) do
-                local m = items[j]
-                if m and m.Parent then
-                    setAnchoredModel(m, false)
-                    for _,p in ipairs(m:GetDescendants()) do
-                        if p:IsA("BasePart") then
-                            p.AssemblyLinearVelocity  = Vector3.new(0, -NUDGE_DOWN, 0)
-                            p.AssemblyAngularVelocity = Vector3.new()
-                        end
-                    end
-                end
-            end
-            task.wait(UNANCHOR_STEP)
-            i = i + UNANCHOR_BATCH
         end
     end
 
-    local function placeDown()
-        local baseCF = groundAheadCF(); if not baseCF then return end
-        if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
-        stopGather()
-        local n = #list
-        local cfs = table.create(n)
-        for i = 1, n do cfs[i] = pileCF(i, baseCF) end
-        local placed = 0
-        for i = 1, n do
-            local m = list[i]
+    -- phase 2: staggered unanchor with per-item jitter to prevent mid-air pause
+    local n = #items
+    local i = 1
+    while i <= n do
+        for j = i, math.min(i + UNANCHOR_BATCH - 1, n) do
+            local m = items[j]
             if m and m.Parent then
-                dragStart(m)
-                task.wait(START_YIELD)
-                setAnchoredModel(m, true)
-                setNoCollideModel(m, true)
-                pivotModel(m, cfs[i])
-                dragStop(m)
-                placed += 1
-                if placed % PLACE_BATCH == 0 then PLACE_YIELD_FN() end
+                setAnchoredModel(m, false)
+                for _,p in ipairs(m:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.AssemblyLinearVelocity  = Vector3.new(0, -NUDGE_DOWN, 0)
+                        p.AssemblyAngularVelocity = Vector3.new()
+                    end
+                end
+            end
+            -- tiny jitter per item spreads wake across frames
+            task.wait(0.006 + ((j % 7) * 0.002))
+        end
+        task.wait(UNANCHOR_STEP)
+        i = i + UNANCHOR_BATCH
+    end
+end
+
+
+    local function placeDown()
+    local baseCF = groundAheadCF(); if not baseCF then return end
+    if _G._PlaceEdgeBtn then _G._PlaceEdgeBtn.Visible = false end
+    stopGather()
+
+    local n = #list
+    if n == 0 then return end
+
+    local cfs = table.create(n)
+    for i = 1, n do
+        cfs[i] = pileCF(i, baseCF)
+    end
+
+    local placed = 0
+    for i = 1, n do
+        local m = list[i]
+        if m and m.Parent then
+            dragStart(m)
+            task.wait(0.06)
+            setAnchoredModel(m, true)
+            setNoCollideModel(m, true)
+            pivotModel(m, cfs[i])
+            dragStop(m)
+            placed += 1
+            if placed % PLACE_BATCH == 0 then
+                PLACE_YIELD_FN()
             end
         end
-        task.wait(0.05)
-        finalizePileDrop(list)
-        clearAll()
     end
+
+    task.wait(0.05)
+    finalizePileDrop(list)
+    clearAll()
+end
+
 
     C.Gather = C.Gather or {}
     C.Gather.IsOn      = function() return gatherOn end
