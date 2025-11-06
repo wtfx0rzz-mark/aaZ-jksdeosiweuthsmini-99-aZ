@@ -9,16 +9,6 @@ return function(C, R, UI)
         local Lighting = (C and C.Services and C.Services.Lighting) or game:GetService("Lighting")
         local VIM      = game:GetService("VirtualInputManager")
 
-        local function enableLoadDefenseSafe()
-            local f = nil
-            if type(enableLoadDefense) == "function" then f = enableLoadDefense end
-            if not f then
-                local ok, g = pcall(function() return _G and _G.enableLoadDefense end)
-                if ok and type(g) == "function" then f = g end
-            end
-            if f then pcall(f) end
-        end
-
         local lp = Players.LocalPlayer
         local Tabs = (UI and UI.Tabs) or {}
         local tab  = Tabs.Auto
@@ -28,14 +18,18 @@ return function(C, R, UI)
             local ch = lp.Character or lp.CharacterAdded:Wait()
             return ch and ch:FindFirstChild("HumanoidRootPart")
         end
-        local function getHumanoid()
+        local function hum()
             local ch = lp.Character
             return ch and ch:FindFirstChildOfClass("Humanoid")
         end
-        local function mainPart(model)
-            if not (model and model:IsA("Model")) then return nil end
-            if model.PrimaryPart then return model.PrimaryPart end
-            return model:FindFirstChildWhichIsA("BasePart")
+        local function mainPart(m)
+            if not m then return nil end
+            if m:IsA("BasePart") then return m end
+            if m:IsA("Model") then
+                if m.PrimaryPart then return m.PrimaryPart end
+                return m:FindFirstChildWhichIsA("BasePart")
+            end
+            return nil
         end
         local function getRemote(name)
             local f = RS:FindFirstChild("RemoteEvents")
@@ -43,10 +37,11 @@ return function(C, R, UI)
         end
         local function zeroAssembly(root)
             if not root then return end
-            root.AssemblyLinearVelocity  = Vector3.new(0,0,0)
-            root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+            root.AssemblyLinearVelocity  = Vector3.new()
+            root.AssemblyAngularVelocity = Vector3.new()
         end
 
+        -- ===== Teleport + Recovery
         local STICK_DURATION    = 0.35
         local STICK_EXTRA_FR    = 2
         local STICK_CLEAR_VEL   = true
@@ -128,12 +123,15 @@ return function(C, R, UI)
             rollbackThread = task.spawn(function()
                 local moved = false
                 while os.clock() - startTime < ROLLBACK_IDLE_S do
-                    local h = getHumanoid()
+                    local h = hum()
                     local r = hrp()
                     if r and startPos and (r.Position - startPos).Magnitude >= MIN_MOVE_DIST then
                         moved = true; break
                     end
                     if h and h.MoveDirection.Magnitude > 0.05 then
+                        moved = true; break
+                    end
+                    if not lp or lp.GameplayPaused then
                         moved = true; break
                     end
                     Run.Heartbeat:Wait()
@@ -154,6 +152,39 @@ return function(C, R, UI)
                     end
                 end
             end)
+        end
+
+        local function diveBelowGround(depth, frames)
+            local root = hrp(); if not root then return end
+            local ch = lp.Character
+            local look = root.CFrame.LookVector
+            local dest = root.Position + Vector3.new(0, -math.abs(depth), 0)
+            for _=1,(frames or 4) do
+                local cf = CFrame.new(dest, dest + look)
+                if ch then pcall(function() ch:PivotTo(cf) end) end
+                pcall(function() root.CFrame = cf end)
+                zeroAssembly(root)
+                Run.Heartbeat:Wait()
+            end
+        end
+
+        local function groundBelow(pos)
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local ex = { lp.Character }
+            local map = WS:FindFirstChild("Map")
+            if map then
+                local fol = map:FindFirstChild("Foliage")
+                if fol then table.insert(ex, fol) end
+            end
+            local items = WS:FindFirstChild("Items");      if items then table.insert(ex, items) end
+            local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
+            params.FilterDescendantsInstances = ex
+            local start = pos + Vector3.new(0, 5, 0)
+            local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
+            if hit then return hit.Position end
+            hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
+            return (hit and hit.Position) or pos
         end
 
         local function teleportSticky(cf, dropMode)
@@ -205,21 +236,8 @@ return function(C, R, UI)
             startRollbackWatch(targetCF)
         end
 
-        local function diveBelowGround(depth, frames)
-            local root = hrp(); if not root then return end
-            local ch = lp.Character
-            local look = root.CFrame.LookVector
-            local dest = root.Position + Vector3.new(0, -math.abs(depth), 0)
-            for _=1,(frames or 4) do
-                local cf = CFrame.new(dest, dest + look)
-                if ch then pcall(function() ch:PivotTo(cf) end) end
-                pcall(function() root.CFrame = cf end)
-                zeroAssembly(root)
-                Run.Heartbeat:Wait()
-            end
-        end
         local function waitUntilGroundedOrMoving(timeout)
-            local h = getHumanoid()
+            local h = hum()
             local t0 = os.clock()
             local groundedFrames = 0
             while os.clock() - t0 < (timeout or 3) do
@@ -239,6 +257,7 @@ return function(C, R, UI)
             end
             return false
         end
+
         local DIVE_DEPTH = 200
         local function teleportWithDive(targetCF)
             local upCF = targetCF + Vector3.new(0, SAFE_DROP_UP, 0)
@@ -255,6 +274,7 @@ return function(C, R, UI)
             waitGameplayResumed(1.0)
         end
 
+        -- ===== Campfire resolve
         local function fireCenterPart(fire)
             return fire:FindFirstChild("Center")
                 or fire:FindFirstChild("InnerTouchZone")
@@ -277,27 +297,6 @@ return function(C, R, UI)
             return nil
         end
 
-        local function groundBelow(pos)
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            local ex = { lp.Character }
-            local map = WS:FindFirstChild("Map")
-            if map then
-                local fol = map:FindFirstChild("Foliage")
-                if fol then table.insert(ex, fol) end
-            end
-            local items = WS:FindFirstChild("Items");      if items then table.insert(ex, items) end
-            local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
-            params.FilterDescendantsInstances = ex
-
-            local start = pos + Vector3.new(0, 5, 0)
-            local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
-            if hit then return hit.Position end
-
-            hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
-            return (hit and hit.Position) or pos
-        end
-
         local function campfireTeleportCF()
             local fire = resolveCampfireModel(); if not fire then return nil end
             local center = fireCenterPart(fire); if not center then return fire:GetPivot() end
@@ -313,8 +312,7 @@ return function(C, R, UI)
             return CFrame.new(finalPos, center.Position)
         end
 
-        local PHASE_DIST = 10
-
+        -- ===== Edge buttons
         local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
         if not edgeGui then
@@ -324,7 +322,6 @@ return function(C, R, UI)
             pcall(function() edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling end)
             edgeGui.Parent = playerGui
         end
-
         local stack = edgeGui:FindFirstChild("EdgeStack")
         if not stack then
             stack = Instance.new("Frame")
@@ -343,7 +340,6 @@ return function(C, R, UI)
             list.HorizontalAlignment = Enum.HorizontalAlignment.Right
             list.Parent = stack
         end
-
         local function makeEdgeBtn(name, label, order)
             local b = stack:FindFirstChild(name)
             if not b then
@@ -368,6 +364,7 @@ return function(C, R, UI)
             return b
         end
 
+        local PHASE_DIST = 10
         local phaseBtn = makeEdgeBtn("Phase10Edge", "Phase 10", 1)
         local tpBtn    = makeEdgeBtn("TpEdge",      "Teleport", 2)
         local plantBtn = makeEdgeBtn("PlantEdge",   "Plant",    3)
@@ -409,6 +406,7 @@ return function(C, R, UI)
             if cf then teleportWithDive(cf) end
         end)
 
+        -- ===== Plant sapling in front (edge)
         local AHEAD_DIST, RAY_DEPTH = 3, 2000
         local function groundAhead(root)
             if not root then return nil end
@@ -427,7 +425,6 @@ return function(C, R, UI)
             local hit = WS:Raycast(castFrom, Vector3.new(0, -RAY_DEPTH, 0), params)
             return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
         end
-
         local function findClosestSapling()
             local items = WS:FindFirstChild("Items")
             local root  = hrp()
@@ -476,6 +473,7 @@ return function(C, R, UI)
             end
         })
 
+        -- ===== Lost child helper
         local MAX_TO_SAVE, savedCount = 4, 0
         local autoLostEnabled = true
         local lostEligible  = setmetatable({}, {__mode="k"})
@@ -518,6 +516,7 @@ return function(C, R, UI)
         end
         lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
 
+        -- ===== Godmode
         local godOn, godHB, godAcc = false, nil, 0
         local GOD_INTERVAL = 0.5
         local function fireGod()
@@ -539,18 +538,21 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Godmode", Value = true, Callback = function(state) if state then enableGod() else disableGod() end end })
         task.defer(enableGod)
 
+        -- ===== Infinite jump
         local infJumpOn, infConn = true, nil
         local function enableInfJump()
             infJumpOn = true
             if infConn then infConn:Disconnect() end
             infConn = UIS.JumpRequest:Connect(function()
-                local h = getHumanoid()
+                local h = hum()
                 if h then pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end) end
             end)
         end
         local function disableInfJump() infJumpOn = false; if infConn then infConn:Disconnect(); infConn = nil end end
         tab:Toggle({ Title = "Infinite Jump", Value = true, Callback = function(state) if state then enableInfJump() else disableInfJump() end end })
         enableInfJump()
+
+        -- ===== Instant interact
         local INSTANT_HOLD, TRIGGER_COOLDOWN = 0.2, 0.4
         local EXCLUDE_NAME_SUBSTR = { "door", "closet", "gate", "hatch" }
         local EXCLUDE_ANCESTOR_SUBSTR = { "closetdoors", "closet", "door", "landmarks" }
@@ -606,6 +608,7 @@ return function(C, R, UI)
         enableInstantInteract()
         tab:Toggle({ Title = "Instant Interact", Value = true, Callback = function(state) if state then enableInstantInteract() else disableInstantInteract() end end })
 
+        -- ===== Flashlight auto-stun
         local FLASHLIGHT_PREF = { "Strong Flashlight", "Old Flashlight" }
         local MONSTER_NAMES   = { "Deer", "Ram", "Owl" }
         local STUN_RADIUS     = 24
@@ -642,15 +645,6 @@ return function(C, R, UI)
             pcall(function() ev:FireServer(false, "Strong Flashlight") end)
             pcall(function() ev:FireServer(false, "Old Flashlight") end)
             lastFlashState, lastFlashName = nil, nil
-        end
-        local function mainPart(m)
-            if not m then return nil end
-            if m:IsA("BasePart") then return m end
-            if m:IsA("Model") then
-                if m.PrimaryPart then return m.PrimaryPart end
-                return m:FindFirstChildWhichIsA("BasePart")
-            end
-            return nil
         end
         local function nearestMonsterWithin(radius)
             local chars = WS:FindFirstChild("Characters")
@@ -726,6 +720,7 @@ return function(C, R, UI)
         })
         task.defer(enableAutoStun)
 
+        -- ===== Lighting and trees
         local noShadowsOn, lightConn = false, nil
         local origGlobalShadows = nil
         local lightOrig = setmetatable({}, {__mode = "k"})
@@ -788,10 +783,10 @@ return function(C, R, UI)
             if hideConn then hideConn:Disconnect() hideConn = nil end
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
-
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
+        -- ===== Auto collect coins
         local COIN_RADIUS      = 20
         local COIN_INTERVAL    = 0.12
         local COIN_TTL         = 1.0
@@ -947,6 +942,7 @@ return function(C, R, UI)
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
 
+        -- ===== Prevent streaming pause
         local noPauseOn, prevPauseMode
         local function enableNoStreamingPause()
             if noPauseOn then return end
@@ -958,9 +954,8 @@ return function(C, R, UI)
         end
         enableNoStreamingPause()
 
-        local function itemsFolder()
-            return WS:FindFirstChild("Items")
-        end
+        -- ===== Saplings helpers
+        local function itemsFolder() return WS:FindFirstChild("Items") end
         local function collectSaplingsSnapshot()
             local items = itemsFolder(); if not items then return {} end
             local list = {}
@@ -972,7 +967,7 @@ return function(C, R, UI)
             end
             return list
         end
-        local function groundBelow(pos)
+        local function groundBelow2(pos)
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
             local ex = { lp.Character }
@@ -992,7 +987,7 @@ return function(C, R, UI)
         end
         local function groundAtFeetCF()
             local root = hrp(); if not root then return nil end
-            local g = groundBelow(root.Position)
+            local g = groundBelow2(root.Position)
             local look = root.CFrame.LookVector
             local pos = Vector3.new(g.X, g.Y + 0.6, g.Z)
             return CFrame.new(pos, pos + look)
@@ -1028,7 +1023,7 @@ return function(C, R, UI)
         local PLANT_Y_EPSILON   = 0.15
         local function computePlantPosFromModel(m)
             local mp = mainPart(m); if not mp then return nil end
-            local g  = groundBelow(mp.Position)
+            local g  = groundBelow2(mp.Position)
             local baseY = mp.Position.Y - (mp.Size.Y * 0.5)
             local y = math.min(g.Y, baseY) - PLANT_Y_EPSILON
             return Vector3.new(mp.Position.X, y, mp.Position.Z)
@@ -1070,6 +1065,7 @@ return function(C, R, UI)
             end
         end
 
+        -- ===== Chest finder + edge button
         local chestFinderOn = false
         local enableChestFinder, disableChestFinder
         tab:Toggle({
@@ -1101,7 +1097,7 @@ return function(C, R, UI)
                 return b
             end)()
             local function itemsFolder() return WS:FindFirstChild("Items") end
-            local function mainPart(m)
+            local function mainPart2(m)
                 if not m then return nil end
                 if m:IsA("BasePart") then return m end
                 if m:IsA("Model") then
@@ -1110,7 +1106,7 @@ return function(C, R, UI)
                 end
                 return nil
             end
-            local function groundBelow(pos)
+            local function groundBelow3(pos)
                 local params = RaycastParams.new()
                 params.FilterType = Enum.RaycastFilterType.Exclude
                 params.FilterDescendantsInstances = { lp.Character, WS:FindFirstChild("Items") }
@@ -1147,7 +1143,7 @@ return function(C, R, UI)
                 return false
             end
             local function chestPos(m)
-                local mp = mainPart(m)
+                local mp = mainPart2(m)
                 if mp then return mp.Position end
                 local ok, cf = pcall(function() return m:GetPivot() end)
                 return ok and cf.Position or nil
@@ -1239,7 +1235,7 @@ return function(C, R, UI)
                         if d:IsA("BasePart") then
                             table.insert(pts, d.Position)
                         elseif d:IsA("Model") then
-                            local mp = mainPart(d)
+                            local mp = mainPart2(d)
                             if mp then table.insert(pts, mp.Position) end
                         end
                     end
@@ -1251,7 +1247,7 @@ return function(C, R, UI)
             end
             local FRONT_DIST = 4.0
             local function teleportNearChest(m)
-                local mp = mainPart(m); if not mp then return end
+                local mp = mainPart2(m); if not mp then return end
                 local chestCenter = mp.Position
                 local hingePos = hingeBackCenter(m)
                 local dir
@@ -1273,7 +1269,7 @@ return function(C, R, UI)
                     end
                 end
                 local desired = chestCenter + dir * FRONT_DIST
-                local ground = groundBelow(desired)
+                local ground = groundBelow3(desired)
                 local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
                 teleportSticky(CFrame.new(standPos, chestCenter), true)
             end
@@ -1337,6 +1333,7 @@ return function(C, R, UI)
             end
         end
 
+        -- ===== Delete chests after opening (with diamond pair exclusion)
         do
             local deleteOn = false
             local addConn, remConn, sweepHB
@@ -1498,10 +1495,21 @@ return function(C, R, UI)
             })
         end
 
+        -- ===== Sapling actions
         tab:Section({ Title = "Saplings" })
         tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
         tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
 
+        -- ===== Load defense on spawn + reapply toggles on respawn
+        local function enableLoadDefenseSafe()
+            local f = nil
+            if type(enableLoadDefense) == "function" then f = enableLoadDefense end
+            if not f then
+                local ok, g = pcall(function() return _G and _G.enableLoadDefense end)
+                if ok and type(g) == "function" then f = g end
+            end
+            if f then pcall(f) end
+        end
         local loadDefenseOnDefault = true
         if loadDefenseOnDefault then enableLoadDefenseSafe() end
 
@@ -1512,11 +1520,9 @@ return function(C, R, UI)
             if phaseBtn then phaseBtn.Visible = false end
             if plantBtn then plantBtn.Visible = false end
             if campBtn then campBtn.Visible = true end
-            if autoStunOn and not autoStunThread then task.defer(enableAutoStun) end
             if noShadowsOn and not lightConn then enableNoShadows() end
-            if hideBigTreesOn and not hideConn then enableHideBigTrees() end
-            pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if loadDefenseOnDefault then enableLoadDefenseSafe() end
+            pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if coinOn and not coinConn then enableCoin() end
             if chestFinderOn and enableChestFinder then enableChestFinder() end
         end)
