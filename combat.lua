@@ -255,17 +255,18 @@ return function(C, R, UI)
 
     local lastHitAt = setmetatable({}, {__mode="k"})
 
-    local function canHitWithWeapon(target, weaponName)
+    local function canHitWithWeapon(target, weaponName, cooldownSec)
         if not target then return false, nil end
+        local cd = tonumber(cooldownSec) or TUNE.CHAR_DEBOUNCE_SEC
         local bucket = lastHitAt[target]
         if not bucket or type(bucket) ~= "table" then return true, nil end
         local t = bucket[weaponName]
         if not t then return true, nil end
         local elapsed = tick() - t
-        if elapsed >= TUNE.CHAR_DEBOUNCE_SEC then
+        if elapsed >= cd then
             return true, nil
         end
-        return false, TUNE.CHAR_DEBOUNCE_SEC - elapsed
+        return false, cd - elapsed
     end
 
     local function markHitWithWeapon(target, weaponName)
@@ -404,6 +405,12 @@ return function(C, R, UI)
     end
 
     local lastSwingAtByWeapon = {}
+    local characterHitSeq = 0
+
+    local function nextCharacterHitId()
+        characterHitSeq += 1
+        return tostring(characterHitSeq) .. "_" .. TUNE.UID_SUFFIX
+    end
 
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         if not isTree then
@@ -442,12 +449,12 @@ return function(C, R, UI)
                     local nextTry = math.huge
                     for i = 1, cap do
                         local mdl = targetModels[i]
-                        local canHit, waitFor = canHitWithWeapon(mdl, toolName)
+                        local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
                         if canHit then
                             local hitPart = hitPartGetter(mdl)
                             if hitPart then
-                                local impactCF = hitPart.CFrame
-                                local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                                local impactCF = computeImpactCFrame(mdl, hitPart)
+                                local hitId = nextCharacterHitId()
                                 HitTarget(mdl, tool, hitId, impactCF)
                                 markHitWithWeapon(mdl, toolName)
                                 didHit = true
