@@ -241,29 +241,6 @@ return function(C, R, UI)
 
     local lastHitAt = setmetatable({}, {__mode="k"})
 
-    local function canHitWithWeapon(target, weaponName)
-        if not target then return false, nil end
-        local bucket = lastHitAt[target]
-        if not bucket or type(bucket) ~= "table" then return true, nil end
-        local t = bucket[weaponName]
-        if not t then return true, nil end
-        local elapsed = tick() - t
-        if elapsed >= TUNE.CHAR_DEBOUNCE_SEC then
-            return true, nil
-        end
-        return false, TUNE.CHAR_DEBOUNCE_SEC - elapsed
-    end
-
-    local function markHitWithWeapon(target, weaponName)
-        if not (target and weaponName) then return end
-        local bucket = lastHitAt[target]
-        if type(bucket) ~= "table" then
-            bucket = {}
-            lastHitAt[target] = bucket
-        end
-        bucket[weaponName] = tick()
-    end
-
     local function modelOf(inst)
         if not inst then return nil end
         if inst:IsA("Model") then return inst end
@@ -368,93 +345,22 @@ return function(C, R, UI)
         { "Old Axe",           nil },
     }
 
-    local function collectAvailableCharWeapons()
-        local available = {}
-        for idx, pair in ipairs(CHAR_WEAPON_PREF) do
+    local function selectBestCharWeapon()
+        for _, pair in ipairs(CHAR_WEAPON_PREF) do
             local name, cd = pair[1], pair[2]
             if findInInventory(name) then
-                available[#available+1] = {
-                    name = name,
-                    cd = cd or TUNE.CHOP_SWING_DELAY,
-                    order = idx,
-                }
+                if cd == nil then cd = TUNE.CHOP_SWING_DELAY end
+                return name, cd
             end
         end
-        table.sort(available, function(a, b)
-            if a.cd ~= b.cd then
-                return a.cd > b.cd
-            end
-            return a.order < b.order
-        end)
-        return available
+        return nil, nil
     end
 
     local lastSwingAtByWeapon = {}
 
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
-        if not isTree then
-            local availableWeapons = collectAvailableCharWeapons()
-            if #availableWeapons == 0 then
-                for _, n in ipairs(TUNE.ChopPrefer) do
-                    if findInInventory(n) then
-                        availableWeapons[#availableWeapons+1] = {
-                            name = n,
-                            cd = swingDelay,
-                            order = math.huge,
-                        }
-                        break
-                    end
-                end
-            end
-            if #availableWeapons == 0 then
-                task.wait(0.35)
-                return
-            end
-
-            for _, weapon in ipairs(availableWeapons) do
-                local toolName = weapon.name
-                local cd = weapon.cd
-                local lastSwing = lastSwingAtByWeapon[toolName] or 0
-                local now = os.clock()
-                local remaining = cd - (now - lastSwing)
-                if remaining > 0 then
-                    task.wait(remaining)
-                    now = os.clock()
-                end
-                local tool = ensureEquipped(toolName)
-                if tool then
-                    local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
-                    local didHit = false
-                    local nextTry = math.huge
-                    for i = 1, cap do
-                        local mdl = targetModels[i]
-                        local canHit, waitFor = canHitWithWeapon(mdl, toolName)
-                        if canHit then
-                            local hitPart = hitPartGetter(mdl)
-                            if hitPart then
-                                local impactCF = hitPart.CFrame
-                                local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
-                                HitTarget(mdl, tool, hitId, impactCF)
-                                markHitWithWeapon(mdl, toolName)
-                                didHit = true
-                                task.wait(TUNE.CHAR_HIT_STEP_WAIT)
-                            end
-                        elseif waitFor and waitFor < nextTry then
-                            nextTry = waitFor
-                        end
-                    end
-                    if didHit then
-                        lastSwingAtByWeapon[toolName] = os.clock()
-                    elseif nextTry < math.huge then
-                        task.wait(math.max(0.01, nextTry))
-                    end
-                end
-            end
-            return
-        end
-
         local toolName
-        if C.State.Toggles.BigTreeAura then
+        if isTree and C.State.Toggles.BigTreeAura then
             local bt = hasBigTreeTool()
             if bt then
                 toolName = bt
@@ -470,6 +376,40 @@ return function(C, R, UI)
         if not toolName then task.wait(0.35) return end
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
+
+        if not isTree then
+            local preferredName, weaponCD = selectBestCharWeapon()
+            if preferredName then
+                tool = ensureEquipped(preferredName)
+                if not tool then task.wait(0.35) return end
+                toolName = preferredName
+            end
+            local cd = weaponCD or TUNE.CHOP_SWING_DELAY
+            local now = os.clock()
+            local lastSwing = lastSwingAtByWeapon[toolName] or 0
+            if now - lastSwing < cd then
+                task.wait(math.max(0.01, cd - (now - lastSwing)))
+                now = os.clock()
+            end
+            local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
+            for i = 1, cap do
+                local mdl = targetModels[i]
+                local t0 = lastHitAt[mdl] or 0
+                if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
+                    local hitPart = hitPartGetter(mdl)
+                    if hitPart then
+                        local impactCF = hitPart.CFrame
+                        local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                        HitTarget(mdl, tool, hitId, impactCF)
+                        lastHitAt[mdl] = tick()
+                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                    end
+                end
+            end
+            lastSwingAtByWeapon[toolName] = now
+            task.wait(cd)
+            return
+        end
 
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
