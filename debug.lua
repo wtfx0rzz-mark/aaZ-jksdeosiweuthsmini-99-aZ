@@ -3,6 +3,7 @@ return function(C, R, UI)
     local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
+    local CS       = game:GetService("CollectionService")
 
     local lp  = Players.LocalPlayer
     local tabs = UI and UI.Tabs
@@ -362,6 +363,48 @@ return function(C, R, UI)
         end
     end
 
+    local SAP_Enable = false
+    local sap_seen = setmetatable({}, {__mode="k"})
+    local sap_conns = {}
+
+    local function isSapling(m)
+        if not m or not m.Parent then return false end
+        if m:IsA("Model") then
+            local n = (m.Name or ""):lower()
+            if n:find("sapling") then return true end
+            if CS:HasTag(m, "Sapling") then return true end
+            if m:GetAttribute("IsSapling") == true then return true end
+        end
+        return false
+    end
+    local function tryStartDragSapling(m)
+        if not SAP_Enable then return end
+        if not m or not m.Parent then return end
+        if not isSapling(m) then return end
+        if sap_seen[m] then return end
+        sap_seen[m] = true
+        if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
+    end
+    local function bindSaplingWatcher(items)
+        for _,c in ipairs(sap_conns) do c:Disconnect() end
+        table.clear(sap_conns)
+        if not SAP_Enable then table.clear(sap_seen) return end
+        if not items or not items.Parent then items = itemsFolder() end
+        for _,d in ipairs(items:GetDescendants()) do
+            local m = d:IsA("Model") and d or d:FindFirstAncestorOfClass("Model")
+            if m then tryStartDragSapling(m) end
+        end
+        sap_conns[#sap_conns+1] = items.DescendantAdded:Connect(function(d)
+            local m = d:IsA("Model") and d or d:FindFirstAncestorOfClass("Model")
+            if m then tryStartDragSapling(m) end
+        end)
+        sap_conns[#sap_conns+1] = WS.ChildAdded:Connect(function(ch)
+            if ch.Name == "Items" or ch == items then
+                task.defer(function() bindSaplingWatcher(itemsFolder()) end)
+            end
+        end)
+    end
+
     tab:Section({ Title = "Item Recovery" })
     tab:Button({ Title = "Own All Items",       Callback = function() ownAll() end })
     tab:Button({ Title = "Disown All Items",    Callback = function() disownAll() end })
@@ -380,4 +423,25 @@ return function(C, R, UI)
     tab:Button({ Title = "Bring Body (Fast Drag)",     Callback = function() bringBodiesFast() end })
     tab:Button({ Title = "Release Body",               Callback = function() releaseBody() end })
     tab:Button({ Title = "Send All Bodies To Camp",    Callback = function() sendBodiesToCamp() end })
+
+    tab:Section({ Title = "Protection" })
+    if tab.Toggle then
+        tab:Toggle({
+            Title = "Sapling Protection",
+            Default = false,
+            Callback = function(v)
+                SAP_Enable = v and true or false
+                bindSaplingWatcher(itemsFolder())
+            end
+        })
+    else
+        tab:Button({
+            Title = "Sapling Protection: OFF",
+            Callback = function(btn)
+                SAP_Enable = not SAP_Enable
+                if btn and btn.SetTitle then btn:SetTitle("Sapling Protection: " .. (SAP_Enable and "ON" or "OFF")) end
+                bindSaplingWatcher(itemsFolder())
+            end
+        })
+    end
 end
