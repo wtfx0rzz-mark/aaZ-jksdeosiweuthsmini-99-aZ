@@ -433,13 +433,7 @@ end
             end
         end
     })
-    tab:Divider()
 
-    tab:Section({ Title = "Bring", Icon = "box" })
-    tab:Button({ Title = "Drop Items", Callback = function() placeDown() end })
-    tab:Divider()
-
-    tab:Section({ Title = "Selection", Icon = "check-square" })
     tab:Button({
         Title = "Gather Items",
         Callback = function()
@@ -449,7 +443,8 @@ end
             end
         end
     })
-    tab:Divider()
+
+    tab:Button({ Title = "Drop Items", Callback = function() placeDown() end })
 
     local function dropdownMulti(args)
         return tab:Dropdown({
