@@ -368,7 +368,7 @@ return function(C, R, UI)
         { "Cultist King Mace", 1.0 },
         { "Morningstar",       1.0 },
         { "Obsidiron Hammer",  1.0 },
-        { "Infernal Sword",    0.5 },
+        { "Infernal Sword",    0.6 },
         { "Ice Sword",         0.5 },
         { "Laser Sword",       0.5 },
         { "Katana",            0.4 },
