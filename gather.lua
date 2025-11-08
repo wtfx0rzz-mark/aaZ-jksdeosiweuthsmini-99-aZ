@@ -8,6 +8,11 @@ return function(C, R, UI)
     local tab = UI.Tabs and (UI.Tabs.Gather or UI.Tabs.Auto)
     assert(tab, "Gather tab not found")
 
+    C.State = C.State or { AuraRadius = 150, Toggles = {} }
+    if not tonumber(C.State.GatherRadius) then
+        C.State.GatherRadius = tonumber(C.State.AuraRadius) or 150
+    end
+
     local junkItems    = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -109,8 +114,8 @@ return function(C, R, UI)
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
-    local function auraRadius()
-        return math.clamp(tonumber(C.State and C.State.AuraRadius) or 150, 0, 500)
+    local function gatherRadius()
+        return math.clamp(tonumber(C.State and C.State.GatherRadius) or 150, 0, 500)
     end
     local function mainPart(obj)
         if not obj then return nil end
@@ -248,7 +253,7 @@ return function(C, R, UI)
 
         local root = hrp(); if not root then return end
         local origin = root.Position
-        local rad = auraRadius()
+        local rad = gatherRadius()
         local pool = WS:FindFirstChild("Items") or WS
 
         for _,d in ipairs(pool:GetDescendants()) do
@@ -412,6 +417,23 @@ end
     C.Gather = C.Gather or {}
     C.Gather.IsOn      = function() return gatherOn end
     C.Gather.PlaceDown = placeDown
+
+    tab:Section({ Title = "Gather Settings", Icon = "sliders" })
+    tab:Slider({
+        Title = "Distance",
+        Value = { Min = 0, Max = 500, Default = gatherRadius() },
+        Callback = function(v)
+            local nv = v
+            if type(v) == "table" then
+                nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max
+            end
+            nv = tonumber(nv)
+            if nv then
+                C.State.GatherRadius = math.clamp(nv, 0, 500)
+            end
+        end
+    })
+    tab:Divider()
 
     tab:Section({ Title = "Bring", Icon = "box" })
     tab:Button({ Title = "Drop Items", Callback = function() placeDown() end })
