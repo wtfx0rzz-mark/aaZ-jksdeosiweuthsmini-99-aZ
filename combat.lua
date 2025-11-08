@@ -23,6 +23,7 @@ return function(C, R, UI)
     TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
     TUNE.RAY_MAX_HOPS_CHAR    = TUNE.RAY_MAX_HOPS_CHAR    or 3
     TUNE.RAY_MAX_HOPS_TREE    = TUNE.RAY_MAX_HOPS_TREE    or 1
+    TUNE.CHAR_CLOSE_FAILSAFE  = TUNE.CHAR_CLOSE_FAILSAFE  or 18
 
     local running = { SmallTree = false, Character = false }
 
@@ -68,7 +69,14 @@ return function(C, R, UI)
             return findInInventory(wantedName)
         end
         local tool = findInInventory(wantedName)
-        if tool then SafeEquip(tool) end
+        if tool then
+            SafeEquip(tool)
+            local t0 = os.clock()
+            while os.clock() - t0 < 0.25 do
+                if equippedToolName() == wantedName then break end
+                task.wait(0.02)
+            end
+        end
         return tool
     end
 
@@ -204,33 +212,6 @@ return function(C, R, UI)
         return out
     end
 
-    local function collectCharactersInRadius(charsFolder, origin, radius)
-        local out = {}
-        if not charsFolder then return out end
-        for _, mdl in ipairs(charsFolder:GetChildren()) do
-            repeat
-                if not mdl:IsA("Model") then break end
-                local n = mdl.Name or ""
-                local nameLower = n:lower()
-                if string.find(nameLower, "horse", 1, true) then break end
-                local distPart = charDistancePart(mdl)
-                if not distPart then break end
-                if (distPart.Position - origin).Magnitude > radius then break end
-                out[#out+1] = mdl
-            until true
-        end
-        if TUNE.CHAR_SORT then
-            table.sort(out, function(a, b)
-                local pa, pb = charDistancePart(a), charDistancePart(b)
-                local da = pa and (pa.Position - origin).Magnitude or math.huge
-                local db = pb and (pb.Position - origin).Magnitude or math.huge
-                if da == db then return (a.Name or "") < (b.Name or "") end
-                return da < db
-            end)
-        end
-        return out
-    end
-
     local TreeImpactCF = setmetatable({}, {__mode="k"})
     local TreeHitSeed  = setmetatable({}, {__mode="k"})
 
@@ -254,7 +235,6 @@ return function(C, R, UI)
     end
 
     local lastHitAt = setmetatable({}, {__mode="k"})
-
     local function canHitWithWeapon(target, weaponName, cooldownSec)
         if not target then return false, nil end
         local cd = tonumber(cooldownSec) or TUNE.CHAR_DEBOUNCE_SEC
@@ -364,7 +344,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Character weapon preference and cooldowns
     local CHAR_WEAPON_PREF = {
         { "Cultist King Mace", 1.0 },
         { "Morningstar",       1.0 },
@@ -397,7 +376,7 @@ return function(C, R, UI)
         end
         table.sort(available, function(a, b)
             if a.cd ~= b.cd then
-                return a.cd > b.cd
+                return a.cd < b.cd
             end
             return a.order < b.order
         end)
@@ -428,7 +407,7 @@ return function(C, R, UI)
                 end
             end
             if #availableWeapons == 0 then
-                task.wait(0.35)
+                task.wait(0.2)
                 return
             end
 
@@ -449,19 +428,27 @@ return function(C, R, UI)
                     local nextTry = math.huge
                     for i = 1, cap do
                         local mdl = targetModels[i]
-                        local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
-                        if canHit then
-                            local hitPart = hitPartGetter(mdl)
-                            if hitPart then
-                                local impactCF = computeImpactCFrame(mdl, hitPart)
-                                local hitId = nextCharacterHitId()
-                                HitTarget(mdl, tool, hitId, impactCF)
-                                markHitWithWeapon(mdl, toolName)
-                                didHit = true
-                                task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                        local head = hitPartGetter(mdl)
+                        if head then
+                            local origin = (lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")) and lp.Character.HumanoidRootPart.Position or nil
+                            local dist = origin and (head.Position - origin).Magnitude or math.huge
+                            local los = false
+                            if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
+                                los = visibleFromHRP(lp.Character.HumanoidRootPart, head, tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0, lp.Character)
                             end
-                        elseif waitFor and waitFor < nextTry then
-                            nextTry = waitFor
+                            if los or dist <= TUNE.CHAR_CLOSE_FAILSAFE then
+                                local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
+                                if canHit then
+                                    local impactCF = computeImpactCFrame(mdl, head)
+                                    local hitId = nextCharacterHitId()
+                                    HitTarget(mdl, tool, hitId, impactCF)
+                                    markHitWithWeapon(mdl, toolName)
+                                    didHit = true
+                                    task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                                elseif waitFor and waitFor < nextTry then
+                                    nextTry = waitFor
+                                end
+                            end
                         end
                     end
                     if didHit then
@@ -508,6 +495,33 @@ return function(C, R, UI)
         task.wait(swingDelay)
     end
 
+    local function collectCharactersInRadius(charsFolder, origin, radius)
+        local out = {}
+        if not charsFolder then return out end
+        for _, mdl in ipairs(charsFolder:GetChildren()) do
+            repeat
+                if not mdl:IsA("Model") then break end
+                local n = mdl.Name or ""
+                local nameLower = n:lower()
+                if string.find(nameLower, "horse", 1, true) then break end
+                local distPart = charDistancePart(mdl)
+                if not distPart then break end
+                if (distPart.Position - origin).Magnitude > radius then break end
+                out[#out+1] = mdl
+            until true
+        end
+        if TUNE.CHAR_SORT then
+            table.sort(out, function(a, b)
+                local pa, pb = charDistancePart(a), charDistancePart(b)
+                local da = pa and (pa.Position - origin).Magnitude or math.huge
+                local db = pb and (pb.Position - origin).Magnitude or math.huge
+                if da == db then return (a.Name or "") < (b.Name or "") end
+                return da < db
+            end)
+        end
+        return out
+    end
+
     local function startCharacterAura()
         if running.Character then return end
         running.Character = true
@@ -527,10 +541,9 @@ return function(C, R, UI)
                         for _, mdl in ipairs(targets) do
                             local head = characterHeadPart(mdl)
                             if head then
-                                local dp = charDistancePart(mdl)
-                                local dist = dp and (dp.Position - origin).Magnitude or math.huge
+                                local dist = (head.Position - origin).Magnitude
                                 local los = visibleFromHRP(hrp, head, hopsChar, ch)
-                                if los or dist <= CLOSE_FAILSAFE then
+                                if los or dist <= TUNE.CHAR_CLOSE_FAILSAFE then
                                     filtered[#filtered+1] = mdl
                                 end
                             end
