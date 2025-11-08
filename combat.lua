@@ -241,6 +241,29 @@ return function(C, R, UI)
 
     local lastHitAt = setmetatable({}, {__mode="k"})
 
+    local function canHitWithWeapon(target, weaponName)
+        if not target then return false, nil end
+        local bucket = lastHitAt[target]
+        if not bucket or type(bucket) ~= "table" then return true, nil end
+        local t = bucket[weaponName]
+        if not t then return true, nil end
+        local elapsed = tick() - t
+        if elapsed >= TUNE.CHAR_DEBOUNCE_SEC then
+            return true, nil
+        end
+        return false, TUNE.CHAR_DEBOUNCE_SEC - elapsed
+    end
+
+    local function markHitWithWeapon(target, weaponName)
+        if not (target and weaponName) then return end
+        local bucket = lastHitAt[target]
+        if type(bucket) ~= "table" then
+            bucket = {}
+            lastHitAt[target] = bucket
+        end
+        bucket[weaponName] = tick()
+    end
+
     local function modelOf(inst)
         if not inst then return nil end
         if inst:IsA("Model") then return inst end
@@ -248,6 +271,54 @@ return function(C, R, UI)
     end
     local function isCharacterModel(m)
         return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+
+    local function treeModelOf(inst)
+        local current = inst
+        while current do
+            if current:IsA("Model") then
+                local name = current.Name
+                if TREE_NAMES[name] or isBigTreeName(name) then
+                    return current
+                end
+            end
+            current = current.Parent
+        end
+        return nil
+    end
+
+    local function visibleTreeFromHRP(hrp, treeModel, maxHops, targetPart)
+        if not (hrp and treeModel) then return false end
+        targetPart = targetPart or bestTreeHitPart(treeModel)
+        if not targetPart then return false end
+        local start = hrp.Position
+        local dest = targetPart.Position
+        local excluded = {}
+        if lp.Character then
+            excluded[#excluded+1] = lp.Character
+        end
+        local hops = math.max(0, tonumber(maxHops) or 0)
+        while true do
+            local dir = dest - start
+            if dir.Magnitude < 0.1 then return true end
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = excluded
+            local hit = WS:Raycast(start, dir, params)
+            if not hit then return true end
+            local inst = hit.Instance
+            if inst:IsDescendantOf(treeModel) then return true end
+            local blockingTree = treeModelOf(inst)
+            if blockingTree and hops > 0 then
+                excluded[#excluded+1] = blockingTree
+                local mag = dir.Magnitude
+                if mag <= 0 then return false end
+                start = hit.Position + (dir / mag) * 0.05
+                hops = hops - 1
+            else
+                return false
+            end
+        end
     end
 
     local function visibleFromHRP(hrp, targetPart, maxHops, excludeSelf)
@@ -297,22 +368,93 @@ return function(C, R, UI)
         { "Old Axe",           nil },
     }
 
-    local function selectBestCharWeapon()
-        for _, pair in ipairs(CHAR_WEAPON_PREF) do
+    local function collectAvailableCharWeapons()
+        local available = {}
+        for idx, pair in ipairs(CHAR_WEAPON_PREF) do
             local name, cd = pair[1], pair[2]
             if findInInventory(name) then
-                if cd == nil then cd = TUNE.CHOP_SWING_DELAY end
-                return name, cd
+                available[#available+1] = {
+                    name = name,
+                    cd = cd or TUNE.CHOP_SWING_DELAY,
+                    order = idx,
+                }
             end
         end
-        return nil, nil
+        table.sort(available, function(a, b)
+            if a.cd ~= b.cd then
+                return a.cd > b.cd
+            end
+            return a.order < b.order
+        end)
+        return available
     end
 
     local lastSwingAtByWeapon = {}
 
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
+        if not isTree then
+            local availableWeapons = collectAvailableCharWeapons()
+            if #availableWeapons == 0 then
+                for _, n in ipairs(TUNE.ChopPrefer) do
+                    if findInInventory(n) then
+                        availableWeapons[#availableWeapons+1] = {
+                            name = n,
+                            cd = swingDelay,
+                            order = math.huge,
+                        }
+                        break
+                    end
+                end
+            end
+            if #availableWeapons == 0 then
+                task.wait(0.35)
+                return
+            end
+
+            for _, weapon in ipairs(availableWeapons) do
+                local toolName = weapon.name
+                local cd = weapon.cd
+                local lastSwing = lastSwingAtByWeapon[toolName] or 0
+                local now = os.clock()
+                local remaining = cd - (now - lastSwing)
+                if remaining > 0 then
+                    task.wait(remaining)
+                    now = os.clock()
+                end
+                local tool = ensureEquipped(toolName)
+                if tool then
+                    local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
+                    local didHit = false
+                    local nextTry = math.huge
+                    for i = 1, cap do
+                        local mdl = targetModels[i]
+                        local canHit, waitFor = canHitWithWeapon(mdl, toolName)
+                        if canHit then
+                            local hitPart = hitPartGetter(mdl)
+                            if hitPart then
+                                local impactCF = hitPart.CFrame
+                                local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                                HitTarget(mdl, tool, hitId, impactCF)
+                                markHitWithWeapon(mdl, toolName)
+                                didHit = true
+                                task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                            end
+                        elseif waitFor and waitFor < nextTry then
+                            nextTry = waitFor
+                        end
+                    end
+                    if didHit then
+                        lastSwingAtByWeapon[toolName] = os.clock()
+                    elseif nextTry < math.huge then
+                        task.wait(math.max(0.01, nextTry))
+                    end
+                end
+            end
+            return
+        end
+
         local toolName
-        if isTree and C.State.Toggles.BigTreeAura then
+        if C.State.Toggles.BigTreeAura then
             local bt = hasBigTreeTool()
             if bt then
                 toolName = bt
@@ -328,40 +470,6 @@ return function(C, R, UI)
         if not toolName then task.wait(0.35) return end
         local tool = ensureEquipped(toolName)
         if not tool then task.wait(0.35) return end
-
-        if not isTree then
-            local preferredName, weaponCD = selectBestCharWeapon()
-            if preferredName then
-                tool = ensureEquipped(preferredName)
-                if not tool then task.wait(0.35) return end
-                toolName = preferredName
-            end
-            local cd = weaponCD or TUNE.CHOP_SWING_DELAY
-            local now = os.clock()
-            local lastSwing = lastSwingAtByWeapon[toolName] or 0
-            if now - lastSwing < cd then
-                task.wait(math.max(0.01, cd - (now - lastSwing)))
-                now = os.clock()
-            end
-            local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
-            for i = 1, cap do
-                local mdl = targetModels[i]
-                local t0 = lastHitAt[mdl] or 0
-                if (tick() - t0) >= TUNE.CHAR_DEBOUNCE_SEC then
-                    local hitPart = hitPartGetter(mdl)
-                    if hitPart then
-                        local impactCF = hitPart.CFrame
-                        local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
-                        HitTarget(mdl, tool, hitId, impactCF)
-                        lastHitAt[mdl] = tick()
-                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
-                    end
-                end
-            end
-            lastSwingAtByWeapon[toolName] = now
-            task.wait(cd)
-            return
-        end
 
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
@@ -449,7 +557,23 @@ return function(C, R, UI)
                             batch[i] = allTrees[idx]
                         end
                         C.State._treeCursor = C.State._treeCursor + batchSize
-                        chopWave(batch, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                        local hopsTree = math.max(0, tonumber(TUNE.RAY_MAX_HOPS_TREE) or 0)
+                        local filtered = {}
+                        for _, tree in ipairs(batch) do
+                            local hitPart = bestTreeHitPart(tree)
+                            if hitPart then
+                                local dist = (hitPart.Position - origin).Magnitude
+                                local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
+                                if los or dist <= CLOSE_FAILSAFE then
+                                    filtered[#filtered+1] = tree
+                                end
+                            end
+                        end
+                        if #filtered > 0 then
+                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                        else
+                            task.wait(0.3)
+                        end
                     else
                         task.wait(0.3)
                     end
