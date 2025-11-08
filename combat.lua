@@ -404,6 +404,12 @@ return function(C, R, UI)
     end
 
     local lastSwingAtByWeapon = {}
+    local characterHitSeq = 0
+
+    local function nextCharacterHitId()
+        characterHitSeq += 1
+        return tostring(characterHitSeq) .. "_" .. TUNE.UID_SUFFIX
+    end
 
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         if not isTree then
@@ -446,8 +452,8 @@ return function(C, R, UI)
                         if canHit then
                             local hitPart = hitPartGetter(mdl)
                             if hitPart then
-                                local impactCF = hitPart.CFrame
-                                local hitId = tostring(tick()) .. "_" .. TUNE.UID_SUFFIX
+                                local impactCF = computeImpactCFrame(mdl, hitPart)
+                                local hitId = nextCharacterHitId()
                                 HitTarget(mdl, tool, hitId, impactCF)
                                 markHitWithWeapon(mdl, toolName)
                                 didHit = true
