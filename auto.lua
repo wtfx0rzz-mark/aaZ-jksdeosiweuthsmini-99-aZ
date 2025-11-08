@@ -1027,8 +1027,18 @@ return function(C, R, UI)
                 end
             end
         end
-        local PLANT_START_DELAY = 1.0
-        local PLANT_Y_EPSILON   = 0.15
+        local PLANT_START_DELAY       = 1.0
+        local PLANT_Y_EPSILON         = 0.15
+        local PLANT_INTERACTION_DELAY = 0
+        local PLANT_CHAIN_DELAY       = nil
+        local function yieldPlant(seconds)
+            if seconds == nil then return end
+            if seconds <= 0 then
+                Run.Heartbeat:Wait()
+            else
+                task.wait(seconds)
+            end
+        end
         local function computePlantPosFromModel(m)
             local mp = mainPart(m); if not mp then return nil end
             local g  = groundBelow2(mp.Position)
@@ -1042,7 +1052,7 @@ return function(C, R, UI)
             local plantRF   = getRemote("RequestPlantItem"); if not plantRF then return end
             local pos = computePlantPosFromModel(m); if not pos then return end
             if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
-            task.wait(0.025)
+            yieldPlant(PLANT_INTERACTION_DELAY)
             local ok = pcall(function()
                 if plantRF:IsA("RemoteFunction") then
                     return plantRF:InvokeServer(m, pos)
@@ -1060,7 +1070,7 @@ return function(C, R, UI)
                     end
                 end)
             end
-            task.wait(0.025)
+            yieldPlant(PLANT_INTERACTION_DELAY)
             if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
         end
         local function actionPlantAllSaplings()
@@ -1069,7 +1079,7 @@ return function(C, R, UI)
             for i=1,#snap do
                 local m = snap[i]
                 if m and m.Parent then plantModelInPlace(m) end
-                Run.Heartbeat:Wait()
+                yieldPlant(PLANT_CHAIN_DELAY)
             end
         end
 
