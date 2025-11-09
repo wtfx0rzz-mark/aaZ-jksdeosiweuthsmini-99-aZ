@@ -1552,6 +1552,148 @@ return function(C, R, UI)
             })
         end
 
+        do
+            local sprinkleConn, sprinkleAccum = nil, 0
+            local SCAN_INTERVAL       = 0.35
+            local IGNORE_WITHIN       = 15
+            local SPRINKLE_RADIUS     = 10
+            local HEAD_LEVEL_OFFSET   = 3.5
+            local SPRINKLE_ATTR       = "__AutoSprinkled"
+            local rng = Random.new()
+
+            local sprinkledItems = {}
+            local sprinkledConns = {}
+
+            local function clearTracked(item)
+                sprinkledItems[item] = nil
+                local conn = sprinkledConns[item]
+                if conn then conn:Disconnect() end
+                sprinkledConns[item] = nil
+            end
+
+            local function markSprinkled(item)
+                if not item then return end
+                sprinkledItems[item] = true
+                pcall(function()
+                    item:SetAttribute(SPRINKLE_ATTR, true)
+                end)
+                if sprinkledConns[item] then sprinkledConns[item]:Disconnect() end
+                sprinkledConns[item] = item.AncestryChanged:Connect(function(_, parent)
+                    if not parent then
+                        clearTracked(item)
+                    end
+                end)
+            end
+
+            local function clearAllSprinkled()
+                for inst in pairs(sprinkledItems) do
+                    pcall(function()
+                        if inst then inst:SetAttribute(SPRINKLE_ATTR, nil) end
+                    end)
+                    clearTracked(inst)
+                end
+            end
+
+            local function clearWorldSprinkled()
+                local items = WS:FindFirstChild("Items"); if not items then return end
+                for _,inst in ipairs(items:GetChildren()) do
+                    if inst and inst:GetAttribute(SPRINKLE_ATTR) then
+                        pcall(function()
+                            inst:SetAttribute(SPRINKLE_ATTR, nil)
+                        end)
+                    end
+                end
+            end
+
+            local function findPickupHandle(item)
+                if not item then return nil end
+                if item:IsA("BasePart") and item.Name == "Handle" then
+                    return item
+                end
+                if item:IsA("Tool") then
+                    local handle = item:FindFirstChild("Handle")
+                    if handle and handle:IsA("BasePart") then return handle end
+                end
+                local handle = item:FindFirstChild("Handle", true)
+                if handle and handle:IsA("BasePart") then return handle end
+                return nil
+            end
+
+            local function moveItemToRing(item, handle, originPos, look, dropY)
+                if not (item and handle and handle.Parent) then return end
+                local angle  = rng:NextNumber(0, math.pi * 2)
+                local radius = SPRINKLE_RADIUS * math.sqrt(rng:NextNumber())
+                local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+                local targetXZ = originPos + offset
+                local dropPos = Vector3.new(targetXZ.X, dropY, targetXZ.Z)
+                local cf = CFrame.new(dropPos, dropPos + look)
+                pcall(function()
+                    if item:IsA("Model") then
+                        item:PivotTo(cf)
+                    elseif handle:IsA("BasePart") then
+                        handle.CFrame = cf
+                    end
+                end)
+                markSprinkled(item)
+            end
+
+            local function isEligible(item, handle, originPos)
+                if not (item and handle) then return false end
+                if handle.Anchored then return false end
+                if item:GetAttribute(SPRINKLE_ATTR) then return false end
+                local pos = handle.Position
+                if not pos then return false end
+                if (pos - originPos).Magnitude <= IGNORE_WITHIN then return false end
+                return true
+            end
+
+            local function sprinkleCycle()
+                local root = hrp(); if not root then return end
+                local originPos = root.Position
+                local look = root.CFrame.LookVector
+                local head = (lp.Character and lp.Character:FindFirstChild("Head")) or nil
+                local dropY = (head and (head.Position.Y + 0.75)) or (originPos.Y + HEAD_LEVEL_OFFSET)
+                local items = WS:FindFirstChild("Items"); if not items then return end
+                for _,item in ipairs(items:GetChildren()) do
+                    if item and item.Parent then
+                        local handle = findPickupHandle(item)
+                        if isEligible(item, handle, originPos) then
+                            moveItemToRing(item, handle, originPos, look, dropY)
+                        end
+                    end
+                end
+            end
+
+            local function enableSprinkle()
+                if sprinkleConn then return end
+                sprinkleAccum = 0
+                clearWorldSprinkled()
+                sprinkleConn = Run.Heartbeat:Connect(function(dt)
+                    sprinkleAccum += dt
+                    if sprinkleAccum < SCAN_INTERVAL then return end
+                    sprinkleAccum = 0
+                    sprinkleCycle()
+                end)
+            end
+
+            local function disableSprinkle()
+                if sprinkleConn then
+                    sprinkleConn:Disconnect()
+                    sprinkleConn = nil
+                end
+                clearAllSprinkled()
+                clearWorldSprinkled()
+            end
+
+            tab:Toggle({
+                Title = "Sprinkle Nearby Items",
+                Value = false,
+                Callback = function(state)
+                    if state then enableSprinkle() else disableSprinkle() end
+                end
+            })
+        end
+
         tab:Section({ Title = "Saplings" })
         tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
         tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
