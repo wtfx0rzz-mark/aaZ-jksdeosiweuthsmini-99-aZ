@@ -445,7 +445,6 @@ return function(C, R, UI)
         })
     end
 
-    -- Pull Items
     local PULL_TAG = "__PulledOnceDebug"
     local PULL_ATTR = "PulledOnce"
     local PULL_RADIUS = 15
@@ -527,11 +526,11 @@ return function(C, R, UI)
     end
 
     local pulling = false
-    local function enablePull()
-        if pulling then return end
-        pulling = true
-        local root = hrp(); if not root then pulling=false return end
-        local center = root.Position
+    local pullLoopConn, itemsAddedConn, itemsFolderConn
+    local SCAN_INTERVAL = 0.25
+    local accum = 0
+
+    local function scanAndPull(center)
         local items = itemsFolder()
         local seen = {}
         for _,d in ipairs(items:GetDescendants()) do
@@ -546,18 +545,52 @@ return function(C, R, UI)
                 moveOnceToRing(m, center)
             until true
         end
-        pulling = false
     end
+
+    local function bindItemsAdded()
+        if itemsAddedConn then itemsAddedConn:Disconnect() end
+        if itemsFolderConn then itemsFolderConn:Disconnect() end
+        local items = itemsFolder()
+        if items then
+            itemsAddedConn = items.DescendantAdded:Connect(function(d)
+                if not pulling then return end
+                local root = hrp(); if not root then return end
+                local m = d:IsA("Model") and d or d:FindFirstAncestorOfClass("Model")
+                if not m or not m.Parent then return end
+                if CS:HasTag(m, PULL_TAG) or m:GetAttribute(PULL_ATTR) == true then return end
+                if wantModel(m) then moveOnceToRing(m, root.Position) end
+            end)
+            itemsFolderConn = WS.ChildAdded:Connect(function(ch)
+                if ch.Name == "Items" or ch == items then
+                    task.defer(bindItemsAdded)
+                end
+            end)
+        end
+    end
+
+    local function enablePull()
+        if pulling then return end
+        pulling = true
+        bindItemsAdded()
+        if pullLoopConn then pullLoopConn:Disconnect() end
+        pullLoopConn = Run.Heartbeat:Connect(function(dt)
+            accum = accum + dt
+            if accum < SCAN_INTERVAL then return end
+            accum = 0
+            local root = hrp(); if not root then return end
+            scanAndPull(root.Position)
+        end)
+    end
+
     local function disablePull()
-        local tagged = {}
-        for _,inst in ipairs(CS:GetTagged(PULL_TAG)) do
-            tagged[#tagged+1] = inst
-        end
-        for _,m in ipairs(tagged) do
-            pcall(function() m:SetAttribute(PULL_ATTR, nil) end)
-            pcall(function() CS:RemoveTag(m, PULL_TAG) end)
-        end
         pulling = false
+        if pullLoopConn then pcall(function() pullLoopConn:Disconnect() end) pullLoopConn = nil end
+        if itemsAddedConn then pcall(function() itemsAddedConn:Disconnect() end) itemsAddedConn = nil end
+        if itemsFolderConn then pcall(function() itemsFolderConn:Disconnect() end) itemsFolderConn = nil end
+        for _,inst in ipairs(CS:GetTagged(PULL_TAG)) do
+            pcall(function() inst:SetAttribute(PULL_ATTR, nil) end)
+            pcall(function() CS:RemoveTag(inst, PULL_TAG) end)
+        end
     end
 
     local function addToggleLike(tabRef, title, default, cb)
