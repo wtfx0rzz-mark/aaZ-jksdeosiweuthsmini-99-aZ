@@ -10,8 +10,6 @@ return function(C, R, UI)
     local tab  = tabs and (tabs.Debug or tabs.TPBring or tabs.Auto or tabs.Main)
     assert(tab, "No tab")
 
-    local RADIUS = 20
-
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -39,20 +37,6 @@ return function(C, R, UI)
     local RF_Stop  = getRemote("RequestStopDraggingItem","StopDraggingItem","StopDraggingItemRemote")
 
     local function itemsFolder() return WS:FindFirstChild("Items") or WS end
-    local function nearbyItems()
-        local out, root = {}, hrp(); if not root then return out end
-        local origin = root.Position
-        for _,d in ipairs(itemsFolder():GetDescendants()) do
-            local m = d:IsA("Model") and d or d:IsA("BasePart") and d:FindFirstAncestorOfClass("Model") or nil
-            if m and m.Parent then
-                local p = mainPart(m)
-                if p and (p.Position - origin).Magnitude <= RADIUS then
-                    out[#out+1] = m
-                end
-            end
-        end
-        return out
-    end
 
     local function setPhysicsRestore(m)
         for _,p in ipairs(m:GetDescendants()) do
@@ -75,7 +59,6 @@ return function(C, R, UI)
         m:SetAttribute("Dragging", nil)
         m:SetAttribute("PickedUp", nil)
     end
-
     local function snapshotCollision(m)
         local t = {}
         for _,p in ipairs(m:GetDescendants()) do
@@ -101,111 +84,6 @@ return function(C, R, UI)
                 part.CanCollide = st.CanCollide
                 part.CanQuery   = st.CanQuery
                 part.CanTouch   = st.CanTouch
-            end
-        end
-    end
-
-    local function ownAll()
-        local list = nearbyItems()
-        for _,m in ipairs(list) do
-            if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
-            local p = mainPart(m)
-            if p then
-                pcall(function() p:SetNetworkOwner(lp) end)
-                for _,bp in ipairs(m:GetDescendants()) do
-                    if bp:IsA("BasePart") then
-                        bp.Anchored = true
-                        bp.CanTouch = true
-                        bp.CanQuery = true
-                    end
-                end
-            end
-        end
-    end
-    local function disownAll()
-        local list = nearbyItems()
-        for _,m in ipairs(list) do
-            if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
-            setPhysicsRestore(m)
-        end
-    end
-    local function startDragAll()
-        if not RF_Start then return end
-        local list = nearbyItems()
-        for _,m in ipairs(list) do
-            pcall(function() RF_Start:FireServer(m) end)
-            Run.Heartbeat:Wait()
-        end
-    end
-    local function stopDragAll()
-        if not RF_Stop then return end
-        local list = nearbyItems()
-        for _,m in ipairs(list) do
-            pcall(function() RF_Stop:FireServer(m) end)
-            Run.Heartbeat:Wait()
-        end
-    end
-
-    local function wakeGentle()
-        local list = nearbyItems()
-        local lin, ang = 0.05, 0.05
-        for _,m in ipairs(list) do
-            for _,p in ipairs(m:GetDescendants()) do
-                if p:IsA("BasePart") and not p.Anchored then
-                    local lv, av = p.AssemblyLinearVelocity, p.AssemblyAngularVelocity
-                    if lv.Magnitude < 0.02 and av.Magnitude < 0.02 then
-                        p.AssemblyLinearVelocity  = lv + Vector3.new((math.random()-0.5)*lin, (math.random()-0.5)*lin, (math.random()-0.5)*lin)
-                        p.AssemblyAngularVelocity = av + Vector3.new((math.random()-0.5)*ang, (math.random()-0.5)*ang, (math.random()-0.5)*ang)
-                    end
-                end
-            end
-        end
-    end
-    local function deoverlap()
-        local list = nearbyItems()
-        for _,m in ipairs(list) do
-            local p = mainPart(m)
-            if p and not p.Anchored then
-                local cf = (m:IsA("Model") and m:GetPivot()) or p.CFrame
-                local jitter = 0.03
-                local dx, dz = (math.random()-0.5)*jitter, (math.random()-0.5)*jitter
-                if m:IsA("Model") then m:PivotTo(cf + Vector3.new(dx, 0, dz)) else p.CFrame = cf + Vector3.new(dx, 0, dz) end
-            end
-        end
-    end
-    local function nudgeAll()
-        local list = nearbyItems()
-        for _,m in ipairs(list) do setPhysicsRestore(m) end
-        Run.Heartbeat:Wait()
-        for _,m in ipairs(list) do
-            for _,p in ipairs(m:GetDescendants()) do
-                if p:IsA("BasePart") and not p.Anchored then
-                    p.AssemblyLinearVelocity  = p.AssemblyLinearVelocity  + Vector3.new(0, 0.6, 0)
-                    p.AssemblyAngularVelocity = p.AssemblyAngularVelocity + Vector3.new(0, 0.3*(math.random()-0.5), 0)
-                end
-            end
-        end
-    end
-    local function mineOwnership()
-        local list = nearbyItems()
-        for _,m in ipairs(list) do
-            for _,p in ipairs(m:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    p.Anchored = false
-                    pcall(function() p:SetNetworkOwner(lp) end)
-                end
-            end
-        end
-    end
-    local function serverOwnership()
-        local list = nearbyItems()
-        for _,m in ipairs(list) do
-            for _,p in ipairs(m:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    p.Anchored = false
-                    pcall(function() p:SetNetworkOwner(nil) end)
-                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-                end
             end
         end
     end
@@ -272,7 +150,6 @@ return function(C, R, UI)
         local bodies = allBodyModels(); if #bodies == 0 then return end
         local targetPos = groundBelow(root.Position + root.CFrame.LookVector * 2)
         local cf = CFrame.new(Vector3.new(targetPos.X, targetPos.Y + 1.5, targetPos.Z), root.Position)
-
         for _,m in ipairs(bodies) do
             local snap = snapshotCollision(m)
             setCollisionOff(m)
@@ -286,7 +163,6 @@ return function(C, R, UI)
             Run.Heartbeat:Wait()
         end
     end
-
     local function releaseBody()
         local m = findNearestBody(); if not m then return end
         if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
@@ -363,10 +239,141 @@ return function(C, R, UI)
         end
     end
 
+    tab:Section({ Title = "Item Recovery" })
+    local function nearbyItems(radius)
+        local out, root = {}, hrp(); if not root then return out end
+        local origin = root.Position
+        local r = radius or 20
+        for _,d in ipairs(itemsFolder():GetDescendants()) do
+            local m = d:IsA("Model") and d or d:IsA("BasePart") and d:FindFirstAncestorOfClass("Model") or nil
+            if m and m.Parent then
+                local p = mainPart(m)
+                if p and (p.Position - origin).Magnitude <= r then
+                    out[#out+1] = m
+                end
+            end
+        end
+        return out
+    end
+    local function ownAll()
+        for _,m in ipairs(nearbyItems(20)) do
+            if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
+            local p = mainPart(m)
+            if p then
+                pcall(function() p:SetNetworkOwner(lp) end)
+                for _,bp in ipairs(m:GetDescendants()) do
+                    if bp:IsA("BasePart") then
+                        bp.Anchored = true
+                        bp.CanTouch = true
+                        bp.CanQuery = true
+                    end
+                end
+            end
+        end
+    end
+    local function disownAll()
+        for _,m in ipairs(nearbyItems(20)) do
+            if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
+            setPhysicsRestore(m)
+        end
+    end
+    local function startDragAll()
+        if not RF_Start then return end
+        for _,m in ipairs(nearbyItems(20)) do
+            pcall(function() RF_Start:FireServer(m) end)
+            Run.Heartbeat:Wait()
+        end
+    end
+    local function stopDragAll()
+        if not RF_Stop then return end
+        for _,m in ipairs(nearbyItems(20)) do
+            pcall(function() RF_Stop:FireServer(m) end)
+            Run.Heartbeat:Wait()
+        end
+    end
+    local function wakeGentle()
+        local list = nearbyItems(20)
+        local lin, ang = 0.05, 0.05
+        for _,m in ipairs(list) do
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") and not p.Anchored then
+                    local lv, av = p.AssemblyLinearVelocity, p.AssemblyAngularVelocity
+                    if lv.Magnitude < 0.02 and av.Magnitude < 0.02 then
+                        p.AssemblyLinearVelocity  = lv + Vector3.new((math.random()-0.5)*lin, (math.random()-0.5)*lin, (math.random()-0.5)*lin)
+                        p.AssemblyAngularVelocity = av + Vector3.new((math.random()-0.5)*ang, (math.random()-0.5)*ang, (math.random()-0.5)*ang)
+                    end
+                end
+            end
+        end
+    end
+    local function deoverlap()
+        for _,m in ipairs(nearbyItems(20)) do
+            local p = mainPart(m)
+            if p and not p.Anchored then
+                local cf = (m:IsA("Model") and m:GetPivot()) or p.CFrame
+                local jitter = 0.03
+                local dx, dz = (math.random()-0.5)*jitter, (math.random()-0.5)*jitter
+                if m:IsA("Model") then m:PivotTo(cf + Vector3.new(dx, 0, dz)) else p.CFrame = cf + Vector3.new(dx, 0, dz) end
+            end
+        end
+    end
+    local function nudgeItems()
+        local list = nearbyItems(20)
+        for _,m in ipairs(list) do setPhysicsRestore(m) end
+        Run.Heartbeat:Wait()
+        for _,m in ipairs(list) do
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") and not p.Anchored then
+                    p.AssemblyLinearVelocity  = p.AssemblyLinearVelocity  + Vector3.new(0, 0.6, 0)
+                    p.AssemblyAngularVelocity = p.AssemblyAngularVelocity + Vector3.new(0, 0.3*(math.random()-0.5), 0)
+                end
+            end
+        end
+    end
+    local function mineOwnership()
+        for _,m in ipairs(nearbyItems(20)) do
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.Anchored = false
+                    pcall(function() p:SetNetworkOwner(lp) end)
+                end
+            end
+        end
+    end
+    local function serverOwnership()
+        for _,m in ipairs(nearbyItems(20)) do
+            for _,p in ipairs(m:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.Anchored = false
+                    pcall(function() p:SetNetworkOwner(nil) end)
+                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                end
+            end
+        end
+    end
+
+    tab:Button({ Title = "Own All Items",       Callback = function() ownAll() end })
+    tab:Button({ Title = "Disown All Items",    Callback = function() disownAll() end })
+    tab:Button({ Title = "Wake (Gentle)",       Callback = function() wakeGentle() end })
+    tab:Button({ Title = "De-overlap",          Callback = function() deoverlap() end })
+    tab:Button({ Title = "Nudge Items",         Callback = function() nudgeItems() end })
+    tab:Button({ Title = "Mine Ownership",      Callback = function() mineOwnership() end })
+    tab:Button({ Title = "Server Ownership",    Callback = function() serverOwnership() end })
+
+    tab:Section({ Title = "Drag Remotes" })
+    tab:Button({ Title = "Start Drag Nearby",   Callback = function() startDragAll() end })
+    tab:Button({ Title = "Stop Drag Nearby",    Callback = function() stopDragAll() end })
+
+    tab:Section({ Title = "Body Tests" })
+    tab:Button({ Title = "TP To Body",                 Callback = function() tpPlayerToBody() end })
+    tab:Button({ Title = "Bring Body (Fast Drag)",     Callback = function() bringBodiesFast() end })
+    tab:Button({ Title = "Release Body",               Callback = function() releaseBody() end })
+    tab:Button({ Title = "Send All Bodies To Camp",    Callback = function() sendBodiesToCamp() end })
+
+    tab:Section({ Title = "Protection" })
     local SAP_Enable = false
     local sap_seen = setmetatable({}, {__mode="k"})
     local sap_conns = {}
-
     local function isSapling(m)
         if not m or not m.Parent then return false end
         if m:IsA("Model") then
@@ -404,27 +411,6 @@ return function(C, R, UI)
             end
         end)
     end
-
-    tab:Section({ Title = "Item Recovery" })
-    tab:Button({ Title = "Own All Items",       Callback = function() ownAll() end })
-    tab:Button({ Title = "Disown All Items",    Callback = function() disownAll() end })
-    tab:Button({ Title = "Wake (Gentle)",       Callback = function() wakeGentle() end })
-    tab:Button({ Title = "De-overlap",          Callback = function() deoverlap() end })
-    tab:Button({ Title = "Nudge Items",         Callback = function() nudgeAll() end })
-    tab:Button({ Title = "Mine Ownership",      Callback = function() mineOwnership() end })
-    tab:Button({ Title = "Server Ownership",    Callback = function() serverOwnership() end })
-
-    tab:Section({ Title = "Drag Remotes" })
-    tab:Button({ Title = "Start Drag Nearby",   Callback = function() startDragAll() end })
-    tab:Button({ Title = "Stop Drag Nearby",    Callback = function() stopDragAll() end })
-
-    tab:Section({ Title = "Body Tests" })
-    tab:Button({ Title = "TP To Body",                 Callback = function() tpPlayerToBody() end })
-    tab:Button({ Title = "Bring Body (Fast Drag)",     Callback = function() bringBodiesFast() end })
-    tab:Button({ Title = "Release Body",               Callback = function() releaseBody() end })
-    tab:Button({ Title = "Send All Bodies To Camp",    Callback = function() sendBodiesToCamp() end })
-
-    tab:Section({ Title = "Protection" })
     if tab.Toggle then
         tab:Toggle({
             Title = "Sapling Protection",
@@ -445,71 +431,125 @@ return function(C, R, UI)
         })
     end
 
-    local PULL_TAG = "__PulledOnceDebug"
-    local PULL_ATTR = "PulledOnce"
-    local PULL_RADIUS = 15
-    local PULL_HEIGHT_UP = 4
-    local JUNK = {"Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine","UFO Junk","UFO Component"}
-    local FUEL = {"Log","Coal","Fuel Canister","Oil Barrel","Chair"}
-    local FOOD = {"Cake","Cooked Steak","Cooked Morsel","Steak","Morsel","Berry","Carrot","Chilli","Stew","Ribs","Pumpkin","Hearty Stew","Cooked Ribs","Corn","BBQ ribs","Apple","Mackerel"}
-    local MED  = {"Bandage","MedKit"}
-    local WA   = {"Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe","Hammer","Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire","Sword","Ice Axe"}
-    local MISC = {"Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling","Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"}
-    local PELT = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
+    tab:Section({ Title = "Pull Items" })
 
-    local lookup = {}
-    for _,n in ipairs(JUNK) do lookup[n]=true end
-    for _,n in ipairs(FUEL) do lookup[n]=true end
-    for _,n in ipairs(FOOD) do lookup[n]=true end
-    for _,n in ipairs(MED)  do lookup[n]=true end
-    for _,n in ipairs(WA)   do lookup[n]=true end
-    for _,n in ipairs(MISC) do lookup[n]=true end
-    for _,n in ipairs(PELT) do lookup[n]=true end
+    local LIST_JUNK = {
+        Tyre=true,Bolt=true,["Broken Fan"]=true,["Broken Microwave"]=true,["Sheet Metal"]=true,["Old Radio"]=true,["Washing Machine"]=true,["Old Car Engine"]=true,
+        ["UFO Junk"]=true,["UFO Component"]=true
+    }
+    local LIST_FUEL = { Log=true,Coal=true,["Fuel Canister"]=true,["Oil Barrel"]=true,Chair=true }
+    local LIST_FOOD = {
+        Cake=true,["Cooked Steak"]=true,["Cooked Morsel"]=true,Steak=true,Morsel=true,Berry=true,Carrot=true,Chilli=true,Stew=true,Ribs=true,Pumpkin=true,
+        ["Hearty Stew"]=true,["Cooked Ribs"]=true,Corn=true,["BBQ ribs"]=true,Apple=true,Mackerel=true
+    }
+    local LIST_MED  = { Bandage=true,MedKit=true }
+    local LIST_WA   = {
+        Revolver=true,Rifle=true,["Leather Body"]=true,["Iron Body"]=true,["Good Axe"]=true,["Strong Axe"]=true,Hammer=true,Chainsaw=true,Crossbow=true,Katana=true,Kunai=true,
+        ["Laser cannon"]=true,["Laser sword"]=true,Morningstar=true,["Riot shield"]=true,Spear=true,["Tactical Shotgun"]=true,Wildfire=true,Sword=true,["Ice Axe"]=true
+    }
+    local LIST_MISC = {
+        ["Revolver Ammo"]=true,["Rifle Ammo"]=true,["Giant Sack"]=true,["Good Sack"]=true,["Mossy Coin"]=true,Cultist=true,Sapling=true,Basketball=true,Blueprint=true,Diamond=true,
+        ["Forest Gem"]=true,Key=true,Flashlight=true,["Taming flute"]=true,["Cultist Gem"]=true,Tusk=true,["Infernal Sack"]=true
+    }
+    local LIST_PELT = { ["Bunny Foot"]=true,["Wolf Pelt"]=true,["Alpha Wolf Pelt"]=true,["Bear Pelt"]=true,["Polar Bear Pelt"]=true,["Arctic Fox Pelt"]=true }
 
-    local function isKeyName(nl)
-        if not nl then return false end
-        if not nl:find(" key",1,true) then return false end
-        if nl:find("blue key",1,true) or nl:find("yellow key",1,true) or nl:find("red key",1,true)
-        or nl:find("gray key",1,true) or nl:find("grey key",1,true) or nl:find("frog key",1,true) then
-            return true
+    local function isCultistModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local nl = (m.Name or ""):lower()
+        if not nl:find("cultist",1,true) then return false end
+        return m:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+    local function isKeyName(n)
+        if type(n) ~= "string" then return false end
+        local l = n:lower()
+        if l:find(" key",1,true) then
+            if l:find("blue key",1,true) or l:find("yellow key",1,true) or l:find("red key",1,true)
+               or l:find("gray key",1,true) or l:find("grey key",1,true) or l:find("frog key",1,true) then
+                return true
+            end
         end
         return false
     end
-    local function isMossy(n) return n=="Mossy Coin" or (n and n:match("^Mossy Coin%d+$")~=nil) end
-    local function isChestLike(n) return type(n)=="string" and (n:match("Chest%d*$") or n:match("Chest$")) end
-
-    local function wantModel(m)
-        if not m or not m:IsA("Model") then return false end
-        local n = m.Name or ""
-        local nl = n:lower()
-        if n == "Coin Stack" then return true end
-        if isMossy(n) then return true end
-        if n == "Sapling" or nl:find("sapling",1,true) then return true end
-        if nl:find("blueprint",1,true) then return true end
-        if n == "Forest Gem" or nl:find("forest gem fragment",1,true) then return true end
-        if isKeyName(nl) then return true end
-        if nl:find("flashlight",1,true) and (nl:find("old",1,true) or nl:find("strong",1,true)) then return true end
-        if nl:find("taming flute",1,true) and (nl:find("old",1,true) or nl:find("good",1,true) or nl:find("strong",1,true)) then return true end
-        if lookup[n] then return true end
-        if isChestLike(n) then return false end
-        local p = mainPart(m)
-        if not p then return false end
+    local function isFlashlight(n)
+        if type(n) ~= "string" then return false end
+        local l = n:lower()
+        return l:find("flashlight",1,true) and (l:find("old",1,true) or l:find("strong",1,true)) or false
+    end
+    local function isTamingFlute(n)
+        if type(n) ~= "string" then return false end
+        local l = n:lower()
+        return l:find("taming flute",1,true) and (l:find("old",1,true) or l:find("good",1,true) or l:find("strong",1,true)) or false
+    end
+    local function isMossyCoin(n)
+        if n == "Mossy Coin" then return true end
+        return type(n)=="string" and n:match("^Mossy Coin%d+$") ~= nil
+    end
+    local function isWantedModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local name = m.Name or ""
+        if LIST_JUNK[name] or LIST_FUEL[name] or LIST_FOOD[name] or LIST_MED[name] or LIST_WA[name] or LIST_PELT[name] then return true end
+        if isMossyCoin(name) then return true end
+        if name == "Sapling" then return true end
+        if isCultistModel(m) then return true end
+        local l = name:lower()
+        if l:find("blueprint",1,true) or name=="Forest Gem" or l:find("forest gem fragment",1,true) or isKeyName(name) or isFlashlight(name) or isTamingFlute(name) then
+            return true
+        end
+        if name=="Diamond" or name=="Basketball" or name=="Cultist Gem" or name=="Tusk" or name=="Infernal Sack" then return true end
         return false
     end
-
-    local function groundAround(center, r)
-        local theta = math.random() * math.pi * 2
-        local dist = math.sqrt(math.random()) * r
-        local offset = Vector3.new(math.cos(theta)*dist, 0, math.sin(theta)*dist)
-        local target = center + offset + Vector3.new(0, PULL_HEIGHT_UP, 0)
-        local g = groundBelow(target)
-        return Vector3.new(target.X, g.Y + 0.5, target.Z)
+    local function validModel(m)
+        if not (m and m.Parent and m:IsA("Model")) then return false end
+        local n = (m.Name or ""):lower()
+        if n:find("trader",1,true) or n:find("shopkeeper",1,true) then return false end
+        if n:find("wall",1,true) then return false end
+        return mainPart(m) ~= nil
     end
 
-    local function moveOnceToRing(m, center)
+    local PULL_ON = false
+    local pullConn = nil
+    local pulledAttr = "_PulledOnce"
+    local SCAN_INTERVAL = 0.25
+    local LAND_RADIUS = 15
+    local RAIN_HEIGHT = 12
+    local SCAN_RADIUS = function()
+        local s = C and C.State and tonumber(C.State.GatherRadius)
+        if not s then s = C and C.State and tonumber(C.State.AuraRadius) end
+        return math.clamp(tonumber(s) or 150, 0, 500)
+    end
+
+    local function clearPulledAttributes()
+        local items = itemsFolder()
+        for _,d in ipairs(items:GetDescendants()) do
+            local m = d:IsA("Model") and d or d:IsA("BasePart") and d:FindFirstAncestorOfClass("Model") or nil
+            if m and m.Parent then
+                pcall(function() m:SetAttribute(pulledAttr, nil) end)
+            end
+        end
+        local chars = WS:FindFirstChild("Characters")
+        if chars then
+            for _,m in ipairs(chars:GetChildren()) do
+                if m:IsA("Model") then pcall(function() m:SetAttribute(pulledAttr, nil) end) end
+            end
+        end
+    end
+
+    local function landCenter()
+        local r = hrp(); if not r then return nil end
+        return r.Position
+    end
+    local function randomPointInDisk(center, radius)
+        local t = 2*math.pi*math.random()
+        local u = math.random() + math.random()
+        local r = (u > 1) and (2 - u) or u
+        r = r * radius
+        return Vector3.new(center.X + r*math.cos(t), center.Y, center.Z + r*math.sin(t))
+    end
+    local function rainTo(m, center)
         local mp = mainPart(m); if not mp then return end
-        local pos = groundAround(center, PULL_RADIUS)
-        local cf = CFrame.new(pos, pos + Vector3.new(0,0,-1))
+        local dropXY = randomPointInDisk(center, LAND_RADIUS)
+        local dropPos = Vector3.new(dropXY.X, center.Y + RAIN_HEIGHT, dropXY.Z)
+        local cf = CFrame.new(dropPos, dropPos + Vector3.new(0, -1, 0))
         local snap = snapshotCollision(m)
         setCollisionOff(m)
         if RF_Start then pcall(function() RF_Start:FireServer(m) end) end
@@ -517,101 +557,90 @@ return function(C, R, UI)
         pcall(function()
             if m:IsA("Model") then m:PivotTo(cf) else mp.CFrame = cf end
         end)
+        for _,p in ipairs(m:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.Anchored = false
+                p.Massless = false
+                p.AssemblyLinearVelocity  = Vector3.new(0, -5 - math.random(), 0)
+                p.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                pcall(function() p:SetNetworkOwner(lp) end)
+            end
+        end
         Run.Heartbeat:Wait()
         restoreCollision(m, snap)
         if RF_Stop then pcall(function() RF_Stop:FireServer(m) end) end
-        setPhysicsRestore(m)
-        pcall(function() CS:AddTag(m, PULL_TAG) end)
-        pcall(function() m:SetAttribute(PULL_ATTR, true) end)
+        pcall(function() m:SetAttribute(pulledAttr, true) end)
     end
 
-    local pulling = false
-    local pullLoopConn, itemsAddedConn, itemsFolderConn
-    local SCAN_INTERVAL = 0.25
-    local accum = 0
-
-    local function scanAndPull(center)
-        local items = itemsFolder()
-        local seen = {}
-        for _,d in ipairs(items:GetDescendants()) do
+    local acc = 0
+    local function scanAndPull(dt)
+        acc += dt
+        if acc < SCAN_INTERVAL then return end
+        acc = 0
+        local center = landCenter(); if not center then return end
+        local maxR = SCAN_RADIUS()
+        local poolItems = itemsFolder()
+        for _,d in ipairs(poolItems:GetDescendants()) do
             local m = d:IsA("Model") and d or d:IsA("BasePart") and d:FindFirstAncestorOfClass("Model") or nil
-            repeat
-                if not m or not m.Parent then break end
-                if seen[m] then break end
-                seen[m] = true
-                if CS:HasTag(m, PULL_TAG) then break end
-                if m:GetAttribute(PULL_ATTR) == true then break end
-                if not wantModel(m) then break end
-                moveOnceToRing(m, center)
-            until true
-        end
-    end
-
-    local function bindItemsAdded()
-        if itemsAddedConn then itemsAddedConn:Disconnect() end
-        if itemsFolderConn then itemsFolderConn:Disconnect() end
-        local items = itemsFolder()
-        if items then
-            itemsAddedConn = items.DescendantAdded:Connect(function(d)
-                if not pulling then return end
-                local root = hrp(); if not root then return end
-                local m = d:IsA("Model") and d or d:FindFirstAncestorOfClass("Model")
-                if not m or not m.Parent then return end
-                if CS:HasTag(m, PULL_TAG) or m:GetAttribute(PULL_ATTR) == true then return end
-                if wantModel(m) then moveOnceToRing(m, root.Position) end
-            end)
-            itemsFolderConn = WS.ChildAdded:Connect(function(ch)
-                if ch.Name == "Items" or ch == items then
-                    task.defer(bindItemsAdded)
+            if m and validModel(m) and isWantedModel(m) and not m:GetAttribute(pulledAttr) then
+                local mp = mainPart(m)
+                if mp and (mp.Position - center).Magnitude <= maxR then
+                    rainTo(m, center)
                 end
-            end)
+            end
+        end
+        local chars = WS:FindFirstChild("Characters")
+        if chars then
+            for _,m in ipairs(chars:GetChildren()) do
+                if validModel(m) and isWantedModel(m) and not m:GetAttribute(pulledAttr) then
+                    local mp = mainPart(m)
+                    if mp and (mp.Position - center).Magnitude <= maxR then
+                        rainTo(m, center)
+                    end
+                end
+            end
         end
     end
 
     local function enablePull()
-        if pulling then return end
-        pulling = true
-        bindItemsAdded()
-        if pullLoopConn then pullLoopConn:Disconnect() end
-        pullLoopConn = Run.Heartbeat:Connect(function(dt)
-            accum = accum + dt
-            if accum < SCAN_INTERVAL then return end
-            accum = 0
-            local root = hrp(); if not root then return end
-            scanAndPull(root.Position)
-        end)
+        if PULL_ON then return end
+        PULL_ON = true
+        acc = 1e9
+        if pullConn then pullConn:Disconnect() pullConn = nil end
+        pullConn = Run.Heartbeat:Connect(scanAndPull)
     end
-
     local function disablePull()
-        pulling = false
-        if pullLoopConn then pcall(function() pullLoopConn:Disconnect() end) pullLoopConn = nil end
-        if itemsAddedConn then pcall(function() itemsAddedConn:Disconnect() end) itemsAddedConn = nil end
-        if itemsFolderConn then pcall(function() itemsFolderConn:Disconnect() end) itemsFolderConn = nil end
-        for _,inst in ipairs(CS:GetTagged(PULL_TAG)) do
-            pcall(function() inst:SetAttribute(PULL_ATTR, nil) end)
-            pcall(function() CS:RemoveTag(inst, PULL_TAG) end)
-        end
+        PULL_ON = false
+        if pullConn then pullConn:Disconnect() pullConn = nil end
+        clearPulledAttributes()
     end
 
-    local function addToggleLike(tabRef, title, default, cb)
-        if tabRef.Toggle then
-            return tabRef:Toggle({ Title = title, Default = default, Callback = cb })
-        end
-        local state = default and true or false
-        return tabRef:Button({
-            Title = title .. (state and " (ON)" or " (OFF)"),
-            Callback = function(self)
-                state = not state
-                cb(state)
-                if self and self.SetTitle then
-                    self:SetTitle(title .. (state and " (ON)" or " (OFF)"))
+    if tab.Toggle then
+        tab:Toggle({
+            Title = "Pull Items",
+            Default = false,
+            Callback = function(v)
+                if v then enablePull() else disablePull() end
+            end
+        })
+    else
+        tab:Button({
+            Title = "Pull Items: OFF",
+            Callback = function(btn)
+                if PULL_ON then
+                    disablePull()
+                    if btn and btn.SetTitle then btn:SetTitle("Pull Items: OFF") end
+                else
+                    enablePull()
+                    if btn and btn.SetTitle then btn:SetTitle("Pull Items: ON") end
                 end
             end
         })
     end
 
-    tab:Section({ Title = "Pull Items" })
-    addToggleLike(tab, "Pull Items", false, function(v)
-        if v then enablePull() else disablePull() end
+    Players.LocalPlayer.CharacterAdded:Connect(function()
+        if PULL_ON and not pullConn then
+            pullConn = Run.Heartbeat:Connect(scanAndPull)
+        end
     end)
 end
