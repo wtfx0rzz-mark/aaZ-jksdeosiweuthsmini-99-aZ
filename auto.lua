@@ -535,7 +535,7 @@ return function(C, R, UI)
                     local mp = mainPart(m)
                     if mp then
                         local dist = (mp.Position - root.Position).Magnitude
-                        if dist < bestD then bestD, best = dist, m end
+                        if dist < bestDist then bestD, best = dist, m end
                     end
                 end
             end
@@ -1502,6 +1502,68 @@ return function(C, R, UI)
                 Value = false,
                 Callback = function(state)
                     if state then enableDelete() else disableDelete() end
+                end
+            })
+        end
+
+        do
+            local deleteBigTreesOn = false
+            local addedConn
+            local BIG_NAMES = { TreeBig1 = true, TreeBig2 = true, TreeBig3 = true }
+            local function isBigTreeName(n)
+                if not n or type(n) ~= "string" then return false end
+                if BIG_NAMES[n] then return true end
+                if n:match("^WebbedTreeBig%d*$") then return true end
+                return false
+            end
+            local function isBigTreeModel(m)
+                return m and m:IsA("Model") and isBigTreeName(m.Name)
+            end
+            local function destroyIfBigTree(inst)
+                if not deleteBigTreesOn then return end
+                local cur = inst
+                for _ = 1, 4 do
+                    if not cur then break end
+                    if isBigTreeModel(cur) then
+                        pcall(function() cur:Destroy() end)
+                        return true
+                    end
+                    cur = cur.Parent
+                end
+                return false
+            end
+            local function sweepAll()
+                local items = WS:FindFirstChild("Items")
+                if items then
+                    for _, m in ipairs(items:GetChildren()) do
+                        if isBigTreeModel(m) then pcall(function() m:Destroy() end) end
+                    end
+                end
+                local map = WS:FindFirstChild("Map")
+                if map then
+                    for _, d in ipairs(map:GetDescendants()) do
+                        if isBigTreeModel(d) then pcall(function() d:Destroy() end) end
+                    end
+                end
+            end
+            local function enableDeleteBigTrees()
+                if deleteBigTreesOn then return end
+                deleteBigTreesOn = true
+                sweepAll()
+                if addedConn then addedConn:Disconnect() addedConn = nil end
+                addedConn = WS.DescendantAdded:Connect(function(inst)
+                    destroyIfBigTree(inst)
+                end)
+            end
+            local function disableDeleteBigTrees()
+                deleteBigTreesOn = false
+                if addedConn then addedConn:Disconnect() addedConn = nil end
+            end
+            tab:Toggle({
+                Title = "Delete Big Trees (irreversible)",
+                Value = false,
+                Callback = function(state)
+                    if state then enableDeleteBigTrees() else disableDeleteBigTrees() end
                 end
             })
         end
