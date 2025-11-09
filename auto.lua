@@ -564,6 +564,14 @@ return function(C, R, UI)
             end
         end
         lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
+        tab:Toggle({
+            Title = "Teleport to Missing Kids",
+            Value = autoLostEnabled,
+            Callback = function(state)
+                autoLostEnabled = state and true or false
+                refreshLostBtn()
+            end
+        })
 
         local godOn, godHB, godAcc = false, nil, 0
         local GOD_INTERVAL = 0.5
