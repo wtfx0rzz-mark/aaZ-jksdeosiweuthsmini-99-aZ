@@ -462,32 +462,28 @@ return function(C, R, UI)
             Title = "Edge Button: Phase 10",
             Value = false,
             Callback = function(state)
-                showPhaseEdge = state
-                if phaseBtn then phaseBtn.Visible = state end
+                phaseBtn.Visible = state
             end
         })
         tab:Toggle({
             Title = "Edge Button: Plant Sapling",
             Value = false,
             Callback = function(state)
-                showPlantEdge = state
-                if plantBtn then plantBtn.Visible = state end
+                plantBtn.Visible = state
             end
         })
         tab:Toggle({
             Title = "Edge Button: Teleport",
             Value = false,
             Callback = function(state)
-                showTeleportEdge = state
-                if tpBtn then tpBtn.Visible = state end
+                tpBtn.Visible = state
             end
         })
         tab:Toggle({
             Title = "Edge Button: Campfire",
             Value = true,
             Callback = function(state)
-                showCampEdge = state
-                if campBtn then campBtn.Visible = state end
+                campBtn.Visible = state
             end
         })
 
@@ -655,9 +651,9 @@ return function(C, R, UI)
             hiddenConn = PPS.PromptHidden:Connect(function(prompt) if shouldSkipPrompt(prompt) then return end; restorePrompt(prompt) end)
         end
         local function disableInstantInteract()
-            if shownConn  then shownConn:Disconnect();  shownConn  = nil end
-            if trigConn   then trigConn:Disconnect();   trigConn   = nil end
-            if hiddenConn then hiddenConn:Disconnect(); hiddenConn = nil end
+            if shownConn  then shownConn:Disconnect()  shownConn  = nil end
+            if trigConn   then trigConn:Disconnect()   trigConn   = nil end
+            if hiddenConn then hiddenConn:Disconnect() hiddenConn = nil end
             for p,_ in pairs(promptDurations) do restorePrompt(p) end
         end
         enableInstantInteract()
@@ -970,40 +966,17 @@ return function(C, R, UI)
         enableNoStreamingPause()
 
         local function itemsFolder() return WS:FindFirstChild("Items") end
-
-        local function streamSpiral(centerPos, ringRadius, rings, settle)
-            ringRadius = ringRadius or 120
-            rings = rings or 3
-            settle = settle or 0.2
-            local offsets = {Vector3.new(0,0,0)}
-            for r = 1, rings do
-                local d = ringRadius * r
-                offsets[#offsets+1] = Vector3.new( d,0, 0)
-                offsets[#offsets+1] = Vector3.new(-d,0, 0)
-                offsets[#offsets+1] = Vector3.new( 0,0, d)
-                offsets[#offsets+1] = Vector3.new( 0,0,-d)
-                offsets[#offsets+1] = Vector3.new( d,0, d)
-                offsets[#offsets+1] = Vector3.new( d,0,-d)
-                offsets[#offsets+1] = Vector3.new(-d,0, d)
-                offsets[#offsets+1] = Vector3.new(-d,0,-d)
-            end
-            for i = 1, #offsets do requestStreamAt(centerPos + offsets[i]) Run.Heartbeat:Wait() end
-            task.wait(settle)
-        end
-
         local function collectSaplingsSnapshot()
             local items = itemsFolder(); if not items then return {} end
-            local root = hrp()
-            if root then streamSpiral(root.Position, 140, 4, 0.25) end
             local list = {}
             for _,m in ipairs(items:GetChildren()) do
-                if m:IsA("Model") and m.Name == "Sapling" and mainPart(m) then
-                    list[#list+1] = m
+                if m:IsA("Model") and m.Name == "Sapling" then
+                    local mp = mainPart(m)
+                    if mp then list[#list+1] = m end
                 end
             end
             return list
         end
-
         local function groundBelow2(pos)
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
@@ -1022,62 +995,40 @@ return function(C, R, UI)
             hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
             return (hit and hit.Position) or pos
         end
-        local function groundBehindCF()
+        local function groundAtFeetCF()
             local root = hrp(); if not root then return nil end
-            local back = -root.CFrame.LookVector
-            local probe = root.Position + back * 2
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = { lp.Character, WS:FindFirstChild("Items") }
-            local hit = WS:Raycast(probe + Vector3.new(0, 6, 0), Vector3.new(0, -1000, 0), params)
-            local pos = (hit and hit.Position) or (probe - Vector3.new(0, 2.5, 0))
-            return CFrame.new(Vector3.new(pos.X, pos.Y + 0.6, pos.Z), Vector3.new(pos.X, pos.Y + 0.6, pos.Z) + back)
+            local g = groundBelow2(root.Position)
+            local look = root.CFrame.LookVector
+            local pos = Vector3.new(g.X, g.Y + 0.6, g.Z)
+            return CFrame.new(pos, pos + look)
         end
-
-        local function tryStartDrag(m)
-            local ev = getRemote("RequestStartDraggingItem"); if not ev then return false end
-            local ok = pcall(function() ev:FireServer(m) end)
-            if not ok then ok = pcall(function() ev:FireServer(Instance.new("Model")) end) end
-            return ok
+        local function dropModelAtFeet(m)
+            local startDrag = getRemote("RequestStartDraggingItem")
+            local stopDrag  = getRemote("StopDraggingItem")
+            if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
+            Run.Heartbeat:Wait()
+            local cf = groundAtFeetCF()
+            if cf then
+                pcall(function()
+                    if m:IsA("Model") then m:PivotTo(cf) else local p = mainPart(m); if p then p.CFrame = cf end end
+                end)
+            end
+            task.wait(0.05)
+            if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
         end
-        local function tryStopDrag(m)
-            local ev = getRemote("StopDraggingItem"); if not ev then return end
-            pcall(function() ev:FireServer(m) end)
-            pcall(function() ev:FireServer(Instance.new("Model")) end)
-        end
-
-        local SAPLING_PULL_RATE = 25
+        local SAPLING_DROP_PER_SEC = 25
         local function actionDropSaplings()
             local snap = collectSaplingsSnapshot()
             if #snap == 0 then return end
-            local root = hrp(); if not root then return end
-            local homeCF = root.CFrame
-            local interval = 1 / math.max(0.1, SAPLING_PULL_RATE)
+            local interval = 1 / math.max(0.1, SAPLING_DROP_PER_SEC)
             for i=1,#snap do
                 local m = snap[i]
                 if m and m.Parent then
-                    local mp = mainPart(m)
-                    if mp then
-                        local sapCF = CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position)
-                        teleportWithDive(sapCF)
-                        task.wait(0.05)
-                        tryStartDrag(m)
-                        task.wait(0.05)
-                        teleportWithDive(homeCF)
-                        local dropCF = groundBehindCF()
-                        if dropCF then
-                            pcall(function()
-                                if m:IsA("Model") then m:PivotTo(dropCF) else local p = mainPart(m); if p then p.CFrame = dropCF end end
-                            end)
-                        end
-                        task.wait(0.05)
-                        tryStopDrag(m)
-                        task.wait(interval)
-                    end
+                    dropModelAtFeet(m)
+                    task.wait(interval)
                 end
             end
         end
-
         local PLANT_START_DELAY       = 1.0
         local PLANT_Y_EPSILON         = 0.15
         local PLANT_INTERACTION_DELAY = 0
@@ -1338,7 +1289,6 @@ return function(C, R, UI)
                 local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
                 teleportSticky(CFrame.new(standPos, chestCenter), true)
             end
-            local cfHB, childAdd, childRem
             nextChestBtn.MouseButton1Click:Connect(function()
                 local list = unopenedList()
                 if #list == 0 then
@@ -1358,6 +1308,7 @@ return function(C, R, UI)
                     end
                 end)
             end)
+            local cfHB, childAdd, childRem
             local function refreshButton()
                 local list = unopenedList()
                 nextChestBtn.Visible = chestFinderOn and (#list > 0)
@@ -1371,22 +1322,12 @@ return function(C, R, UI)
                 if chestFinderOn then return end
                 chestFinderOn = true
                 nextChestBtn.Visible = false
-                initialScan()
-                applyDiamondNeighborExclusion()
-                excludeNearestToDiamond()
                 local items = itemsFolder()
                 if items then
-                    childAdd = items.ChildAdded:Connect(function(c)
-                        markChest(c)
-                        applyDiamondNeighborExclusion()
-                        excludeNearestToDiamond()
-                    end)
-                    childRem = items.ChildRemoved:Connect(function(c) chests[c] = nil end)
+                    childAdd = items.ChildAdded:Connect(function(c) end)
+                    childRem = items.ChildRemoved:Connect(function(c) end)
                 end
-                cfHB = Run.Heartbeat:Connect(function()
-                    for m,_ in pairs(chests) do if m and m.Parent then updateChestRecord(m) end end
-                    refreshButton()
-                end)
+                cfHB = Run.Heartbeat:Connect(function() refreshButton() end)
                 refreshButton()
             end
             disableChestFinder = function()
@@ -1555,6 +1496,54 @@ return function(C, R, UI)
         tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
         tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
 
+        do
+            local bigTreeOn = false
+            local addConn1, addConn2
+            local function isBigTreeName(n)
+                if n == "TreeBig1" or n == "TreeBig2" or n == "TreeBig3" then return true end
+                return type(n) == "string" and n:match("^WebbedTreeBig%d*$") ~= nil
+            end
+            local function isBigTreeModel(m)
+                return m and m:IsA("Model") and isBigTreeName(m.Name)
+            end
+            local function nuke(m)
+                if not (m and m.Parent) then return end
+                pcall(function() m:Destroy() end)
+            end
+            local function sweep()
+                if not bigTreeOn then return end
+                for _,d in ipairs(WS:GetDescendants()) do
+                    if isBigTreeModel(d) then nuke(d) end
+                end
+            end
+            local function onAdded(inst)
+                if not bigTreeOn then return end
+                if isBigTreeModel(inst) then nuke(inst) end
+            end
+            local function enableBigTreeDelete()
+                if bigTreeOn then return end
+                bigTreeOn = true
+                sweep()
+                addConn1 = WS.DescendantAdded:Connect(onAdded)
+                local items = WS:FindFirstChild("Items")
+                if items then
+                    addConn2 = items.ChildAdded:Connect(onAdded)
+                end
+            end
+            local function disableBigTreeDelete()
+                bigTreeOn = false
+                if addConn1 then addConn1:Disconnect() addConn1 = nil end
+                if addConn2 then addConn2:Disconnect() addConn2 = nil end
+            end
+            tab:Toggle({
+                Title = "Auto Delete Big Trees",
+                Value = false,
+                Callback = function(state)
+                    if state then enableBigTreeDelete() else disableBigTreeDelete() end
+                end
+            })
+        end
+
         local function enableLoadDefenseSafe()
             local f = nil
             if type(enableLoadDefense) == "function" then f = enableLoadDefense end
@@ -1571,15 +1560,9 @@ return function(C, R, UI)
             local playerGui = lp:WaitForChild("PlayerGui")
             local edgeGui = playerGui:FindFirstChild("EdgeButtons")
             if edgeGui and edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
-            if phaseBtn then phaseBtn.Visible = showPhaseEdge end
-            if plantBtn then plantBtn.Visible = showPlantEdge end
-            if tpBtn    then tpBtn.Visible    = showTeleportEdge end
-            if campBtn  then campBtn.Visible  = showCampEdge end
             if noShadowsOn and not lightConn then enableNoShadows() end
             if loadDefenseOnDefault then enableLoadDefenseSafe() end
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
-            if coinOn and not coinConn then enableCoin() end
-            if chestFinderOn and enableChestFinder then enableChestFinder() end
         end)
     end
     local ok, err = pcall(run)
