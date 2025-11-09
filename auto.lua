@@ -111,7 +111,8 @@ return function(C, R, UI)
         local rollbackCF = nil
         local rollbackThread = nil
         local ROLLBACK_IDLE_S = 30
-        local MIN_MOVE_DIST = 2.0
+        private_MIN_MOVE_DIST = 2.0
+        local MIN_MOVE_DIST = private_MIN_MOVE_DIST
 
         local function startRollbackWatch(afterCF)
             if rollbackThread then task.cancel(rollbackThread) end
@@ -799,42 +800,6 @@ return function(C, R, UI)
             end
         end
         tab:Toggle({ Title = "Disable Shadows", Value = false, Callback = function(state) if state then enableNoShadows() else disableNoShadows() end end })
-
-        local function isBigTreeName(n)
-            if not n then return false end
-            if n == "TreeBig1" or n == "TreeBig2" or n == "TreeBig3" then return true end
-            return (type(n)=="string") and (n:match("^WebbedTreeBig%d*$") ~= nil)
-        end
-        local hideBigTreesOn, hideConn, hideAcc = false, nil, 0
-        local function deleteBigTreesOnce()
-            local count = 0
-            for _,d in ipairs(WS:GetDescendants()) do
-                if d:IsA("Model") and isBigTreeName(d.Name) then
-                    pcall(function() d:Destroy() end)
-                    count += 1
-                end
-            end
-            return count
-        end
-        local function enableHideBigTrees()
-            if hideBigTreesOn then return end
-            hideBigTreesOn = true
-            deleteBigTreesOnce()
-            if hideConn then hideConn:Disconnect() end
-            hideAcc = 0
-            hideConn = Run.Heartbeat:Connect(function(dt)
-                hideAcc += dt
-                if hideAcc >= 60 then
-                    hideAcc = 0
-                    deleteBigTreesOnce()
-                end
-            end)
-        end
-        local function disableHideBigTrees()
-            hideBigTreesOn = false
-            if hideConn then hideConn:Disconnect() hideConn = nil end
-        end
-        tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
@@ -1191,14 +1156,12 @@ return function(C, R, UI)
                 if type(n) ~= "string" then return false end
                 return (n == "Halloween Chest") or (n:match("^Halloween Chest%d+$") ~= nil)
             end
+            local function openedAttrName()
+                return tostring(lp.UserId) .. "Opened"
+            end
             local function chestOpened(m)
                 if not m then return false end
-                local attrs = m:GetAttributes()
-                for k,v in pairs(attrs) do
-                    if tostring(k):match("Opened$") and v == true then return true end
-                end
-                if m:GetAttribute("LocalOpened") == true then return true end
-                return false
+                return m:GetAttribute(openedAttrName()) == true
             end
             local function chestPos(m)
                 local mp = mainPart2(m)
@@ -1214,13 +1177,12 @@ return function(C, R, UI)
                 local rec = chests[m]
                 if not rec then
                     chests[m] = { pos = pos, opened = chestOpened(m), excluded = excluded }
-                    m:GetAttributeChangedSignal("LocalOpened"):Connect(function() local r=chests[m]; if r then r.opened = chestOpened(m) end end)
-                    for k,_ in pairs(m:GetAttributes()) do
-                        if tostring(k):match("Opened$") then
-                            m:GetAttributeChangedSignal(k):Connect(function() local r=chests[m]; if r then r.opened = chestOpened(m) end end)
-                        end
-                    end
-                    m:GetPropertyChangedSignal("PrimaryPart"):Connect(function() local r=chests[m]; if r then r.pos = chestPos(m) or r.pos end end)
+                    m:GetAttributeChangedSignal(openedAttrName()):Connect(function()
+                        local r = chests[m]; if r then r.opened = chestOpened(m) end
+                    end)
+                    m:GetPropertyChangedSignal("PrimaryPart"):Connect(function()
+                        local r=chests[m]; if r then r.pos = chestPos(m) or r.pos end
+                    end)
                     m.AncestryChanged:Connect(function(_, parent) if not parent then chests[m] = nil end end)
                 else
                     rec.pos = pos
@@ -1402,13 +1364,12 @@ return function(C, R, UI)
                 if type(n) ~= "string" then return false end
                 return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
             end
+            local function openedAttrName()
+                return tostring(lp.UserId) .. "Opened"
+            end
             local function chestOpened(m)
                 if not m then return false end
-                if m:GetAttribute("LocalOpened") == true then return true end
-                for k, v in pairs(m:GetAttributes()) do
-                    if tostring(k):match("Opened$") and v == true then return true end
-                end
-                return false
+                return m:GetAttribute(openedAttrName()) == true
             end
             local function safeHideThenDestroy(m)
                 if not (m and m.Parent) then return end
@@ -1479,16 +1440,9 @@ return function(C, R, UI)
                 if not (m and m:IsA("Model") and isChestName(m.Name)) then return end
                 if tracked[m] then return end
                 tracked[m] = true
-                m:GetAttributeChangedSignal("LocalOpened"):Connect(function()
+                m:GetAttributeChangedSignal(openedAttrName()):Connect(function()
                     deleteIfOpenedNow(m)
                 end)
-                for k,_ in pairs(m:GetAttributes()) do
-                    if tostring(k):match("Opened$") then
-                        m:GetAttributeChangedSignal(k):Connect(function()
-                            deleteIfOpenedNow(m)
-                        end)
-                    end
-                end
                 m.AncestryChanged:Connect(function(_, parent)
                     if not parent then tracked[m] = nil end
                 end)
