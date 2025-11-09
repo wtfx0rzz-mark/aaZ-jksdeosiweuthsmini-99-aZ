@@ -1552,6 +1552,81 @@ return function(C, R, UI)
             })
         end
 
+        do
+            local sprinkleConn, sprinkleAccum = nil, 0
+            local SCAN_INTERVAL     = 0.35
+            local IGNORE_WITHIN     = 15
+            local SPRINKLE_RADIUS   = 10
+            local SPRINKLE_HEIGHT   = 1.5
+            local rng = Random.new()
+
+            local function moveItemToRing(item, part, originPos, look)
+                if not (item and part and part.Parent) then return end
+                local angle  = rng:NextNumber(0, math.pi * 2)
+                local radius = SPRINKLE_RADIUS * math.sqrt(rng:NextNumber())
+                local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+                local targetXZ = originPos + offset
+                local groundPos = groundBelow(targetXZ)
+                local dropPos = Vector3.new(targetXZ.X, groundPos.Y + SPRINKLE_HEIGHT, targetXZ.Z)
+                local cf = CFrame.new(dropPos, dropPos + look)
+                pcall(function()
+                    if item:IsA("Model") then
+                        item:PivotTo(cf)
+                    elseif part:IsA("BasePart") then
+                        part.CFrame = cf
+                    end
+                end)
+                pcall(function()
+                    part.AssemblyLinearVelocity = Vector3.new()
+                    part.AssemblyAngularVelocity = Vector3.new()
+                end)
+            end
+
+            local function sprinkleCycle()
+                local root = hrp(); if not root then return end
+                local originPos = root.Position
+                local look = root.CFrame.LookVector
+                local items = WS:FindFirstChild("Items"); if not items then return end
+                for _,item in ipairs(items:GetChildren()) do
+                    if item and item.Parent then
+                        local part = mainPart(item)
+                        if part then
+                            local pos = part.Position
+                            if pos and (pos - originPos).Magnitude > IGNORE_WITHIN then
+                                moveItemToRing(item, part, originPos, look)
+                            end
+                        end
+                    end
+                end
+            end
+
+            local function enableSprinkle()
+                if sprinkleConn then return end
+                sprinkleAccum = 0
+                sprinkleConn = Run.Heartbeat:Connect(function(dt)
+                    sprinkleAccum += dt
+                    if sprinkleAccum < SCAN_INTERVAL then return end
+                    sprinkleAccum = 0
+                    sprinkleCycle()
+                end)
+            end
+
+            local function disableSprinkle()
+                if sprinkleConn then
+                    sprinkleConn:Disconnect()
+                    sprinkleConn = nil
+                end
+            end
+
+            tab:Toggle({
+                Title = "Sprinkle Nearby Items",
+                Value = false,
+                Callback = function(state)
+                    if state then enableSprinkle() else disableSprinkle() end
+                end
+            })
+        end
+
         tab:Section({ Title = "Saplings" })
         tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
         tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
