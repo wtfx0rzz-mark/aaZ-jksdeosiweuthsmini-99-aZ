@@ -493,6 +493,7 @@ return function(C, R, UI)
         local MAX_TO_SAVE, savedCount = 4, 0
         local autoLostEnabled = true
         local lostEligible  = setmetatable({}, {__mode="k"})
+        local visitedLost   = setmetatable({}, {__mode="k"})
         local function isLostChildModel(m) return m and m:IsA("Model") and m.Name:match("^Lost Child") end
         local function refreshLostBtn()
             local anyEligible = next(lostEligible) ~= nil
@@ -501,17 +502,44 @@ return function(C, R, UI)
         local function onLostAttrChange(m)
             local v = m:GetAttribute("Lost") == true
             local was = lostEligible[m] == true
-            if v then lostEligible[m] = true else if was and savedCount < MAX_TO_SAVE then savedCount += 1 end; lostEligible[m] = nil end
+            if v then
+                lostEligible[m] = true
+                visitedLost[m] = nil
+            else
+                if was and savedCount < MAX_TO_SAVE then savedCount += 1 end
+                lostEligible[m] = nil
+                visitedLost[m] = nil
+            end
             refreshLostBtn()
         end
         local function trackLostModel(m)
             if not isLostChildModel(m) then return end
             onLostAttrChange(m)
             m:GetAttributeChangedSignal("Lost"):Connect(function() onLostAttrChange(m) end)
-            m.AncestryChanged:Connect(function(_, parent) if not parent then lostEligible[m] = nil; refreshLostBtn() end end)
+            m.AncestryChanged:Connect(function(_, parent)
+                if not parent then
+                    lostEligible[m] = nil
+                    visitedLost[m] = nil
+                    refreshLostBtn()
+                end
+            end)
         end
         for _,d in ipairs(WS:GetDescendants()) do trackLostModel(d) end
         WS.DescendantAdded:Connect(trackLostModel)
+        local function findUnvisitedLost()
+            local root = hrp(); if not root then return nil end
+            local best, bestD = nil, math.huge
+            for m,_ in pairs(lostEligible) do
+                if not visitedLost[m] then
+                    local mp = mainPart(m)
+                    if mp then
+                        local dist = (mp.Position - root.Position).Magnitude
+                        if dist < bestD then bestD, best = dist, m end
+                    end
+                end
+            end
+            return best
+        end
         local function findNearestEligibleLost()
             local root = hrp(); if not root then return nil end
             local best, bestD = nil, math.huge
@@ -526,11 +554,24 @@ return function(C, R, UI)
         end
         local function teleportToNearestLost()
             if savedCount >= MAX_TO_SAVE then return end
-            local target = findNearestEligibleLost(); if not target then return end
+            local target = findUnvisitedLost()
+            if not target then target = findNearestEligibleLost() end
+            if not target then return end
             local mp = mainPart(target)
-            if mp then teleportWithDive(CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position)) end
+            if mp then
+                visitedLost[target] = mp.Position
+                teleportWithDive(CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position))
+            end
         end
         lostBtn.MouseButton1Click:Connect(function() teleportToNearestLost() end)
+        tab:Toggle({
+            Title = "Teleport to Missing Kids",
+            Value = autoLostEnabled,
+            Callback = function(state)
+                autoLostEnabled = state and true or false
+                refreshLostBtn()
+            end
+        })
 
         local godOn, godHB, godAcc = false, nil, 0
         local GOD_INTERVAL = 0.5
