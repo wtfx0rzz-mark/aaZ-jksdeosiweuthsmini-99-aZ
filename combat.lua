@@ -344,6 +344,7 @@ return function(C, R, UI)
         end
     end
 
+    -- Explicit order = priority. Cooldowns are for timing only.
     local CHAR_WEAPON_PREF = {
         { "Cultist King Mace", 1.0 },
         { "Morningstar",       1.0 },
@@ -355,11 +356,11 @@ return function(C, R, UI)
         { "Trident",           0.6 },
         { "Poison Spear",      0.5 },
         { "Spear",             0.5 },
-        { "Strong Axe",        nil },
-        { "Chainsaw",          nil },
-        { "Ice Axe",           nil },
-        { "Good Axe",          nil },
-        { "Old Axe",           nil },
+        { "Strong Axe",        0.5 },
+        { "Chainsaw",          0.5 },
+        { "Ice Axe",           0.5 },
+        { "Good Axe",          0.5 },
+        { "Old Axe",           0.5 },
     }
 
     local function collectAvailableCharWeapons()
@@ -375,11 +376,20 @@ return function(C, R, UI)
             end
         end
         table.sort(available, function(a, b)
-            if a.cd ~= b.cd then
-                return a.cd < b.cd
-            end
             return a.order < b.order
         end)
+        if #available == 0 then
+            for _, n in ipairs(TUNE.ChopPrefer) do
+                if findInInventory(n) then
+                    available[#available+1] = {
+                        name = n,
+                        cd = TUNE.CHOP_SWING_DELAY,
+                        order = math.huge,
+                    }
+                    break
+                end
+            end
+        end
         return available
     end
 
@@ -394,18 +404,6 @@ return function(C, R, UI)
     local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
         if not isTree then
             local availableWeapons = collectAvailableCharWeapons()
-            if #availableWeapons == 0 then
-                for _, n in ipairs(TUNE.ChopPrefer) do
-                    if findInInventory(n) then
-                        availableWeapons[#availableWeapons+1] = {
-                            name = n,
-                            cd = swingDelay,
-                            order = math.huge,
-                        }
-                        break
-                    end
-                end
-            end
             if #availableWeapons == 0 then
                 task.wait(0.2)
                 return
