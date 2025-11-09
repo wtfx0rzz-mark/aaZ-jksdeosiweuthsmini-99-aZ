@@ -535,7 +535,7 @@ return function(C, R, UI)
                     local mp = mainPart(m)
                     if mp then
                         local dist = (mp.Position - root.Position).Magnitude
-                        if dist < bestDist then bestD, best = dist, m end
+                        if dist < bestD then bestD, best = dist, m end
                     end
                 end
             end
@@ -970,17 +970,40 @@ return function(C, R, UI)
         enableNoStreamingPause()
 
         local function itemsFolder() return WS:FindFirstChild("Items") end
+
+        local function streamSpiral(centerPos, ringRadius, rings, settle)
+            ringRadius = ringRadius or 120
+            rings = rings or 3
+            settle = settle or 0.2
+            local offsets = {Vector3.new(0,0,0)}
+            for r = 1, rings do
+                local d = ringRadius * r
+                offsets[#offsets+1] = Vector3.new( d,0, 0)
+                offsets[#offsets+1] = Vector3.new(-d,0, 0)
+                offsets[#offsets+1] = Vector3.new( 0,0, d)
+                offsets[#offsets+1] = Vector3.new( 0,0,-d)
+                offsets[#offsets+1] = Vector3.new( d,0, d)
+                offsets[#offsets+1] = Vector3.new( d,0,-d)
+                offsets[#offsets+1] = Vector3.new(-d,0, d)
+                offsets[#offsets+1] = Vector3.new(-d,0,-d)
+            end
+            for i = 1, #offsets do requestStreamAt(centerPos + offsets[i]) Run.Heartbeat:Wait() end
+            task.wait(settle)
+        end
+
         local function collectSaplingsSnapshot()
             local items = itemsFolder(); if not items then return {} end
+            local root = hrp()
+            if root then streamSpiral(root.Position, 140, 4, 0.25) end
             local list = {}
             for _,m in ipairs(items:GetChildren()) do
-                if m:IsA("Model") and m.Name == "Sapling" then
-                    local mp = mainPart(m)
-                    if mp then list[#list+1] = m end
+                if m:IsA("Model") and m.Name == "Sapling" and mainPart(m) then
+                    list[#list+1] = m
                 end
             end
             return list
         end
+
         local function groundBelow2(pos)
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
@@ -999,40 +1022,62 @@ return function(C, R, UI)
             hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
             return (hit and hit.Position) or pos
         end
-        local function groundAtFeetCF()
+        local function groundBehindCF()
             local root = hrp(); if not root then return nil end
-            local g = groundBelow2(root.Position)
-            local look = root.CFrame.LookVector
-            local pos = Vector3.new(g.X, g.Y + 0.6, g.Z)
-            return CFrame.new(pos, pos + look)
+            local back = -root.CFrame.LookVector
+            local probe = root.Position + back * 2
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { lp.Character, WS:FindFirstChild("Items") }
+            local hit = WS:Raycast(probe + Vector3.new(0, 6, 0), Vector3.new(0, -1000, 0), params)
+            local pos = (hit and hit.Position) or (probe - Vector3.new(0, 2.5, 0))
+            return CFrame.new(Vector3.new(pos.X, pos.Y + 0.6, pos.Z), Vector3.new(pos.X, pos.Y + 0.6, pos.Z) + back)
         end
-        local function dropModelAtFeet(m)
-            local startDrag = getRemote("RequestStartDraggingItem")
-            local stopDrag  = getRemote("StopDraggingItem")
-            if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(Instance.new("Model")) end) end
-            Run.Heartbeat:Wait()
-            local cf = groundAtFeetCF()
-            if cf then
-                pcall(function()
-                    if m:IsA("Model") then m:PivotTo(cf) else local p = mainPart(m); if p then p.CFrame = cf end end
-                end)
-            end
-            task.wait(0.05)
-            if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(Instance.new("Model")) end) end
+
+        local function tryStartDrag(m)
+            local ev = getRemote("RequestStartDraggingItem"); if not ev then return false end
+            local ok = pcall(function() ev:FireServer(m) end)
+            if not ok then ok = pcall(function() ev:FireServer(Instance.new("Model")) end) end
+            return ok
         end
-        local SAPLING_DROP_PER_SEC = 25
+        local function tryStopDrag(m)
+            local ev = getRemote("StopDraggingItem"); if not ev then return end
+            pcall(function() ev:FireServer(m) end)
+            pcall(function() ev:FireServer(Instance.new("Model")) end)
+        end
+
+        local SAPLING_PULL_RATE = 25
         local function actionDropSaplings()
             local snap = collectSaplingsSnapshot()
             if #snap == 0 then return end
-            local interval = 1 / math.max(0.1, SAPLING_DROP_PER_SEC)
+            local root = hrp(); if not root then return end
+            local homeCF = root.CFrame
+            local interval = 1 / math.max(0.1, SAPLING_PULL_RATE)
             for i=1,#snap do
                 local m = snap[i]
                 if m and m.Parent then
-                    dropModelAtFeet(m)
-                    task.wait(interval)
+                    local mp = mainPart(m)
+                    if mp then
+                        local sapCF = CFrame.new(mp.Position + Vector3.new(0, 3, 0), mp.Position)
+                        teleportWithDive(sapCF)
+                        task.wait(0.05)
+                        tryStartDrag(m)
+                        task.wait(0.05)
+                        teleportWithDive(homeCF)
+                        local dropCF = groundBehindCF()
+                        if dropCF then
+                            pcall(function()
+                                if m:IsA("Model") then m:PivotTo(dropCF) else local p = mainPart(m); if p then p.CFrame = dropCF end end
+                            end)
+                        end
+                        task.wait(0.05)
+                        tryStopDrag(m)
+                        task.wait(interval)
+                    end
                 end
             end
         end
+
         local PLANT_START_DELAY       = 1.0
         local PLANT_Y_EPSILON         = 0.15
         local PLANT_INTERACTION_DELAY = 0
@@ -1502,68 +1547,6 @@ return function(C, R, UI)
                 Value = false,
                 Callback = function(state)
                     if state then enableDelete() else disableDelete() end
-                end
-            })
-        end
-
-        do
-            local deleteBigTreesOn = false
-            local addedConn
-            local BIG_NAMES = { TreeBig1 = true, TreeBig2 = true, TreeBig3 = true }
-            local function isBigTreeName(n)
-                if not n or type(n) ~= "string" then return false end
-                if BIG_NAMES[n] then return true end
-                if n:match("^WebbedTreeBig%d*$") then return true end
-                return false
-            end
-            local function isBigTreeModel(m)
-                return m and m:IsA("Model") and isBigTreeName(m.Name)
-            end
-            local function destroyIfBigTree(inst)
-                if not deleteBigTreesOn then return end
-                local cur = inst
-                for _ = 1, 4 do
-                    if not cur then break end
-                    if isBigTreeModel(cur) then
-                        pcall(function() cur:Destroy() end)
-                        return true
-                    end
-                    cur = cur.Parent
-                end
-                return false
-            end
-            local function sweepAll()
-                local items = WS:FindFirstChild("Items")
-                if items then
-                    for _, m in ipairs(items:GetChildren()) do
-                        if isBigTreeModel(m) then pcall(function() m:Destroy() end) end
-                    end
-                end
-                local map = WS:FindFirstChild("Map")
-                if map then
-                    for _, d in ipairs(map:GetDescendants()) do
-                        if isBigTreeModel(d) then pcall(function() d:Destroy() end) end
-                    end
-                end
-            end
-            local function enableDeleteBigTrees()
-                if deleteBigTreesOn then return end
-                deleteBigTreesOn = true
-                sweepAll()
-                if addedConn then addedConn:Disconnect() addedConn = nil end
-                addedConn = WS.DescendantAdded:Connect(function(inst)
-                    destroyIfBigTree(inst)
-                end)
-            end
-            local function disableDeleteBigTrees()
-                deleteBigTreesOn = false
-                if addedConn then addedConn:Disconnect() addedConn = nil end
-            end
-            tab:Toggle({
-                Title = "Delete Big Trees (irreversible)",
-                Value = false,
-                Callback = function(state)
-                    if state then enableDeleteBigTrees() else disableDeleteBigTrees() end
                 end
             })
         end
