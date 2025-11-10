@@ -119,14 +119,17 @@ return function(C, R, UI)
     local START_STAGGER    = 0.01
     local STEP_WAIT        = 0.016
 
-    local LAND_MIN         = 0.35
-    local LAND_MAX         = 0.85
-    local ARRIVE_EPS_H     = 0.9
+    -- tighter spread
+    local LAND_MIN         = 0.18
+    local LAND_MAX         = 0.42
+    local ARRIVE_EPS_H     = 0.7
     local STALL_SEC        = 0.6
 
-    local HOVER_ABOVE_ORB  = 1.2
-    local RELEASE_RATE_HZ  = 16
-    local MAX_RELEASE_PER_TICK = 8
+    local HOVER_ABOVE_ORB  = 0.9
+
+    -- smoother continuous release
+    local RELEASE_RATE_HZ      = 28
+    local MAX_RELEASE_PER_TICK = 2
 
     local STAGE_TIMEOUT_S  = 1.5
     local ORB_UNSTICK_RAD  = 2.0
@@ -144,6 +147,7 @@ return function(C, R, UI)
     local inflight     = {}
     local releaseQueue = {}
     local releaseAcc   = 0.0
+    local TRANSPORT_MODE = "drag" -- "drag" or "teleport"
 
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
@@ -292,6 +296,12 @@ return function(C, R, UI)
         setAnchored(m, true)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
+
+        if TRANSPORT_MODE == "teleport" then
+            stageAtOrb(m, snap, target())
+            return
+        end
+
         local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false }
         inflight[m] = rec
 
@@ -431,9 +441,10 @@ return function(C, R, UI)
         return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
     end
 
-    local function startAll(mode)
+    local function startAll(mode, transport)
         if running then return end
         if not hrp() then return end
+        TRANSPORT_MODE = transport or "drag"
         local pos, set, color
         if mode == "fuel" then
             pos   = campfireOrbPos()
@@ -482,14 +493,28 @@ return function(C, R, UI)
         Title = "Send Fuel",
         Callback = function()
             if running then return end
-            startAll("fuel")
+            startAll("fuel", "drag")
         end
     })
     tab:Button({
         Title = "Send Scrap",
         Callback = function()
             if running then return end
-            startAll("scrap")
+            startAll("scrap", "drag")
+        end
+    })
+    tab:Button({
+        Title = "Send Fuel (Teleport)",
+        Callback = function()
+            if running then return end
+            startAll("fuel", "teleport")
+        end
+    })
+    tab:Button({
+        Title = "Send Scrap (Teleport)",
+        Callback = function()
+            if running then return end
+            startAll("scrap", "teleport")
         end
     })
 
