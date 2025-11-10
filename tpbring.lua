@@ -119,7 +119,6 @@ return function(C, R, UI)
     local START_STAGGER    = 0.01
     local STEP_WAIT        = 0.016
 
-    -- tighter spread
     local LAND_MIN         = 0.18
     local LAND_MAX         = 0.42
     local ARRIVE_EPS_H     = 0.7
@@ -127,7 +126,6 @@ return function(C, R, UI)
 
     local HOVER_ABOVE_ORB  = 0.9
 
-    -- smoother continuous release
     local RELEASE_RATE_HZ      = 28
     local MAX_RELEASE_PER_TICK = 2
 
@@ -247,6 +245,7 @@ return function(C, R, UI)
     end
 
     local function stageAtOrb(m, snap, tgt)
+        if not inflight[m] then inflight[m] = { snap = snap, staged = false, stagedAt = 0, conn = nil } end
         setAnchored(m, true)
         for _,p in ipairs(allParts(m)) do
             p.CanCollide = false
@@ -256,7 +255,7 @@ return function(C, R, UI)
         setPivot(m, CFrame.new(tgt))
         inflight[m].staged   = true
         inflight[m].stagedAt = os.clock()
-        inflight[m].snap     = snap
+        inflight[m].snap     = inflight[m].snap or snap
         table.insert(releaseQueue, {model=m, pos=tgt})
     end
 
@@ -297,14 +296,15 @@ return function(C, R, UI)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
 
+        -- ensure inflight exists before teleport short-path
+        if not inflight[m] then inflight[m] = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false } end
+
         if TRANSPORT_MODE == "teleport" then
             stageAtOrb(m, snap, target())
             return
         end
 
-        local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false }
-        inflight[m] = rec
-
+        local rec = inflight[m]
         rec.conn = Run.Heartbeat:Connect(function(dt)
             if not (running and m and m.Parent and orbPosVec) then
                 if rec.conn then rec.conn:Disconnect() end
