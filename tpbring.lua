@@ -112,24 +112,23 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local DRAG_SPEED     = 180
-    local PICK_RADIUS    = 400
-    local ORB_HEIGHT     = 15
-    local MAX_CONCURRENT = 50
-    local START_STAGGER  = 0.01
-    local STEP_WAIT      = 0.016
+    local DRAG_SPEED       = 180
+    local PICK_RADIUS      = 200
+    local ORB_HEIGHT       = 20
+    local MAX_CONCURRENT   = 50
+    local START_STAGGER    = 0.01
+    local STEP_WAIT        = 0.016
 
-    local LAND_MIN = 1.2
-    local LAND_MAX = 3.0
-    local ARRIVE_EPS_H = 1.0
-    local STALL_SEC    = 0.6
+    local LAND_MIN         = 1.0
+    local LAND_MAX         = 2.2
+    local ARRIVE_EPS_H     = 0.9
+    local STALL_SEC        = 0.6
 
-    local KICK_RADIUS     = 2.4
-    local KICK_STUCK_SECS = 0.9
-    local KICK_FALL_DELTA = 2.5
-    local KICK_MAX        = 2
-    local KICK_RESET_UP   = 1.2
-    local KICK_VY         = -60
+    local HOVER_ABOVE_ORB  = 1.2
+    local RELEASE_INTERVAL = 0.08
+    local WAVE_AMPLITUDE   = 0.6
+    local WAVE_STEP        = 0.35
+    local DROP_VY          = -6
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -137,10 +136,13 @@ return function(C, R, UI)
 
     local CURRENT_RUN_ID = nil
 
-    local running   = false
-    local hb        = nil
-    local orb       = nil
-    local orbPosVec = nil
+    local running      = false
+    local hb           = nil
+    local orb          = nil
+    local orbPosVec    = nil
+    local releaseQueue = {}
+    local releaseTick  = 0
+    local releaseIdx   = 0
 
     local inflight = {}
 
@@ -153,7 +155,6 @@ return function(C, R, UI)
 
     local fuelSet = {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
-
     local scrapSet = {}
     for _,n in ipairs(junkItems) do scrapSet[n] = true end
     for k,_ in pairs(scrapAlso) do scrapSet[k] = true end
@@ -228,40 +229,6 @@ return function(C, R, UI)
         return out
     end
 
-    local function dropFreeFall(m, landPos)
-        if not (m and m.Parent) then return end
-        for _,p in ipairs(allParts(m)) do
-            p.Anchored = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-            pcall(function() p:SetNetworkOwner(nil) end)
-            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-        end
-        if landPos then
-            local mp = mainPart(m)
-            if mp then
-                local p0 = mp.Position
-                local dir = (landPos - Vector3.new(p0.X, landPos.Y, p0.Z))
-                if dir.Magnitude > 0 then
-                    setPivot(m, CFrame.new(Vector3.new(p0.X, p0.Y, p0.Z), Vector3.new(p0.X, p0.Y, p0.Z) + dir.Unit))
-                end
-            end
-        end
-        for _,p in ipairs(allParts(m)) do
-            p.AssemblyLinearVelocity = Vector3.new(0, -4, 0)
-        end
-    end
-
-    local function restoreModelState(m)
-        local rec = inflight[m]; if not rec then return end
-        if rec.conn then rec.conn:Disconnect() end
-        if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
-        setAnchored(m, false)
-        setCollideFromSnapshot(rec.snap)
-        pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
-        inflight[m] = nil
-    end
-
     local function hash01(s)
         local h = 131071
         for i = 1, #s do
@@ -278,12 +245,51 @@ return function(C, R, UI)
         return Vector3.new(math.cos(ang)*rad, 0, math.sin(ang)*rad)
     end
 
+    local function stageAtOrb(m, snap, tgt)
+        setAnchored(m, true)
+        zeroAssembly(m)
+        setPivot(m, CFrame.new(tgt))
+        inflight[m].staged = true
+        inflight[m].snap   = snap
+        table.insert(releaseQueue, {model=m, pos=tgt})
+    end
+
+    local function releaseOne(rec)
+        local m = rec and rec.model
+        if not (m and m.Parent) then return end
+        local snap = inflight[m] and inflight[m].snap
+        setAnchored(m, false)
+        zeroAssembly(m)
+        setCollideFromSnapshot(snap)
+        local mp = mainPart(m)
+        if mp then
+            releaseIdx += 1
+            local a = releaseIdx * WAVE_STEP
+            local wobble = Vector3.new(math.cos(a), 0, math.sin(a)) * WAVE_AMPLITUDE
+            local p0 = mp.Position + wobble
+            setPivot(m, CFrame.new(p0, p0 + Vector3.new(0,0,1)))
+        end
+        for _,p in ipairs(allParts(m)) do
+            p.AssemblyLinearVelocity  = Vector3.new(0, DROP_VY, 0)
+            p.AssemblyAngularVelocity = Vector3.new()
+            pcall(function() p:SetNetworkOwner(nil) end)
+            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+        end
+        pcall(function()
+            m:SetAttribute(INFLT_ATTR, nil)
+            m:SetAttribute(JOB_ATTR, nil)
+            m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
+        end)
+        inflight[m] = nil
+    end
+
     local function startConveyor(m, jobId)
         if not (running and m and m.Parent and orbPosVec) then return end
         local mp = mainPart(m); if not mp then return end
         local off = landingOffset(m, jobId)
         local function target()
-            return (orbPosVec or mp.Position) + off
+            local base = orbPosVec or mp.Position
+            return Vector3.new(base.X + off.X, base.Y + HOVER_ABOVE_ORB, base.Z + off.Z)
         end
         pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
         pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
@@ -291,40 +297,33 @@ return function(C, R, UI)
         setAnchored(m, true)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
-        local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock() }
+        local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false }
         inflight[m] = rec
 
         rec.conn = Run.Heartbeat:Connect(function(dt)
             if not (running and m and m.Parent and orbPosVec) then
-                restoreModelState(m)
-                dropFreeFall(m)
+                if rec.conn then rec.conn:Disconnect() end
+                inflight[m] = nil
                 return
             end
+            if rec.staged then return end
+
             local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
             if not pivot then
-                restoreModelState(m)
+                if rec.conn then rec.conn:Disconnect() end
+                inflight[m] = nil
                 return
             end
 
             local pos = pivot.Position
             local tgt = target()
-
             local flatDelta = Vector3.new(tgt.X - pos.X, 0, tgt.Z - pos.Z)
             local distH = flatDelta.Magnitude
 
-            if distH <= ARRIVE_EPS_H then
+            if distH <= ARRIVE_EPS_H and math.abs(tgt.Y - pos.Y) <= 1.2 then
                 if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
-                setAnchored(m, false)
-                setCollideFromSnapshot(snap)
-                zeroAssembly(m)
-                dropFreeFall(m, tgt)
-                pcall(function()
-                    m:SetAttribute(INFLT_ATTR, nil)
-                    m:SetAttribute(JOB_ATTR, nil)
-                    m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
-                end)
+                stageAtOrb(m, snap, tgt)
                 if rec.conn then rec.conn:Disconnect() end
-                inflight[m] = nil
                 return
             end
 
@@ -338,12 +337,11 @@ return function(C, R, UI)
             end
             rec.lastD = distH
 
-            local step = math.min(DRAG_SPEED * dt, distH)
-            local dir  = distH > 1e-3 and (flatDelta / distH) or Vector3.new()
-            local lift = math.clamp(distH/12, 0, 2.5)
-            local newPos = Vector3.new(pos.X, math.max(pos.Y, (orbPosVec and (orbPosVec.Y - 1.0) or pos.Y)) + lift*0.02, pos.Z) + dir * step
-            local look = dir.Magnitude > 0 and dir or Vector3.new(0,0,1)
-            setPivot(m, CFrame.new(newPos, newPos + look))
+            local step = math.min(DRAG_SPEED * dt, math.max(0, distH))
+            local dir  = distH > 1e-3 and (flatDelta / math.max(distH,1e-3)) or Vector3.new()
+            local vy   = math.clamp((tgt.Y - pos.Y), -6, 6)
+            local newPos = Vector3.new(pos.X, pos.Y + vy * dt * 10, pos.Z) + dir * step
+            setPivot(m, CFrame.new(newPos, newPos + (dir.Magnitude>0 and dir or Vector3.new(0,0,1))))
         end)
     end
 
@@ -378,10 +376,9 @@ return function(C, R, UI)
             setAnchored(m, false)
             setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
             zeroAssembly(m)
-            dropFreeFall(m)
-            pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
-            inflight[m] = nil
         end
+        inflight = {}
+        releaseQueue = {}
         activeCount = 0
         destroyOrb()
     end
@@ -420,11 +417,19 @@ return function(C, R, UI)
         spawnOrbAt(pos, color)
         running = true
         STOP_BTN.Visible = true
+        releaseQueue = {}
+        releaseIdx = 0
+        releaseTick = os.clock()
         if hb then hb:Disconnect() end
         hb = Run.Heartbeat:Connect(function()
             if not running then return end
             local root = hrp(); if not root then return end
             wave(root.Position)
+            if #releaseQueue > 0 and (os.clock() - releaseTick) >= RELEASE_INTERVAL then
+                local rec = table.remove(releaseQueue, 1)
+                releaseTick = os.clock()
+                releaseOne(rec)
+            end
             task.wait(STEP_WAIT)
         end)
     end
@@ -454,56 +459,4 @@ return function(C, R, UI)
             end
         end
     end)
-
-    do
-        local watched = setmetatable({}, {__mode="k"})
-        local acc = 0
-        Run.Heartbeat:Connect(function(dt)
-            if not orbPosVec then return end
-            acc += dt
-            if acc < 1/12 then return end
-            acc = 0
-            local items = WS:FindFirstChild("Items"); if not items then return end
-            for _,m in ipairs(items:GetChildren()) do
-                if not m:IsA("Model") then continue end
-                local mp = mainPart(m); if not mp then continue end
-                local pos = mp.Position
-                local near = (pos - orbPosVec).Magnitude <= KICK_RADIUS
-                if near then
-                    local rec = watched[m]
-                    if not rec then
-                        watched[m] = {t=os.clock(), y0=pos.Y, kicks=0}
-                        for _,p in ipairs(allParts(m)) do p.Anchored = false end
-                        for _,p in ipairs(allParts(m)) do p.AssemblyLinearVelocity = Vector3.new(0,-4,0) end
-                    else
-                        local fell = (rec.y0 - pos.Y) >= KICK_FALL_DELTA or pos.Y < (orbPosVec.Y - KICK_FALL_DELTA)
-                        if fell then
-                            watched[m] = nil
-                        elseif (os.clock() - rec.t) >= KICK_STUCK_SECS then
-                            if rec.kicks < KICK_MAX then
-                                rec.kicks += 1
-                                rec.t = os.clock()
-                                rec.y0 = pos.Y
-                                for _,p in ipairs(allParts(m)) do
-                                    p.Anchored = false
-                                    p.AssemblyLinearVelocity  = Vector3.new(0, KICK_VY, 0)
-                                    p.AssemblyAngularVelocity = Vector3.new()
-                                    pcall(function() p:SetNetworkOwner(nil) end)
-                                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-                                end
-                                local p2 = mainPart(m)
-                                if p2 then
-                                    p2.CFrame = CFrame.new(Vector3.new(p2.Position.X, orbPosVec.Y + KICK_RESET_UP, p2.Position.Z))
-                                end
-                            else
-                                watched[m] = nil
-                            end
-                        end
-                    end
-                else
-                    watched[m] = nil
-                end
-            end
-        end)
-    end
 end
