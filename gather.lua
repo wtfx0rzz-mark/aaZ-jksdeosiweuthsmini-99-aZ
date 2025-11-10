@@ -49,7 +49,7 @@ return function(C, R, UI)
     local UNANCHOR_BATCH = 8
     local UNANCHOR_STEP  = 0.04
     local NUDGE_DOWN     = 4
-    local CULTIST_LIMIT  = 10
+    local CULTIST_LIMIT  = math.huge
 
     local PLACE_BATCH    = 8
     local PLACE_YIELD_FN = function() Run.Heartbeat:Wait() end
@@ -330,7 +330,6 @@ return function(C, R, UI)
     end
 
     local function finalizePileDrop(items)
-    -- phase 1: restore physics properties
     for _,m in ipairs(items) do
         if m and m.Parent then
             dragStop(m)
@@ -354,7 +353,6 @@ return function(C, R, UI)
         end
     end
 
-    -- phase 2: staggered unanchor with per-item jitter to prevent mid-air pause
     local n = #items
     local i = 1
     while i <= n do
@@ -369,14 +367,12 @@ return function(C, R, UI)
                     end
                 end
             end
-            -- tiny jitter per item spreads wake across frames
             task.wait(0.006 + ((j % 7) * 0.002))
         end
         task.wait(UNANCHOR_STEP)
         i = i + UNANCHOR_BATCH
     end
 end
-
 
     local function placeDown()
     local baseCF = groundAheadCF(); if not baseCF then return end
@@ -412,7 +408,6 @@ end
     finalizePileDrop(list)
     clearAll()
 end
-
 
     C.Gather = C.Gather or {}
     C.Gather.IsOn      = function() return gatherOn end
