@@ -114,7 +114,7 @@ return function(C, R, UI)
 
     local DRAG_SPEED       = 220
     local PICK_RADIUS      = 200
-    local ORB_HEIGHT       = 14
+    local ORB_HEIGHT       = 10
     local MAX_CONCURRENT   = 40
     local START_STAGGER    = 0.01
     local STEP_WAIT        = 0.016
