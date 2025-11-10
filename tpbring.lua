@@ -114,7 +114,7 @@ return function(C, R, UI)
 
     local DRAG_SPEED            = 420
     local PICK_RADIUS           = 220
-    local ORB_HEIGHT            = 20
+    local ORB_HEIGHT            = 30
     local UPPER_ORB_OFFSET      = 10
     local MAX_CONCURRENT        = 48
     local START_STAGGER         = 0.004
@@ -133,9 +133,10 @@ return function(C, R, UI)
     local ORB_UNSTICK_HZ        = 10
     local ORB_WATCHDOG_HZ       = 2
 
-    local DOWNCAST_SPEED        = 160
-    local DOWNCAST_EPS_H        = 0.35
-    local DOWNCAST_EPS_V        = 0.8
+    local DOWNCAST_ALIGN_SPEED  = 240
+    local DOWNCAST_EPS_H        = 0.25
+    local DOWNCAST_EPS_V        = 0.5
+    local G                     = tonumber(WS.Gravity) or 196.2
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -295,6 +296,7 @@ return function(C, R, UI)
     local function finalizeDelivered(m, info)
         local snap = info and info.snap or snapshotCollide(m)
         setCollideFromSnapshot(snap)
+        zeroAssembly(m)
         setAnchored(m, false)
         pcall(function() m:SetAttribute(INFLT_ATTR, nil) end)
         pcall(function() m:SetAttribute(JOB_ATTR, nil) end)
@@ -316,6 +318,7 @@ return function(C, R, UI)
         for _,p in ipairs(allParts(m)) do p.CanCollide = false end
         zeroAssembly(m)
 
+        local vy = 0
         local conn
         conn = Run.Heartbeat:Connect(function(dt)
             if not running or not m or not m.Parent then
@@ -341,17 +344,25 @@ return function(C, R, UI)
             local distH = flat.Magnitude
             local dv = targetPos.Y - pos.Y
 
-            if distH <= DOWNCAST_EPS_H and math.abs(dv) <= DOWNCAST_EPS_V then
+            vy = vy + G * dt
+            local stepH = math.min(DOWNCAST_ALIGN_SPEED * dt, distH)
+            local dirH  = distH > 1e-3 and (flat / math.max(distH,1e-3)) or Vector3.new()
+
+            local newPos = Vector3.new(
+                pos.X + dirH.X * stepH,
+                pos.Y + vy * dt,
+                pos.Z + dirH.Z * stepH
+            )
+
+            if (Vector3.new(newPos.X, 0, newPos.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude <= DOWNCAST_EPS_H
+               and math.abs(targetPos.Y - newPos.Y) <= DOWNCAST_EPS_V then
+                setPivot(m, CFrame.new(Vector3.new(targetPos.X, targetPos.Y, targetPos.Z)))
                 if conn then conn:Disconnect() end
                 finalizeDelivered(m, info)
                 CURRENT_DOWNCAST = nil
                 return
             end
 
-            local stepH = math.min(DOWNCAST_SPEED * dt, distH)
-            local dirH  = distH > 1e-3 and (flat / math.max(distH,1e-3)) or Vector3.new()
-            local vy    = math.clamp(dv, -DOWNCAST_SPEED, DOWNCAST_SPEED) * dt
-            local newPos = Vector3.new(pos.X, pos.Y + vy, pos.Z) + dirH * stepH
             setPivot(m, CFrame.new(newPos, newPos + (dirH.Magnitude>0 and dirH or Vector3.new(0,0,1))))
         end)
     end
@@ -499,7 +510,7 @@ return function(C, R, UI)
 
     local function stopAll()
         running = false
-        if hb then hb:Disconnect(); hb=nil end
+        if hb then hb:Disconnect() end
         STOP_BTN.Visible = false
 
         for i=#releaseQueue,1,-1 do
@@ -561,7 +572,7 @@ return function(C, R, UI)
             local cf = cfFromInstance(cand)
             return cf and cf.Position or nil
         end
-        local cf = (mainPart(fire) and mainPart(fire).CFrame) or fire:GetPivot()
+        local cf = (mainPart(fire) and fire.PrimaryPart and fire.PrimaryPart.CFrame) or (mainPart(fire) and mainPart(fire).CFrame) or fire:GetPivot()
         return cf and cf.Position or nil
     end
     local function scrapperPos()
@@ -575,7 +586,7 @@ return function(C, R, UI)
             local cf = cfFromInstance(cand)
             return cf and cf.Position or nil
         end
-        local cf = (mainPart(scr) and mainPart(scr).CFrame) or scr:GetPivot()
+        local cf = (mainPart(scr) and scr.PrimaryPart and scr.PrimaryPart.CFrame) or (mainPart(scr) and mainPart(scr).CFrame) or scr:GetPivot()
         return cf and cf.Position or nil
     end
 
