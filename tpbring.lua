@@ -64,15 +64,6 @@ return function(C, R, UI)
         end
     end
 
-    local function groundBelow(pos)
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { lp.Character }
-        local start = pos + Vector3.new(0, 200, 0)
-        local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
-        return (hit and hit.Position) or pos
-    end
-
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -122,9 +113,9 @@ return function(C, R, UI)
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
     local DRAG_SPEED     = 200
-    local PICK_RADIUS    = 200
+    local PICK_RADIUS    = 50
     local ORB_HEIGHT     = 10
-    local MAX_CONCURRENT = 40
+    local MAX_CONCURRENT = 18
     local START_STAGGER  = 0.01
     local STEP_WAIT      = 0.016
 
@@ -132,6 +123,13 @@ return function(C, R, UI)
     local LAND_MAX = 3.0
     local ARRIVE_EPS_H = 1.0
     local STALL_SEC    = 0.6
+
+    local KICK_RADIUS     = 2.4
+    local KICK_STUCK_SECS = 0.9
+    local KICK_FALL_DELTA = 2.5
+    local KICK_MAX        = 2
+    local KICK_RESET_UP   = 1.2
+    local KICK_VY         = -60
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -230,13 +228,28 @@ return function(C, R, UI)
         return out
     end
 
-    local function dropToGroundAt(m, aroundPos)
+    local function dropFreeFall(m, landPos)
         if not (m and m.Parent) then return end
-        local g = groundBelow(aroundPos or (mainPart(m) and mainPart(m).Position) or Vector3.new())
-        local pos = Vector3.new(g.X, g.Y + 1.25, g.Z)
-        setPivot(m, CFrame.new(pos))
-        zeroAssembly(m)
-        setAnchored(m, false)
+        for _,p in ipairs(allParts(m)) do
+            p.Anchored = false
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+            pcall(function() p:SetNetworkOwner(nil) end)
+            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+        end
+        if landPos then
+            local mp = mainPart(m)
+            if mp then
+                local p0 = mp.Position
+                local dir = (landPos - Vector3.new(p0.X, landPos.Y, p0.Z))
+                if dir.Magnitude > 0 then
+                    setPivot(m, CFrame.new(Vector3.new(p0.X, p0.Y, p0.Z), Vector3.new(p0.X, p0.Y, p0.Z) + dir.Unit))
+                end
+            end
+        end
+        for _,p in ipairs(allParts(m)) do
+            p.AssemblyLinearVelocity = Vector3.new(0, -4, 0)
+        end
     end
 
     local function restoreModelState(m)
@@ -284,7 +297,7 @@ return function(C, R, UI)
         rec.conn = Run.Heartbeat:Connect(function(dt)
             if not (running and m and m.Parent and orbPosVec) then
                 restoreModelState(m)
-                dropToGroundAt(m)
+                dropFreeFall(m)
                 return
             end
             local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
@@ -303,7 +316,8 @@ return function(C, R, UI)
                 if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
                 setAnchored(m, false)
                 setCollideFromSnapshot(snap)
-                dropToGroundAt(m, tgt)
+                zeroAssembly(m)
+                dropFreeFall(m, tgt)
                 pcall(function()
                     m:SetAttribute(INFLT_ATTR, nil)
                     m:SetAttribute(JOB_ATTR, nil)
@@ -363,7 +377,8 @@ return function(C, R, UI)
             if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
             setAnchored(m, false)
             setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
-            dropToGroundAt(m)
+            zeroAssembly(m)
+            dropFreeFall(m)
             pcall(function() m:SetAttribute(INFLT_ATTR, nil); m:SetAttribute(JOB_ATTR, nil) end)
             inflight[m] = nil
         end
@@ -439,4 +454,56 @@ return function(C, R, UI)
             end
         end
     end)
+
+    do
+        local watched = setmetatable({}, {__mode="k"})
+        local acc = 0
+        Run.Heartbeat:Connect(function(dt)
+            if not orbPosVec then return end
+            acc += dt
+            if acc < 1/12 then return end
+            acc = 0
+            local items = WS:FindFirstChild("Items"); if not items then return end
+            for _,m in ipairs(items:GetChildren()) do
+                if not m:IsA("Model") then continue end
+                local mp = mainPart(m); if not mp then continue end
+                local pos = mp.Position
+                local near = (pos - orbPosVec).Magnitude <= KICK_RADIUS
+                if near then
+                    local rec = watched[m]
+                    if not rec then
+                        watched[m] = {t=os.clock(), y0=pos.Y, kicks=0}
+                        for _,p in ipairs(allParts(m)) do p.Anchored = false end
+                        for _,p in ipairs(allParts(m)) do p.AssemblyLinearVelocity = Vector3.new(0,-4,0) end
+                    else
+                        local fell = (rec.y0 - pos.Y) >= KICK_FALL_DELTA or pos.Y < (orbPosVec.Y - KICK_FALL_DELTA)
+                        if fell then
+                            watched[m] = nil
+                        elseif (os.clock() - rec.t) >= KICK_STUCK_SECS then
+                            if rec.kicks < KICK_MAX then
+                                rec.kicks += 1
+                                rec.t = os.clock()
+                                rec.y0 = pos.Y
+                                for _,p in ipairs(allParts(m)) do
+                                    p.Anchored = false
+                                    p.AssemblyLinearVelocity  = Vector3.new(0, KICK_VY, 0)
+                                    p.AssemblyAngularVelocity = Vector3.new()
+                                    pcall(function() p:SetNetworkOwner(nil) end)
+                                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                                end
+                                local p2 = mainPart(m)
+                                if p2 then
+                                    p2.CFrame = CFrame.new(Vector3.new(p2.Position.X, orbPosVec.Y + KICK_RESET_UP, p2.Position.Z))
+                                end
+                            else
+                                watched[m] = nil
+                            end
+                        end
+                    end
+                else
+                    watched[m] = nil
+                end
+            end
+        end)
+    end
 end
