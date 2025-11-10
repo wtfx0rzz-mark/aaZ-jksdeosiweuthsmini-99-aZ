@@ -112,32 +112,34 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local DRAG_SPEED       = 260
-    local PICK_RADIUS      = 220
-    local ORB_HEIGHT       = 10
-    local UPPER_ORB_OFFSET = 10
-    local MAX_CONCURRENT   = 48
-    local START_STAGGER    = 0.008
-    local STEP_WAIT        = 0.012
+    -- Tunables
+    local DRAG_SPEED            = 260
+    local PICK_RADIUS           = 220
+    local ORB_HEIGHT            = 10
+    local UPPER_ORB_OFFSET      = 10
+    local MAX_CONCURRENT        = 48
+    local START_STAGGER         = 0.008
+    local STEP_WAIT             = 0.012
 
-    local LAND_MIN         = 0.18
-    local LAND_MAX         = 0.42
-    local ARRIVE_EPS_H     = 0.7
-    local STALL_SEC        = 0.5
+    local LAND_MIN              = 0.18
+    local LAND_MAX              = 0.42
+    local ARRIVE_EPS_H          = 0.7
+    local STALL_SEC             = 0.5
 
-    local HOVER_ABOVE_ORB  = 0.9
+    local HOVER_ABOVE_ORB       = 0.9
 
-    local RELEASE_RATE_HZ      = 28
-    local MAX_RELEASE_PER_TICK = 1
+    local RELEASE_RATE_HZ       = 28
+    local MAX_PARALLEL_DROPS    = 1      -- increase to 2 for faster stream
+    local FORCE_FIRST_DROP      = true   -- drop instantly when first item is queued
 
-    local DROP_SPEED_Y         = -36
-    local DROP_FINISH_TIMEOUT  = 3.0
-    local DROP_ARM_EPS         = 0.35
-    local DROP_ARM_RAD_H       = 1.2
+    local DROP_SPEED_Y          = -36
+    local DROP_FINISH_TIMEOUT   = 3.0
+    local DROP_ARM_EPS          = 0.35
+    local DROP_ARM_RAD_H        = 1.2
 
-    local STAGE_TIMEOUT_S  = 1.5
-    local ORB_UNSTICK_RAD  = 2.0
-    local ORB_UNSTICK_HZ   = 10
+    local STAGE_TIMEOUT_S       = 1.5
+    local ORB_UNSTICK_RAD       = 2.0
+    local ORB_UNSTICK_HZ        = 10
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -146,15 +148,17 @@ return function(C, R, UI)
     local CURRENT_RUN_ID = nil
     local running      = false
     local hb           = nil
-    local orb          = nil
-    local orbPosVec    = nil
+
+    local orbLower     = nil
+    local orbLowerPos  = nil
     local orbUpper     = nil
     local orbUpperPos  = nil
-    local inflight     = {}
-    local releaseQueue = {}
+
+    local inflight     = {}     -- [model] = {snap=..., staged=true, queued=true/false, conn=...}
+    local releaseQueue = {}     -- array of {model=...}
     local releaseAcc   = 0.0
     local dropsActive  = 0
-    local TRANSPORT_MODE = "drag"
+    local TRANSPORT_MODE = "drag" -- "drag" or "teleport"
 
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
@@ -187,8 +191,8 @@ return function(C, R, UI)
     end
     local function itemsRootOrNil() return WS:FindFirstChild("Items") end
 
-    local function spawnOrbAt(pos, color)
-        if orb then pcall(function() orb:Destroy() end) end
+    local function spawnLowerOrbAt(pos, color)
+        if orbLower then pcall(function() orbLower:Destroy() end) end
         local o = Instance.new("Part")
         o.Name = "tp_orb_fixed_lower"
         o.Shape = Enum.PartType.Ball
@@ -199,8 +203,8 @@ return function(C, R, UI)
         o.CFrame = CFrame.new(pos + Vector3.new(0, ORB_HEIGHT, 0))
         o.Parent = WS
         local l = Instance.new("PointLight"); l.Range = 16; l.Brightness = 2.5; l.Parent = o
-        orb = o
-        orbPosVec = orb.Position
+        orbLower = o
+        orbLowerPos = orbLower.Position
     end
     local function spawnUpperOrbAt(pos, color)
         if orbUpper then pcall(function() orbUpper:Destroy() end) end
@@ -217,11 +221,10 @@ return function(C, R, UI)
         orbUpper = o
         orbUpperPos = orbUpper.Position
     end
-    local function destroyOrb()
-        if orb then pcall(function() orb:Destroy() end) orb=nil end
+    local function destroyOrbs()
+        if orbLower then pcall(function() orbLower:Destroy() end) orbLower=nil end
         if orbUpper then pcall(function() orbUpper:Destroy() end) orbUpper=nil end
-        orbPosVec = nil
-        orbUpperPos = nil
+        orbLowerPos, orbUpperPos = nil, nil
     end
 
     local function wantedBySet(m, set)
@@ -271,7 +274,13 @@ return function(C, R, UI)
     end
 
     local function stageAtUpper(m, snap, tgt)
-        if not inflight[m] then inflight[m] = { snap = snap, staged = false, stagedAt = 0, conn = nil } end
+        local info = inflight[m]
+        if not info then
+            info = { snap = snap, staged = false, queued = false, stagedAt = 0, conn = nil }
+            inflight[m] = info
+        else
+            info.snap = info.snap or snap
+        end
         setAnchored(m, true)
         for _,p in ipairs(allParts(m)) do
             p.CanCollide = false
@@ -279,10 +288,12 @@ return function(C, R, UI)
             p.AssemblyAngularVelocity = Vector3.new()
         end
         setPivot(m, CFrame.new(tgt))
-        inflight[m].staged   = true
-        inflight[m].stagedAt = os.clock()
-        inflight[m].snap     = inflight[m].snap or snap
-        table.insert(releaseQueue, {model=m})
+        info.staged   = true
+        info.stagedAt = os.clock()
+        if not info.queued then
+            table.insert(releaseQueue, {model=m})
+            info.queued = true
+        end
     end
 
     local function finalizeDelivered(m, info)
@@ -307,6 +318,8 @@ return function(C, R, UI)
     local function dropFromUpper(m)
         local info = inflight[m]; if not info then return end
         local mp = mainPart(m); if not mp then return end
+        -- clear queued flag to allow requeue in edge cases
+        info.queued = false
         setAnchored(m, false)
         for _,p in ipairs(allParts(m)) do p.CanCollide = false end
         zeroAssembly(m)
@@ -314,7 +327,7 @@ return function(C, R, UI)
         local startT = os.clock()
         local conn
         conn = Run.Heartbeat:Connect(function()
-            if not (running and m and m.Parent and orbPosVec) then
+            if not (running and m and m.Parent and orbLowerPos) then
                 if conn then conn:Disconnect() end
                 inflight[m] = nil
                 dropsActive = math.max(0, dropsActive-1)
@@ -326,8 +339,8 @@ return function(C, R, UI)
                 dropsActive = math.max(0, dropsActive-1)
                 return
             end
-            local yHit = (part.Position.Y - orbPosVec.Y) <= DROP_ARM_EPS
-            local dH = (Vector3.new(part.Position.X, 0, part.Position.Z) - Vector3.new(orbPosVec.X, 0, orbPosVec.Z)).Magnitude
+            local yHit = (part.Position.Y - orbLowerPos.Y) <= DROP_ARM_EPS
+            local dH = (Vector3.new(part.Position.X, 0, part.Position.Z) - Vector3.new(orbLowerPos.X, 0, orbLowerPos.Z)).Magnitude
             if yHit and dH <= DROP_ARM_RAD_H then
                 if conn then conn:Disconnect() end
                 finalizeDelivered(m, info)
@@ -357,7 +370,7 @@ return function(C, R, UI)
         setAnchored(m, true)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
-        if not inflight[m] then inflight[m] = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false } end
+        if not inflight[m] then inflight[m] = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false, queued=false } end
 
         if TRANSPORT_MODE == "teleport" then
             stageAtUpper(m, snap, targetUpper())
@@ -433,7 +446,10 @@ return function(C, R, UI)
             if info and info.staged and (now - (info.stagedAt or now)) >= STAGE_TIMEOUT_S then
                 local queued = false
                 for _,rec in ipairs(releaseQueue) do if rec.model == m then queued = true; break end end
-                if not queued then table.insert(releaseQueue, {model=m}) end
+                if not queued then
+                    table.insert(releaseQueue, {model=m})
+                    info.queued = true
+                end
             end
         end
     end
@@ -441,7 +457,7 @@ return function(C, R, UI)
     do
         local acc = 0
         Run.Heartbeat:Connect(function(dt)
-            if not (running and orbPosVec) then return end
+            if not (running and orbLowerPos) then return end
             acc = acc + dt
             if acc < (1/ORB_UNSTICK_HZ) then return end
             acc = 0
@@ -449,7 +465,7 @@ return function(C, R, UI)
             for _,m in ipairs(items:GetChildren()) do
                 if not m:IsA("Model") then continue end
                 local mp = mainPart(m); if not mp then continue end
-                if (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
+                if (mp.Position - orbLowerPos).Magnitude <= ORB_UNSTICK_RAD then
                     for _,p in ipairs(allParts(m)) do
                         p.Anchored = false
                         p.AssemblyAngularVelocity = Vector3.new()
@@ -465,6 +481,7 @@ return function(C, R, UI)
         running = false
         if hb then hb:Disconnect(); hb=nil end
         STOP_BTN.Visible = false
+        -- finalize anything queued or staged
         for i=#releaseQueue,1,-1 do
             local rec = releaseQueue[i]
             if rec and rec.model and rec.model.Parent then
@@ -482,7 +499,7 @@ return function(C, R, UI)
         end
         activeCount = 0
         dropsActive = 0
-        destroyOrb()
+        destroyOrbs()
     end
 
     STOP_BTN.MouseButton1Click:Connect(stopAll)
@@ -564,7 +581,7 @@ return function(C, R, UI)
         if not pos then return end
 
         CURRENT_RUN_ID = tostring(os.clock())
-        spawnOrbAt(pos, color)
+        spawnLowerOrbAt(pos, color)
         spawnUpperOrbAt(pos, color)
         running = true
         STOP_BTN.Visible = true
@@ -577,19 +594,23 @@ return function(C, R, UI)
         hb = Run.Heartbeat:Connect(function(dt)
             if not running then return end
             local root = hrp(); if root then wave(root.Position) end
+
+            -- eager, time-sliced drop scheduler
             releaseAcc = releaseAcc + dt
             local interval = 1 / RELEASE_RATE_HZ
-            local toRelease = math.min(MAX_RELEASE_PER_TICK, math.floor(releaseAcc / interval))
-            while toRelease > 0 do
-                toRelease -= 1
-                if dropsActive < 1 then
-                    local rec = table.remove(releaseQueue, 1)
-                    if rec and rec.model and rec.model.Parent then
-                        dropsActive += 1
-                        dropFromUpper(rec.model)
-                    end
+            local timeReady = releaseAcc >= interval
+            local haveQueue = (#releaseQueue > 0)
+            local canStart  = (dropsActive < MAX_PARALLEL_DROPS)
+
+            if haveQueue and canStart and (timeReady or (FORCE_FIRST_DROP and dropsActive == 0)) then
+                releaseAcc = timeReady and (releaseAcc - interval) or 0
+                local rec = table.remove(releaseQueue, 1)
+                if rec and rec.model and rec.model.Parent then
+                    dropsActive += 1
+                    dropFromUpper(rec.model)
                 end
             end
+
             flushStaleStaged()
             task.wait(STEP_WAIT)
         end)
@@ -627,11 +648,11 @@ return function(C, R, UI)
     })
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
-        if running and not (orb and orb.Parent) then
+        if running and not (orbLower and orbLower.Parent) then
             if CURRENT_TARGET_SET == fuelSet then
-                local p = campfireOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(255,200,50)); spawnUpperOrbAt(p, Color3.fromRGB(255,200,50)) end
+                local p = campfireOrbPos(); if p then spawnLowerOrbAt(p, Color3.fromRGB(255,200,50)); spawnUpperOrbAt(p, Color3.fromRGB(255,200,50)) end
             elseif CURRENT_TARGET_SET == scrapSet then
-                local p = scrapperOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(120,255,160)); spawnUpperOrbAt(p, Color3.fromRGB(120,255,160)) end
+                local p = scrapperOrbPos(); if p then spawnLowerOrbAt(p, Color3.fromRGB(120,255,160)); spawnUpperOrbAt(p, Color3.fromRGB(120,255,160)) end
             end
         end
     end)
