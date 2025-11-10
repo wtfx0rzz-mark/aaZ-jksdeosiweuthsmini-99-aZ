@@ -1398,17 +1398,14 @@ return function(C, R, UI)
             local deleteExcl = setmetatable({}, { __mode = "k" })
             local DIAMOND_PAIR_DIST = 9.8
             local DIAMOND_PAIR_TOL  = 2.0
+            local UID_OPEN_KEY = tostring(lp.UserId) .. "Opened"
             local function isChestName(n)
                 if type(n) ~= "string" then return false end
                 return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
             end
             local function chestOpened(m)
                 if not m then return false end
-                if m:GetAttribute("LocalOpened") == true then return true end
-                for k, v in pairs(m:GetAttributes()) do
-                    if tostring(k):match("Opened$") and v == true then return true end
-                end
-                return false
+                return m:GetAttribute(UID_OPEN_KEY) == true
             end
             local function safeHideThenDestroy(m)
                 if not (m and m.Parent) then return end
@@ -1479,16 +1476,9 @@ return function(C, R, UI)
                 if not (m and m:IsA("Model") and isChestName(m.Name)) then return end
                 if tracked[m] then return end
                 tracked[m] = true
-                m:GetAttributeChangedSignal("LocalOpened"):Connect(function()
+                m:GetAttributeChangedSignal(UID_OPEN_KEY):Connect(function()
                     deleteIfOpenedNow(m)
                 end)
-                for k,_ in pairs(m:GetAttributes()) do
-                    if tostring(k):match("Opened$") then
-                        m:GetAttributeChangedSignal(k):Connect(function()
-                            deleteIfOpenedNow(m)
-                        end)
-                    end
-                end
                 m.AncestryChanged:Connect(function(_, parent)
                     if not parent then tracked[m] = nil end
                 end)
