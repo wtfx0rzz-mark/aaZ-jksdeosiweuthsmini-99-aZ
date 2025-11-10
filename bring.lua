@@ -9,27 +9,20 @@ return function(C, R, UI)
     local tab  = Tabs.Bring
     assert(tab, "Bring tab not found in UI")
 
-    -- =====================================================================
-    -- Tunables
-    -- =====================================================================
     local AMOUNT_TO_BRING       = 1000
     local CONVEYOR_MAX_ACTIVE   = 10
     local COLLIDE_OFF_SEC       = 0.22
-
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
     local FALLBACK_AHEAD        = 2
     local ORB_OFFSET_Y          = 20
+    local CLUSTER_RADIUS_MIN    = 0.75
+    local CLUSTER_RADIUS_STEP   = 0.04
+    local CLUSTER_RADIUS_MAX    = 2.25
 
-    local CLUSTER_RADIUS_MIN  = 0.75
-    local CLUSTER_RADIUS_STEP = 0.04
-    local CLUSTER_RADIUS_MAX  = 2.25
-
-    -- Game anchors
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
-    -- Categories
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -41,13 +34,13 @@ return function(C, R, UI)
     }
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {
-    "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe","Hammer",
-    "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire",
-    "Sword","Ice Axe"
+        "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe","Hammer",
+        "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire",
+        "Sword","Ice Axe"
     }
     local ammoMisc = {
-    "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
-    "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"
+        "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
+        "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"
     }
     local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Polar Bear Pelt","Arctic Fox Pelt"}
 
@@ -59,9 +52,6 @@ return function(C, R, UI)
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
-    -- =====================================================================
-    -- Small helpers
-    -- =====================================================================
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -129,9 +119,6 @@ return function(C, R, UI)
         return (p and p.Size.Y) or 2
     end
 
-    -- =====================================================================
-    -- Remotes
-    -- =====================================================================
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
@@ -146,8 +133,6 @@ return function(C, R, UI)
             StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
         }
     end
-
-    -- Strict drag API: no dummy arguments, always stop, even on error
     local function safeStartDrag(r, model)
         if r and r.StartDrag and model and model.Parent then
             pcall(function() r.StartDrag:FireServer(model) end)
@@ -164,12 +149,9 @@ return function(C, R, UI)
     end
     local function finallyStopDrag(r, model)
         task.delay(0.05, function() pcall(safeStopDrag, r, model) end)
-        task.delay(0.20, function() pcall(safeStopDrag, r, model) end) -- double-stop to clear server “interaction”
+        task.delay(0.20, function() pcall(safeStopDrag, r, model) end)
     end
 
-    -- =====================================================================
-    -- Physics helpers
-    -- =====================================================================
     local function setCollide(model, on, snapshot)
         local parts = getAllParts(model)
         if on and snapshot then
@@ -212,9 +194,6 @@ return function(C, R, UI)
         setCollide(model, true, snap)
     end
 
-    -- =====================================================================
-    -- Campfire / Scrapper specifics
-    -- =====================================================================
     local function fireCenterCF(fire)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
@@ -225,12 +204,7 @@ return function(C, R, UI)
         return (p and p.CFrame) or scr:GetPivot()
     end
 
-    -- =====================================================================
-    -- Prompt refresh: make “Take” prompts work after our move
-    -- =====================================================================
     local function refreshPrompts(model)
-        -- Some items retain a disabled ProximityPrompt or a stale Interaction state after drag.
-        -- Toggle any prompts to force rebind on all clients.
         for _,d in ipairs(model:GetDescendants()) do
             if d:IsA("ProximityPrompt") then
                 local was = d.Enabled
@@ -240,7 +214,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Attributes used only client-side to avoid re-picking during conveyor
     local INFLT_ATTR   = "OrbInFlightAt"
     local DELIVER_ATTR = "DeliveredAtOrb"
     local JOB_ATTR     = "OrbJob"
@@ -332,9 +305,6 @@ return function(C, R, UI)
         refreshPrompts(model)
     end
 
-    -- =====================================================================
-    -- Orb mover pipeline
-    -- =====================================================================
     local dropCounter = 0
     local function ringOffset()
         dropCounter += 1
@@ -371,7 +341,7 @@ return function(C, R, UI)
     local function dropNearPlayer(model)
         if not (model and model.Parent) then return end
         local r = resolveRemotes()
-        local started = safeStartDrag(r, model) -- keep server state consistent
+        local started = safeStartDrag(r, model)
         Run.Heartbeat:Wait()
         local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
         local snap = setCollide(model, false)
@@ -383,8 +353,6 @@ return function(C, R, UI)
         end
         setCollide(model, true, snap)
         if started then finallyStopDrag(r, model) end
-
-        -- Reset any latent interaction state so others can “Take”
         for _,p in ipairs(getAllParts(model)) do
             p.Anchored = false
             p.AssemblyLinearVelocity  = Vector3.new()
@@ -393,7 +361,6 @@ return function(C, R, UI)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
         refreshPrompts(model)
-        -- Clear our local anti-repick flags quickly
         task.delay(0.5, function()
             pcall(function()
                 if model and model.Parent then
@@ -422,7 +389,6 @@ return function(C, R, UI)
     local VERTICAL_MULT = 1.35
     local STEP_WAIT     = 0.03
     local STUCK_TTL     = 6.0
-
     local ORB_PICK_RADIUS = 40
 
     local function setPivot(model, cf)
@@ -505,7 +471,45 @@ return function(C, R, UI)
     end
 
     local function itemsRootOrNil() return WS:FindFirstChild("Items") end
-    local function canPick(m, center, radius, nameSet, jobId)
+
+    local function nameMatches(selectedSet, m)
+        local itemsFolder = itemsRootOrNil()
+        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
+        local nm = m and m.Name or ""
+        local l  = nm:lower()
+        if selectedSet[nm] then return true end
+        if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
+        if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then return true end
+        if selectedSet["Sapling"] and nm == "Sapling" then return true end
+        if selectedSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then return true end
+        if selectedSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then return true end
+        if selectedSet["Wolf Pelt"] and nm == "Wolf Pelt" then return true end
+        if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
+        if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
+        if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
+        if selectedSet["Spear"] and l:find("spear",1,true) and not hasHumanoid(m) then return true end
+        if selectedSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then return true end
+        if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then return true end
+        if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
+        if selectedSet["Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then return true end
+        if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
+        if selectedSet["Forest Gem"] and (l:find("forest gem",1,true) or (l:find("forest",1,true) and l:find("fragment",1,true))) then return true end
+        if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
+        return false
+    end
+
+    local function nearestSelectedModelFromPart(part, selectedSet)
+        local cur = part
+        while cur and cur ~= WS do
+            if cur:IsA("Model") and nameMatches(selectedSet, cur) then
+                return cur
+            end
+            cur = cur.Parent
+        end
+        return nil
+    end
+
+    local function canPick(m, center, radius, selectedSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
@@ -518,46 +522,28 @@ return function(C, R, UI)
             return false
         end
 
-        local nm = m.Name or ""
-        local l  = nm:lower()
-        if not nameSet[nm] then
-            if     nameSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
-            elseif nameSet["Cultist"] and hasHumanoid(m) and l:find("cultist",1,true) then
-            elseif nameSet["Sapling"] and nm == "Sapling" then
-            elseif nameSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then
-            elseif nameSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then
-            elseif nameSet["Wolf Pelt"] and nm == "Wolf Pelt" then
-            elseif nameSet["Bunny Foot"] and nm == "Bunny Foot" then
-            elseif nameSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then
-            elseif nameSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then
-            elseif nameSet["Spear"] and l:find("spear",1,true) and not hasHumanoid(m) then
-            elseif nameSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then
-            elseif nameSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then
-            elseif nameSet["Blueprint"] and l:find("blueprint",1,true) then
-            elseif nameSet["Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then
-            elseif nameSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then
-            elseif nameSet["Forest Gem"] and (l:find("forest gem",1,true) or (l:find("forest",1,true) and l:find("fragment",1,true))) then
-            elseif nameSet["Tusk"] and l:find("tusk",1,true) then
-            else
-                return false
-            end
+        if not nameMatches(selectedSet, m) then
+            return false
         end
 
         local mp = mainPart(m); if not mp then return false end
         return (mp.Position - center).Magnitude <= radius
     end
 
-    local function getCandidates(center, radius, nameSet, jobId)
+    local function getCandidates(center, radius, selectedSet, jobId)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
         local parts = WS:GetPartBoundsInRadius(center, radius, params) or {}
         local uniq, out = {}, {}
         for _,part in ipairs(parts) do
-            local m = part:FindFirstAncestorOfClass("Model")
-            if m and not uniq[m] and canPick(m, center, radius, nameSet, jobId) then
-                uniq[m] = true
-                out[#out+1] = m
+            local pick = nil
+            if part:IsA("BasePart") then
+                pick = nearestSelectedModelFromPart(part, selectedSet)
+            end
+            if pick and not uniq[pick] and canPick(pick, center, radius, selectedSet, jobId) then
+                uniq[pick] = true
+                out[#out+1] = pick
             end
         end
         return out
@@ -579,7 +565,6 @@ return function(C, R, UI)
         local snapOrig = setCollide(model, false)
         zeroAssembly(model)
 
-        -- rise then run
         local DRAG_SPEED, VERTICAL_MULT, STEP_WAIT = 18, 1.35, 0.03
         local function setPivot(model, cf)
             if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
@@ -623,7 +608,6 @@ return function(C, R, UI)
     local function runConveyorWave(centerPos, orbPos, targets, jobId)
         local picked = getCandidates(centerPos, ORB_PICK_RADIUS, targets, jobId)
         if #picked == 0 then return 0 end
-        -- cap per name client-side
         local cnt, out = {}, {}
         for _,m in ipairs(picked) do
             local nm = m.Name or ""
@@ -654,19 +638,15 @@ return function(C, R, UI)
         return #picked
     end
 
-local function runConveyorJob(centerPos, orbPos, targets, jobId)
-    local t0 = os.clock()
-    while true do
-        if os.clock() - t0 >= JOB_HARD_TIMEOUT_S then break end
-        local moved = runConveyorWave(centerPos, orbPos, targets, jobId)
-        if moved == 0 then break end
+    local function runConveyorJob(centerPos, orbPos, targets, jobId)
+        local t0 = os.clock()
+        while true do
+            if os.clock() - t0 >= JOB_HARD_TIMEOUT_S then break end
+            local moved = runConveyorWave(centerPos, orbPos, targets, jobId)
+            if moved == 0 then break end
+        end
     end
-end
 
-
-    -- =====================================================================
-    -- User actions
-    -- =====================================================================
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
@@ -674,7 +654,7 @@ end
         local orb2 = makeOrb(root.CFrame, "orb2")
         local campCenter = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
         local orb1 = makeOrb(campCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
-        local targets = (function(a,b) local t={}; for k,v in pairs(a) do t[k]=true end; for k,v in pairs(b) do t[k]=true end; return t end)(fuelSet, cookSet)
+        local targets = mergedSet(fuelSet, cookSet)
         runConveyorJob(orb2.Position, orb1.Position, targets, jobId)
         if orb1 then orb1:Destroy() end
         if orb2 then orb2:Destroy() end
@@ -686,13 +666,12 @@ end
         local orb2 = makeOrb(root.CFrame, "orb2")
         local scrCenter = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
         local orb1 = makeOrb(scrCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
-        local targets = (function(a,b) local t={}; for k,v in pairs(a) do t[k]=true end; for k,v in pairs(b) do t[k]=true end; return t end)(junkSet, scrapAlso)
+        local targets = mergedSet(junkSet, scrapAlso)
         runConveyorJob(orb2.Position, orb1.Position, targets, jobId)
         if orb1 then orb1:Destroy() end
         if orb2 then orb2:Destroy() end
     end
 
-    -- Selection helpers
     local function setFromChoice(choice)
         local s = {}
         if type(choice) == "table" then
@@ -702,36 +681,10 @@ end
         end
         return s
     end
+
     local selJunkMany, selFuelMany, selFoodMany, selMedicalMany, selWAMany, selMiscMany, selPeltMany =
         {},{},{},{},{},{},{}
-    local function itemsRootOrNil2() return WS:FindFirstChild("Items") end
-    local function nameMatches(selectedSet, m)
-        local itemsFolder = itemsRootOrNil2()
-        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
-        local nm = m and m.Name or ""
-        local l  = nm:lower()
-        if selectedSet[nm] then return true end
-        if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
-        if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then return true end
-        if selectedSet["Sapling"] and nm == "Sapling" then return true end
-        if selectedSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then return true end
-        if selectedSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then return true end
-        if selectedSet["Wolf Pelt"] and nm == "Wolf Pelt" then return true end
-        if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then return true end
-        if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
-        if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
-        if selectedSet["Spear"] and l:find("spear",1,true) and not hasHumanoid(m) then return true end
-        if selectedSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then return true end
-        if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then return true end
-        if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
-        if selectedSet["Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then return true end
-        if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then return true end
-        if selectedSet["Forest Gem"] and (l:find("forest gem",1,true) or (l:find("forest",1,true) and l:find("fragment",1,true))) then return true end
-        if selectedSet["Tusk"] and l:find("tusk",1,true) then return true end
-        return false
-    end
 
-    -- Re-entrancy guard to avoid stacking jobs that confuse PromptHandler
     local _bringBusy = false
     local function fastBringToGround(selectedSet)
         if not selectedSet or next(selectedSet) == nil then return end
@@ -740,20 +693,20 @@ end
         local ok = pcall(function()
             dropCounter = 0
             local perNameCount, seenModel, queue = {}, {}, {}
-            local itemsFolder = itemsRootOrNil2(); if not itemsFolder then return end
+            local itemsFolder = itemsRootOrNil(); if not itemsFolder then return end
 
             for _,d in ipairs(itemsFolder:GetDescendants()) do
-                local m
+                local m = nil
                 if d:IsA("Model") then
-                    m = d
-                elseif d:IsA("BasePart") and d.Parent and d.Parent:IsA("Model") then
-                    m = d.Parent
+                    if nameMatches(selectedSet, d) then m = d end
+                elseif d:IsA("BasePart") then
+                    m = nearestSelectedModelFromPart(d, selectedSet)
                 end
                 if m and not seenModel[m] then
                     seenModel[m] = true
                     if not isExcludedModel(m) and not isUnderLogWall(m) then
                         local nm = m.Name
-                        if not (nm == "Log" and isWallVariant(m)) and nameMatches(selectedSet, m) then
+                        if not (nm == "Log" and isWallVariant(m)) then
                             perNameCount[nm] = (perNameCount[nm] or 0) + 1
                             if perNameCount[nm] <= AMOUNT_TO_BRING then
                                 local mp = mainPart(m)
@@ -783,7 +736,6 @@ end
         })
     end
 
-    -- UI
     tab:Section({ Title = "Actions" })
     tab:Button({ Title = "Burn/Cook Nearby (Fuel + Raw Food)", Callback = burnNearby })
     tab:Button({ Title = "Scrap Nearby Junk(+Log/Chair)",      Callback = scrapNearby })
@@ -816,9 +768,6 @@ end
     multiSelectDropdown({ title = "Select Pelts", values = pelts, setter = function(s) selPeltMany = s end })
     tab:Button({ Title = "Bring Selected (Fast)", Callback = function() fastBringToGround(selPeltMany) end })
 
-    -- =====================================================================
-    -- Orb stuck guard near camp/scrapper
-    -- =====================================================================
     do
         local ORB_RADIUS     = 2.2
         local ORB_STUCK_SECS = 0.9
