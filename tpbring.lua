@@ -112,28 +112,28 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local DRAG_SPEED            = 260
+    local DRAG_SPEED            = 420
     local PICK_RADIUS           = 220
-    local ORB_HEIGHT            = 10
+    local ORB_HEIGHT            = 20
     local UPPER_ORB_OFFSET      = 10
     local MAX_CONCURRENT        = 48
-    local START_STAGGER         = 0.008
-    local STEP_WAIT             = 0.012
+    local START_STAGGER         = 0.004
+    local STEP_WAIT             = 0.008
 
     local LAND_MIN              = 0.18
     local LAND_MAX              = 0.42
     local ARRIVE_EPS_H          = 0.7
-    local STALL_SEC             = 0.5
+    local STALL_SEC             = 0.45
 
     local HOVER_ABOVE_ORB       = 0.9
 
-    local RELEASE_RATE_HZ       = 30
+    local RELEASE_RATE_HZ       = 45
     local STAGE_TIMEOUT_S       = 2.0
     local ORB_UNSTICK_RAD       = 2.0
     local ORB_UNSTICK_HZ        = 10
     local ORB_WATCHDOG_HZ       = 2
 
-    local DOWNCAST_SPEED        = 42
+    local DOWNCAST_SPEED        = 160
     local DOWNCAST_EPS_H        = 0.35
     local DOWNCAST_EPS_V        = 0.8
 
@@ -153,7 +153,6 @@ return function(C, R, UI)
     local inflight     = {}
     local releaseQueue = {}
     local releaseAcc   = 0.0
-    local dropsActive  = 0
     local CURRENT_DOWNCAST = nil
 
     local TRANSPORT_MODE = "drag"
@@ -295,20 +294,15 @@ return function(C, R, UI)
     end
     local function finalizeDelivered(m, info)
         local snap = info and info.snap or snapshotCollide(m)
-        setAnchored(m, false)
-        zeroAssembly(m)
         setCollideFromSnapshot(snap)
+        setAnchored(m, false)
+        pcall(function() m:SetAttribute(INFLT_ATTR, nil) end)
+        pcall(function() m:SetAttribute(JOB_ATTR, nil) end)
+        pcall(function() m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID) end)
         for _,p in ipairs(allParts(m)) do
-            p.AssemblyAngularVelocity = Vector3.new()
-            p.AssemblyLinearVelocity  = Vector3.new()
             pcall(function() p:SetNetworkOwner(nil) end)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
-        pcall(function()
-            m:SetAttribute(INFLT_ATTR, nil)
-            m:SetAttribute(JOB_ATTR, nil)
-            m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
-        end)
         inflight[m] = nil
     end
 
@@ -520,11 +514,9 @@ return function(C, R, UI)
             if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
             setAnchored(m, false)
             setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
-            zeroAssembly(m)
             inflight[m] = nil
         end
         activeCount = 0
-        dropsActive = 0
         CURRENT_DOWNCAST = nil
         DEST_BASEPOS, DEST_COLOR = nil, nil
         destroyOrbs()
@@ -614,7 +606,6 @@ return function(C, R, UI)
         STOP_BTN.Visible = true
         releaseQueue = {}
         releaseAcc   = 0
-        dropsActive  = 0
         CURRENT_DOWNCAST = nil
         local TARGET = set
         if hb then hb:Disconnect() end
