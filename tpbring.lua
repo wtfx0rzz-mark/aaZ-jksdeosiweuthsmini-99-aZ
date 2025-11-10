@@ -121,11 +121,11 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local DRAG_SPEED     = 48
+    local DRAG_SPEED     = 140
     local PICK_RADIUS    = 50
     local ORB_HEIGHT     = 20
-    local MAX_CONCURRENT = 14
-    local START_STAGGER  = 0.04
+    local MAX_CONCURRENT = 18
+    local START_STAGGER  = 0.01
     local STEP_WAIT      = 0.016
 
     local LAND_MIN = 1.2
@@ -146,14 +146,46 @@ return function(C, R, UI)
 
     local inflight = {}
 
-    local function spawnOrbAt(pos)
+    local junkItems = {
+        "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
+        "UFO Junk","UFO Component"
+    }
+    local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel","Chair"}
+    local scrapAlso = { Log=true, Chair=true }
+
+    local fuelSet = {}
+    for _,n in ipairs(fuelItems) do fuelSet[n] = true end
+
+    local scrapSet = {}
+    for _,n in ipairs(junkItems) do scrapSet[n] = true end
+    for k,_ in pairs(scrapAlso) do scrapSet[k] = true end
+
+    local function isWallVariant(m)
+        if not (m and m:IsA("Model")) then return false end
+        local n = (m.Name or ""):lower()
+        return n == "logwall" or n == "log wall" or (n:find("log",1,true) and n:find("wall",1,true))
+    end
+    local function isUnderLogWall(inst)
+        local cur = inst
+        while cur and cur ~= WS do
+            local nm = (cur.Name or ""):lower()
+            if nm == "logwall" or nm == "log wall" or (nm:find("log",1,true) and nm:find("wall",1,true)) then
+                return true
+            end
+            cur = cur.Parent
+        end
+        return false
+    end
+    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
+
+    local function spawnOrbAt(pos, color)
         if orb then pcall(function() orb:Destroy() end) end
         local o = Instance.new("Part")
         o.Name = "tp_orb_fixed"
         o.Shape = Enum.PartType.Ball
         o.Size = Vector3.new(1.5,1.5,1.5)
         o.Material = Enum.Material.Neon
-        o.Color = Color3.fromRGB(80,180,255)
+        o.Color = color or Color3.fromRGB(80,180,255)
         o.Anchored, o.CanCollide, o.CanTouch, o.CanQuery = true,false,false,false
         o.CFrame = CFrame.new(pos + Vector3.new(0, ORB_HEIGHT, 0))
         o.Parent = WS
@@ -166,13 +198,16 @@ return function(C, R, UI)
         orbPosVec = nil
     end
 
-    local function isLogModel(m)
-        if not (m and m:IsA("Model")) then return false end
-        local n = (m.Name or "")
-        return n=="Log" or n=="TreeLog" or n=="Wood Log" or (n:match("^Log%d+$") ~= nil)
+    local function wantedBySet(m, set)
+        if not (m and m:IsA("Model") and m.Parent) then return false end
+        local itemsFolder = itemsRootOrNil()
+        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
+        if isWallVariant(m) or isUnderLogWall(m) then return false end
+        local nm = m.Name or ""
+        return set[nm] == true
     end
 
-    local function nearbyCandidates(center, radius, jobId)
+    local function nearbyCandidates(center, radius, jobId, set)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
@@ -180,7 +215,7 @@ return function(C, R, UI)
         local uniq, out = {}, {}
         for _,p in ipairs(parts) do
             local m = p:FindFirstAncestorOfClass("Model")
-            if m and not uniq[m] and isLogModel(m) and m.Parent and not inflight[m] then
+            if m and not uniq[m] and wantedBySet(m, set) and m.Parent and not inflight[m] then
                 local done = m:GetAttribute(DONE_ATTR)
                 if done ~= CURRENT_RUN_ID then
                     local tIn = m:GetAttribute(INFLT_ATTR)
@@ -233,20 +268,16 @@ return function(C, R, UI)
     local function startConveyor(m, jobId)
         if not (running and m and m.Parent and orbPosVec) then return end
         local mp = mainPart(m); if not mp then return end
-
         local off = landingOffset(m, jobId)
         local function target()
             return (orbPosVec or mp.Position) + off
         end
-
         pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
         pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
-
         local snap = setNoCollide(m)
         setAnchored(m, true)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
-
         local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock() }
         inflight[m] = rec
 
@@ -256,7 +287,6 @@ return function(C, R, UI)
                 dropToGroundAt(m)
                 return
             end
-
             local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
             if not pivot then
                 restoreModelState(m)
@@ -304,9 +334,11 @@ return function(C, R, UI)
     end
 
     local activeCount = 0
+    local CURRENT_TARGET_SET = nil
+
     local function wave(center)
         local jobId = tostring(os.clock())
-        local list = nearbyCandidates(center, PICK_RADIUS, jobId)
+        local list = nearbyCandidates(center, PICK_RADIUS, jobId, CURRENT_TARGET_SET or {})
         for i=1,#list do
             if not running then break end
             while running and activeCount >= MAX_CONCURRENT do Run.Heartbeat:Wait() end
@@ -341,11 +373,36 @@ return function(C, R, UI)
 
     STOP_BTN.MouseButton1Click:Connect(stopAll)
 
-    local function startAll()
+    local function campfireOrbPos()
+        local fire = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("MainFire")
+        if not fire then return nil end
+        local cf = (mainPart(fire) and mainPart(fire).CFrame) or fire:GetPivot()
+        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+    end
+    local function scrapperOrbPos()
+        local scr = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("Scrapper")
+        if not scr then return nil end
+        local cf = (mainPart(scr) and mainPart(scr).CFrame) or scr:GetPivot()
+        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+    end
+
+    local function startAll(mode)
         if running then return end
         local r = hrp(); if not r then return end
+        local pos = nil
+        if mode == "fuel" then
+            pos = campfireOrbPos()
+            CURRENT_TARGET_SET = fuelSet
+        elseif mode == "scrap" then
+            pos = scrapperOrbPos()
+            CURRENT_TARGET_SET = scrapSet
+        else
+            return
+        end
+        if not pos then return end
         CURRENT_RUN_ID = tostring(os.clock())
-        spawnOrbAt(r.Position)
+        local color = (mode == "fuel") and Color3.fromRGB(255,200,50) or Color3.fromRGB(120,255,160)
+        spawnOrbAt(pos, color)
         running = true
         STOP_BTN.Visible = true
         if hb then hb:Disconnect() end
@@ -358,18 +415,28 @@ return function(C, R, UI)
     end
 
     tab:Button({
-        Title = "Get Logs",
+        Title = "Send Fuel",
         Callback = function()
             if running then return end
-            startAll()
+            startAll("fuel")
+        end
+    })
+    tab:Button({
+        Title = "Send Scrap",
+        Callback = function()
+            if running then return end
+            startAll("scrap")
         end
     })
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
-        if running and orb and not orb.Parent then
-            destroyOrb()
-            local r = hrp()
-            if r then spawnOrbAt(r.Position) end
+        if running and not (orb and orb.Parent) then
+            local which = (CURRENT_TARGET_SET == fuelSet) and "fuel" or ((CURRENT_TARGET_SET == scrapSet) and "scrap" or nil)
+            if which == "fuel" then
+                local p = campfireOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(255,200,50)) end
+            elseif which == "scrap" then
+                local p = scrapperOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(120,255,160)) end
+            end
         end
     end)
 end
