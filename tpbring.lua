@@ -121,10 +121,10 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local DRAG_SPEED     = 140
-    local PICK_RADIUS    = 50
-    local ORB_HEIGHT     = 20
-    local MAX_CONCURRENT = 18
+    local DRAG_SPEED     = 200
+    local PICK_RADIUS    = 200
+    local ORB_HEIGHT     = 25
+    local MAX_CONCURRENT = 40
     local START_STAGGER  = 0.01
     local STEP_WAIT      = 0.016
 
