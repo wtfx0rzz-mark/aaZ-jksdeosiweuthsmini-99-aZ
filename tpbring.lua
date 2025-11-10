@@ -112,22 +112,28 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local DRAG_SPEED       = 220
-    local PICK_RADIUS      = 200
+    local DRAG_SPEED       = 260
+    local PICK_RADIUS      = 220
     local ORB_HEIGHT       = 10
-    local MAX_CONCURRENT   = 40
-    local START_STAGGER    = 0.01
-    local STEP_WAIT        = 0.016
+    local UPPER_ORB_OFFSET = 10
+    local MAX_CONCURRENT   = 48
+    local START_STAGGER    = 0.008
+    local STEP_WAIT        = 0.012
 
     local LAND_MIN         = 0.18
     local LAND_MAX         = 0.42
     local ARRIVE_EPS_H     = 0.7
-    local STALL_SEC        = 0.6
+    local STALL_SEC        = 0.5
 
     local HOVER_ABOVE_ORB  = 0.9
 
     local RELEASE_RATE_HZ      = 28
-    local MAX_RELEASE_PER_TICK = 2
+    local MAX_RELEASE_PER_TICK = 1
+
+    local DROP_SPEED_Y         = -36
+    local DROP_FINISH_TIMEOUT  = 3.0
+    local DROP_ARM_EPS         = 0.35
+    local DROP_ARM_RAD_H       = 1.2
 
     local STAGE_TIMEOUT_S  = 1.5
     local ORB_UNSTICK_RAD  = 2.0
@@ -142,10 +148,13 @@ return function(C, R, UI)
     local hb           = nil
     local orb          = nil
     local orbPosVec    = nil
+    local orbUpper     = nil
+    local orbUpperPos  = nil
     local inflight     = {}
     local releaseQueue = {}
     local releaseAcc   = 0.0
-    local TRANSPORT_MODE = "drag" -- "drag" or "teleport"
+    local dropsActive  = 0
+    local TRANSPORT_MODE = "drag"
 
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
@@ -181,7 +190,7 @@ return function(C, R, UI)
     local function spawnOrbAt(pos, color)
         if orb then pcall(function() orb:Destroy() end) end
         local o = Instance.new("Part")
-        o.Name = "tp_orb_fixed"
+        o.Name = "tp_orb_fixed_lower"
         o.Shape = Enum.PartType.Ball
         o.Size = Vector3.new(1.5,1.5,1.5)
         o.Material = Enum.Material.Neon
@@ -193,9 +202,26 @@ return function(C, R, UI)
         orb = o
         orbPosVec = orb.Position
     end
+    local function spawnUpperOrbAt(pos, color)
+        if orbUpper then pcall(function() orbUpper:Destroy() end) end
+        local o = Instance.new("Part")
+        o.Name = "tp_orb_fixed_upper"
+        o.Shape = Enum.PartType.Ball
+        o.Size = Vector3.new(1.25,1.25,1.25)
+        o.Material = Enum.Material.Neon
+        o.Color = color or Color3.fromRGB(180,240,255)
+        o.Anchored, o.CanCollide, o.CanTouch, o.CanQuery = true,false,false,false
+        o.CFrame = CFrame.new(pos + Vector3.new(0, ORB_HEIGHT + UPPER_ORB_OFFSET, 0))
+        o.Parent = WS
+        local l = Instance.new("PointLight"); l.Range = 12; l.Brightness = 1.8; l.Parent = o
+        orbUpper = o
+        orbUpperPos = orbUpper.Position
+    end
     local function destroyOrb()
         if orb then pcall(function() orb:Destroy() end) orb=nil end
+        if orbUpper then pcall(function() orbUpper:Destroy() end) orbUpper=nil end
         orbPosVec = nil
+        orbUpperPos = nil
     end
 
     local function wantedBySet(m, set)
@@ -244,7 +270,7 @@ return function(C, R, UI)
         return Vector3.new(math.cos(ang)*rad, 0, math.sin(ang)*rad)
     end
 
-    local function stageAtOrb(m, snap, tgt)
+    local function stageAtUpper(m, snap, tgt)
         if not inflight[m] then inflight[m] = { snap = snap, staged = false, stagedAt = 0, conn = nil } end
         setAnchored(m, true)
         for _,p in ipairs(allParts(m)) do
@@ -256,13 +282,10 @@ return function(C, R, UI)
         inflight[m].staged   = true
         inflight[m].stagedAt = os.clock()
         inflight[m].snap     = inflight[m].snap or snap
-        table.insert(releaseQueue, {model=m, pos=tgt})
+        table.insert(releaseQueue, {model=m})
     end
 
-    local function releaseOne(rec)
-        local m = rec and rec.model
-        if not (m and m.Parent) then return end
-        local info = inflight[m]
+    local function finalizeDelivered(m, info)
         local snap = info and info.snap or snapshotCollide(m)
         setAnchored(m, false)
         zeroAssembly(m)
@@ -281,12 +304,51 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
+    local function dropFromUpper(m)
+        local info = inflight[m]; if not info then return end
+        local mp = mainPart(m); if not mp then return end
+        setAnchored(m, false)
+        for _,p in ipairs(allParts(m)) do p.CanCollide = false end
+        zeroAssembly(m)
+        for _,p in ipairs(allParts(m)) do p.AssemblyLinearVelocity = Vector3.new(0, DROP_SPEED_Y, 0) end
+        local startT = os.clock()
+        local conn
+        conn = Run.Heartbeat:Connect(function()
+            if not (running and m and m.Parent and orbPosVec) then
+                if conn then conn:Disconnect() end
+                inflight[m] = nil
+                dropsActive = math.max(0, dropsActive-1)
+                return
+            end
+            local part = mainPart(m); if not part then
+                if conn then conn:Disconnect() end
+                inflight[m] = nil
+                dropsActive = math.max(0, dropsActive-1)
+                return
+            end
+            local yHit = (part.Position.Y - orbPosVec.Y) <= DROP_ARM_EPS
+            local dH = (Vector3.new(part.Position.X, 0, part.Position.Z) - Vector3.new(orbPosVec.X, 0, orbPosVec.Z)).Magnitude
+            if yHit and dH <= DROP_ARM_RAD_H then
+                if conn then conn:Disconnect() end
+                finalizeDelivered(m, info)
+                dropsActive = math.max(0, dropsActive-1)
+                return
+            end
+            if os.clock() - startT >= DROP_FINISH_TIMEOUT then
+                if conn then conn:Disconnect() end
+                finalizeDelivered(m, info)
+                dropsActive = math.max(0, dropsActive-1)
+                return
+            end
+        end)
+    end
+
     local function startConveyor(m, jobId)
-        if not (running and m and m.Parent and orbPosVec) then return end
+        if not (running and m and m.Parent and orbUpperPos) then return end
         local mp = mainPart(m); if not mp then return end
         local off = landingOffset(m, jobId)
-        local function target()
-            local base = orbPosVec or mp.Position
+        local function targetUpper()
+            local base = orbUpperPos or mp.Position
             return Vector3.new(base.X + off.X, base.Y + HOVER_ABOVE_ORB, base.Z + off.Z)
         end
         pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
@@ -295,42 +357,37 @@ return function(C, R, UI)
         setAnchored(m, true)
         zeroAssembly(m)
         if startDrag then pcall(function() startDrag:FireServer(m) end) end
-
         if not inflight[m] then inflight[m] = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false } end
 
         if TRANSPORT_MODE == "teleport" then
-            stageAtOrb(m, snap, target())
+            stageAtUpper(m, snap, targetUpper())
             return
         end
 
         local rec = inflight[m]
         rec.conn = Run.Heartbeat:Connect(function(dt)
-            if not (running and m and m.Parent and orbPosVec) then
+            if not (running and m and m.Parent and orbUpperPos) then
                 if rec.conn then rec.conn:Disconnect() end
                 inflight[m] = nil
                 return
             end
             if rec.staged then return end
-
             local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
             if not pivot then
                 if rec.conn then rec.conn:Disconnect() end
                 inflight[m] = nil
                 return
             end
-
             local pos = pivot.Position
-            local tgt = target()
+            local tgt = targetUpper()
             local flatDelta = Vector3.new(tgt.X - pos.X, 0, tgt.Z - pos.Z)
             local distH = flatDelta.Magnitude
-
             if distH <= ARRIVE_EPS_H and math.abs(tgt.Y - pos.Y) <= 1.0 then
                 if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
-                stageAtOrb(m, snap, tgt)
+                stageAtUpper(m, snap, tgt)
                 if rec.conn then rec.conn:Disconnect() end
                 return
             end
-
             if distH >= rec.lastD - 0.02 then
                 if os.clock() - rec.lastT >= STALL_SEC then
                     off = landingOffset(m, tostring(jobId) .. tostring(os.clock()))
@@ -376,7 +433,7 @@ return function(C, R, UI)
             if info and info.staged and (now - (info.stagedAt or now)) >= STAGE_TIMEOUT_S then
                 local queued = false
                 for _,rec in ipairs(releaseQueue) do if rec.model == m then queued = true; break end end
-                if not queued then table.insert(releaseQueue, {model=m, pos=mainPart(m) and mainPart(m).Position or orbPosVec}) end
+                if not queued then table.insert(releaseQueue, {model=m}) end
             end
         end
     end
@@ -410,7 +467,9 @@ return function(C, R, UI)
         STOP_BTN.Visible = false
         for i=#releaseQueue,1,-1 do
             local rec = releaseQueue[i]
-            if rec and rec.model and rec.model.Parent then releaseOne(rec) end
+            if rec and rec.model and rec.model.Parent then
+                finalizeDelivered(rec.model, inflight[rec.model])
+            end
             table.remove(releaseQueue, i)
         end
         for m,rec in pairs(inflight) do
@@ -422,12 +481,11 @@ return function(C, R, UI)
             inflight[m] = nil
         end
         activeCount = 0
+        dropsActive = 0
         destroyOrb()
     end
 
     STOP_BTN.MouseButton1Click:Connect(stopAll)
-
-    -- Robust target finders ----------------------------------------------------
 
     local function cfFromInstance(inst)
         if not inst then return nil end
@@ -440,7 +498,6 @@ return function(C, R, UI)
         end
         return nil
     end
-
     local function findDescendantByKeywords(root, kws)
         if not root then return nil end
         local function match(name)
@@ -450,7 +507,6 @@ return function(C, R, UI)
             end
             return false
         end
-        -- Prefer BaseParts under a matching container, else any matching model/part
         for _,inst in ipairs(root:GetDescendants()) do
             if match(inst.Name) then
                 if inst:IsA("BasePart") then return inst end
@@ -467,17 +523,13 @@ return function(C, R, UI)
         if not fire then
             local root = (WS:FindFirstChild("Map") or WS)
             local cand = findDescendantByKeywords(root, { "mainfire", "campfire", "camp fire", "firepit", "fire" })
-            if not cand then
-                warn("[tpbring] Campfire not found")
-                return nil
-            end
+            if not cand then return nil end
             local cf = cfFromInstance(cand)
-            return cf and (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)) or nil
+            return cf and (cf.Position) or nil
         end
         local cf = (mainPart(fire) and mainPart(fire).CFrame) or fire:GetPivot()
-        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+        return cf and cf.Position or nil
     end
-
     local function scrapperOrbPos()
         local scr = WS:FindFirstChild("Map")
                     and WS.Map:FindFirstChild("Campground")
@@ -485,18 +537,13 @@ return function(C, R, UI)
         if not scr then
             local root = (WS:FindFirstChild("Map") or WS)
             local cand = findDescendantByKeywords(root, { "scrapper", "scrap dealer", "scrap", "scrappernpc", "scrapshop" })
-            if not cand then
-                warn("[tpbring] Scrapper not found")
-                return nil
-            end
+            if not cand then return nil end
             local cf = cfFromInstance(cand)
-            return cf and (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)) or nil
+            return cf and (cf.Position) or nil
         end
         local cf = (mainPart(scr) and mainPart(scr).CFrame) or scr:GetPivot()
-        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+        return cf and cf.Position or nil
     end
-
-    -- Start/loop ---------------------------------------------------------------
 
     local function startAll(mode, transport)
         if running then return end
@@ -518,10 +565,12 @@ return function(C, R, UI)
 
         CURRENT_RUN_ID = tostring(os.clock())
         spawnOrbAt(pos, color)
+        spawnUpperOrbAt(pos, color)
         running = true
         STOP_BTN.Visible = true
         releaseQueue = {}
         releaseAcc   = 0
+        dropsActive  = 0
         local TARGET = set
         if hb then hb:Disconnect() end
 
@@ -531,12 +580,14 @@ return function(C, R, UI)
             releaseAcc = releaseAcc + dt
             local interval = 1 / RELEASE_RATE_HZ
             local toRelease = math.min(MAX_RELEASE_PER_TICK, math.floor(releaseAcc / interval))
-            if toRelease > 0 then
-                releaseAcc = releaseAcc - toRelease * interval
-                for i=1,toRelease do
+            while toRelease > 0 do
+                toRelease -= 1
+                if dropsActive < 1 then
                     local rec = table.remove(releaseQueue, 1)
-                    if not rec then break end
-                    releaseOne(rec)
+                    if rec and rec.model and rec.model.Parent then
+                        dropsActive += 1
+                        dropFromUpper(rec.model)
+                    end
                 end
             end
             flushStaleStaged()
@@ -578,9 +629,9 @@ return function(C, R, UI)
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if running and not (orb and orb.Parent) then
             if CURRENT_TARGET_SET == fuelSet then
-                local p = campfireOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(255,200,50)) end
+                local p = campfireOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(255,200,50)); spawnUpperOrbAt(p, Color3.fromRGB(255,200,50)) end
             elseif CURRENT_TARGET_SET == scrapSet then
-                local p = scrapperOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(120,255,160)) end
+                local p = scrapperOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(120,255,160)); spawnUpperOrbAt(p, Color3.fromRGB(120,255,160)) end
             end
         end
     end)
