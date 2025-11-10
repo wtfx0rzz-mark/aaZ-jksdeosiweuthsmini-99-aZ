@@ -23,13 +23,14 @@ return function(C, R, UI)
     TUNE.CHAR_SORT            = (TUNE.CHAR_SORT ~= false)
     TUNE.RAY_MAX_HOPS_CHAR    = TUNE.RAY_MAX_HOPS_CHAR    or 3
     TUNE.RAY_MAX_HOPS_TREE    = TUNE.RAY_MAX_HOPS_TREE    or 1
-    TUNE.CHAR_CLOSE_FAILSAFE  = TUNE.CHAR_CLOSE_FAILSAFE  or 18
+    TUNE.CHAR_CLOSE_FAILSAFE  = TUNE.CHAR_CLOSE_FAILSAFE  or 24
+    TUNE.VIS_THROUGH_WALLS    = (TUNE.VIS_THROUGH_WALLS ~= false)
 
     local running = { SmallTree = false, Character = false }
 
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
     local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
-    local CLOSE_FAILSAFE = 12
+    local CLOSE_FAILSAFE = 18
 
     local function isBigTreeName(n)
         if BIG_TREE_NAMES[n] then return true end
@@ -94,7 +95,15 @@ return function(C, R, UI)
         return tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
     end
 
-    local hrpCache = setmetatable({}, {__mode="k"})
+    local function getRayOriginFromChar(ch)
+        if not ch then return nil end
+        local head = ch:FindFirstChild("Head")
+        if head and head:IsA("BasePart") then return head.Position end
+        local r = ch:FindFirstChild("HumanoidRootPart")
+        if r and r:IsA("BasePart") then return r.Position + Vector3.new(0, 2.5, 0) end
+        return nil
+    end
+
     local function characterHeadPart(model)
         if not (model and model:IsA("Model")) then return nil end
         local head = model:FindFirstChild("Head")
@@ -283,15 +292,15 @@ return function(C, R, UI)
     end
 
     local function visibleTreeFromHRP(hrp, treeModel, maxHops, targetPart)
+        if TUNE.VIS_THROUGH_WALLS then return true end
         if not (hrp and treeModel) then return false end
         targetPart = targetPart or bestTreeHitPart(treeModel)
         if not targetPart then return false end
-        local start = hrp.Position
+        local ch = lp.Character
+        local start = getRayOriginFromChar(ch) or hrp.Position
         local dest = targetPart.Position
         local excluded = {}
-        if lp.Character then
-            excluded[#excluded+1] = lp.Character
-        end
+        if ch then excluded[#excluded+1] = ch end
         local hops = math.max(0, tonumber(maxHops) or 0)
         while true do
             local dir = dest - start
@@ -317,8 +326,10 @@ return function(C, R, UI)
     end
 
     local function visibleFromHRP(hrp, targetPart, maxHops, excludeSelf)
+        if TUNE.VIS_THROUGH_WALLS then return true end
         if not (hrp and targetPart) then return false end
-        local start = hrp.Position
+        local ch = lp.Character
+        local start = getRayOriginFromChar(ch) or hrp.Position
         local dest  = targetPart.Position
         local dir   = dest - start
         if dir.Magnitude < 0.1 then return true end
@@ -344,7 +355,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Explicit order = priority. Cooldowns are for timing only.
     local CHAR_WEAPON_PREF = {
         { "Cultist King Mace", 1.0 },
         { "Morningstar",       1.0 },
@@ -368,24 +378,14 @@ return function(C, R, UI)
         for idx, pair in ipairs(CHAR_WEAPON_PREF) do
             local name, cd = pair[1], pair[2]
             if findInInventory(name) then
-                available[#available+1] = {
-                    name = name,
-                    cd = cd or TUNE.CHOP_SWING_DELAY,
-                    order = idx,
-                }
+                available[#available+1] = { name = name, cd = cd or TUNE.CHOP_SWING_DELAY, order = idx }
             end
         end
-        table.sort(available, function(a, b)
-            return a.order < b.order
-        end)
+        table.sort(available, function(a, b) return a.order < b.order end)
         if #available == 0 then
             for _, n in ipairs(TUNE.ChopPrefer) do
                 if findInInventory(n) then
-                    available[#available+1] = {
-                        name = n,
-                        cd = TUNE.CHOP_SWING_DELAY,
-                        order = math.huge,
-                    }
+                    available[#available+1] = { name = n, cd = TUNE.CHOP_SWING_DELAY, order = math.huge }
                     break
                 end
             end
@@ -428,11 +428,13 @@ return function(C, R, UI)
                         local mdl = targetModels[i]
                         local head = hitPartGetter(mdl)
                         if head then
-                            local origin = (lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")) and lp.Character.HumanoidRootPart.Position or nil
+                            local ch = lp.Character
+                            local hrp = ch and ch:FindFirstChild("HumanoidRootPart") or nil
+                            local origin = getRayOriginFromChar(ch) or (hrp and hrp.Position) or nil
                             local dist = origin and (head.Position - origin).Magnitude or math.huge
                             local los = false
-                            if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
-                                los = visibleFromHRP(lp.Character.HumanoidRootPart, head, tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0, lp.Character)
+                            if hrp then
+                                los = visibleFromHRP(hrp, head, tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0, ch)
                             end
                             if los or dist <= TUNE.CHAR_CLOSE_FAILSAFE then
                                 local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
@@ -530,7 +532,7 @@ return function(C, R, UI)
                 if not hrp then
                     task.wait(0.2)
                 else
-                    local origin = hrp.Position
+                    local origin = (getRayOriginFromChar(ch) or hrp.Position)
                     local radius = tonumber(C.State.AuraRadius) or 150
                     local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
                     if #targets > 0 then
@@ -571,13 +573,9 @@ return function(C, R, UI)
                 if not hrp then
                     task.wait(0.2)
                 else
-                    local origin = hrp.Position
+                    local origin = (getRayOriginFromChar(ch) or hrp.Position)
                     local radius = tonumber(C.State.AuraRadius) or 150
-                    local roots = {
-                        WS,
-                        RS:FindFirstChild("Assets"),
-                        RS:FindFirstChild("CutsceneSets"),
-                    }
+                    local roots = { WS, RS:FindFirstChild("Assets"), RS:FindFirstChild("CutsceneSets") }
                     local allTrees = collectTreesInRadius(roots, origin, radius)
                     local total = #allTrees
                     if total > 0 then
