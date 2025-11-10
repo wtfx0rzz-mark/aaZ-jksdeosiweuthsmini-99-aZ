@@ -122,7 +122,7 @@ return function(C, R, UI)
     -- =========================
     local DRAG_SPEED       = 180     -- fast horizontal pull
     local PICK_RADIUS      = 200
-    local ORB_HEIGHT       = 20
+    local ORB_HEIGHT       = 15
     local MAX_CONCURRENT   = 50
     local START_STAGGER    = 0.01
     local STEP_WAIT        = 0.016
