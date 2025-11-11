@@ -112,14 +112,11 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    -- Tuning
     local DRAG_SPEED       = 220
     local PICK_RADIUS      = 200
     local ORB_HEIGHT       = 10
-
-    -- Concurrency now represents actively moving items only.
-    local MAX_CONCURRENT   = 40          -- max items moving toward the orb
-    local ENROLL_PER_TICK  = 4           -- new items to enroll per Heartbeat when below cap
+    local MAX_CONCURRENT   = 40
+    local START_STAGGER    = 0.01
     local STEP_WAIT        = 0.016
 
     local LAND_MIN         = 0.35
@@ -144,8 +141,7 @@ return function(C, R, UI)
     local hb           = nil
     local orb          = nil
     local orbPosVec    = nil
-    local inflight     = {}     -- model -> { snap=..., conn=..., staged=..., stagedAt=..., lastD=..., lastT=... }
-    local movingCount  = 0      -- actively moving toward orb (not yet staged)
+    local inflight     = {}
     local releaseQueue = {}
     local releaseAcc   = 0.0
 
@@ -223,7 +219,6 @@ return function(C, R, UI)
                     local tIn = m:GetAttribute(INFLT_ATTR)
                     local jIn = m:GetAttribute(JOB_ATTR)
                     if tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < 6.0 then
-                        -- skip, recently handled by other job
                     else
                         uniq[m]=true; out[#out+1]=m
                     end
@@ -255,14 +250,9 @@ return function(C, R, UI)
             p.AssemblyAngularVelocity = Vector3.new()
         end
         setPivot(m, CFrame.new(tgt))
-        local info = inflight[m]
-        if info then
-            info.staged   = true
-            info.stagedAt = os.clock()
-            info.snap     = snap
-        end
-        -- free a moving slot immediately on stage to avoid visible waves
-        movingCount = math.max(0, movingCount - 1)
+        inflight[m].staged   = true
+        inflight[m].stagedAt = os.clock()
+        inflight[m].snap     = snap
         table.insert(releaseQueue, {model=m, pos=tgt})
     end
 
@@ -350,28 +340,23 @@ return function(C, R, UI)
         end)
     end
 
+    local activeCount = 0
     local CURRENT_TARGET_SET = nil
 
-    -- Continuous trickle enrollment. No "wave" loop or fixed 8s holds.
-    local function enrollSome(center, targetSet)
-        if not running or not targetSet then return end
-        local slots = math.max(0, MAX_CONCURRENT - movingCount)
-        if slots <= 0 then return end
-        local take = math.min(slots, ENROLL_PER_TICK)
-        if take <= 0 then return end
-
+    local function wave(center)
         local jobId = tostring(os.clock())
-        local list = nearbyCandidates(center, PICK_RADIUS, jobId, targetSet)
-        local picked = 0
-        for i = 1, #list do
-            if picked >= take then break end
+        local list = nearbyCandidates(center, PICK_RADIUS, jobId, CURRENT_TARGET_SET or {})
+        for i=1,#list do
+            if not running then break end
+            while running and activeCount >= MAX_CONCURRENT do Run.Heartbeat:Wait() end
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                movingCount += 1
+                activeCount += 1
                 task.spawn(function()
                     startConveyor(m, jobId)
+                    task.delay(8, function() activeCount = math.max(0, activeCount-1) end)
                 end)
-                picked += 1
+                task.wait(START_STAGGER)
             end
         end
     end
@@ -427,7 +412,7 @@ return function(C, R, UI)
             zeroAssembly(m)
             inflight[m] = nil
         end
-        movingCount = 0
+        activeCount = 0
         destroyOrb()
     end
 
@@ -469,20 +454,12 @@ return function(C, R, UI)
         STOP_BTN.Visible = true
         releaseQueue = {}
         releaseAcc   = 0
-        movingCount  = 0
-        CURRENT_TARGET_SET = set
-
+        local TARGET = set
         if hb then hb:Disconnect() end
+
         hb = Run.Heartbeat:Connect(function(dt)
             if not running then return end
-
-            -- steady trickle enrollment near player
-            local root = hrp()
-            if root then
-                enrollSome(root.Position, CURRENT_TARGET_SET)
-            end
-
-            -- paced release
+            local root = hrp(); if root then wave(root.Position) end
             releaseAcc = releaseAcc + dt
             local interval = 1 / RELEASE_RATE_HZ
             local toRelease = math.min(MAX_RELEASE_PER_TICK, math.floor(releaseAcc / interval))
@@ -494,10 +471,11 @@ return function(C, R, UI)
                     releaseOne(rec)
                 end
             end
-
             flushStaleStaged()
             task.wait(STEP_WAIT)
         end)
+
+        CURRENT_TARGET_SET = TARGET
     end
 
     tab:Button({
