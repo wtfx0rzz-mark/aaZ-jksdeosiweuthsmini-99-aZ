@@ -112,35 +112,33 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
+    -- Tunables focused on slower, continuous release
     local DRAG_SPEED         = 220
     local PICK_RADIUS        = 200
     local ORB_HEIGHT         = 10
-    local MAX_CONCURRENT     = 1
+    local MAX_CONCURRENT     = 1          -- single-file conveyor
     local START_STAGGER      = 0.01
-    local STEP_WAIT          = 0.016
+    local STEP_WAIT          = 0.012
 
-    local LAND_MIN           = 0.25
-    local LAND_MAX           = 0.45
     local ARRIVE_EPS_H       = 0.75
     local STALL_SEC          = 0.6
 
     local HOVER_ABOVE_ORB    = 1.0
 
-    local RELEASE_RATE_HZ    = 48
-    local MAX_RELEASE_PER_TICK = 1
-    local ORB_CLEAR_RADIUS   = 1.6
-    local ORB_CLEAR_Y_DELTA  = 2.2
-    local CLEAR_TIMEOUT_S    = 1.0
+    -- Continuous release cadence: lower = slower, but steady
+    local RELEASE_RATE_HZ        = 5      -- ~1 item every 0.2s
+    local MAX_RELEASE_PER_TICK   = 1
 
+    -- Gentle, tight “snake” path
+    local SNAKE_WIDTH        = 0.75
+    local SNAKE_ADVANCE      = 0.22
+    local SNAKE_PHASE_STEP   = 0.42
+    local SNAKE_RESET_LEN    = 10.0
+
+    -- Unstick helpers
     local STAGE_TIMEOUT_S    = 1.25
     local ORB_UNSTICK_RAD    = 2.0
     local ORB_UNSTICK_HZ     = 12
-
-    local SNAKE_WIDTH        = 0.85
-    local SNAKE_ADVANCE      = 0.32
-    local SNAKE_PHASE_STEP   = 0.55
-    local SNAKE_RESET_LEN    = 12.0
-
     local SMASH_VY_STOP      = -120
     local SMASH_VY_UNSTICK   = -80
 
@@ -156,10 +154,8 @@ return function(C, R, UI)
     local inflight     = {}
     local releaseQueue = {}
     local releaseAcc   = 0.0
-    local lastReleaseAt = 0
     local snakePhase   = 0.0
     local snakeLen     = 0.0
-    local lastReleasedModel = nil
 
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
@@ -244,12 +240,8 @@ return function(C, R, UI)
         return out
     end
 
-    local function hash01(s)
-        local h = 131071
-        for i = 1, #s do h = (h*131 + string.byte(s, i)) % 1000003 end
-        return (h % 100000) / 100000
-    end
     local function landingOffsetSquiggle()
+        -- advance small, steady steps to avoid bursty patterns
         snakePhase = snakePhase + SNAKE_PHASE_STEP
         snakeLen   = snakeLen + SNAKE_ADVANCE
         if snakeLen >= SNAKE_RESET_LEN then
@@ -276,30 +268,13 @@ return function(C, R, UI)
         table.insert(releaseQueue, {model=m, pos=tgt})
     end
 
-    local function orbAreaClear()
-        if not orbPosVec then return true end
-        local items = itemsRootOrNil(); if not items then return true end
-        local cutoffY = orbPosVec.Y - ORB_CLEAR_Y_DELTA
-        for _,m in ipairs(items:GetChildren()) do
-            if m:IsA("Model") then
-                local mp = mainPart(m)
-                if mp then
-                    local d = (mp.Position - orbPosVec).Magnitude
-                    if d <= ORB_CLEAR_RADIUS and mp.Position.Y >= cutoffY then
-                        return false
-                    end
-                end
-            end
-        end
-        return true
-    end
-
     local function releaseOne(rec)
         local m = rec and rec.model
         if not (m and m.Parent) then return end
         local info = inflight[m]
         local snap = info and info.snap or snapshotCollide(m)
 
+        -- place at next squiggle position then fully restore physics
         local off = landingOffsetSquiggle()
         local p = (orbPosVec or Vector3.new()) + Vector3.new(off.X, HOVER_ABOVE_ORB, off.Z)
         setPivot(m, CFrame.new(p))
@@ -319,8 +294,6 @@ return function(C, R, UI)
             m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
         end)
         inflight[m] = nil
-        lastReleasedModel = m
-        lastReleaseAt = os.clock()
     end
 
     local function startConveyor(m, jobId)
@@ -386,7 +359,8 @@ return function(C, R, UI)
     local CURRENT_TARGET_SET = nil
 
     local function wave(center)
-        if not orbAreaClear() and (os.clock() - lastReleaseAt) < CLEAR_TIMEOUT_S then return end
+        -- keep queue topped-up so release cadence stays continuous
+        if #releaseQueue >= 2 then return end
         local jobId = tostring(os.clock())
         local list = nearbyCandidates(center, PICK_RADIUS, jobId, CURRENT_TARGET_SET or {})
         if #list == 0 then return end
@@ -397,7 +371,7 @@ return function(C, R, UI)
             activeCount += 1
             task.spawn(function()
                 startConveyor(m, jobId)
-                task.delay(8, function() activeCount = math.max(0, activeCount-1) end)
+                task.delay(6, function() activeCount = math.max(0, activeCount-1) end)
             end)
             task.wait(START_STAGGER)
         end
@@ -442,6 +416,7 @@ return function(C, R, UI)
         if hb then hb:Disconnect(); hb=nil end
         STOP_BTN.Visible = false
 
+        -- dump queued items with a strong downward nudge
         for i=#releaseQueue,1,-1 do
             local rec = releaseQueue[i]
             if rec and rec.model and rec.model.Parent then
@@ -512,7 +487,6 @@ return function(C, R, UI)
         releaseAcc   = 0
         snakePhase   = 0
         snakeLen     = 0
-        lastReleasedModel = nil
 
         if hb then hb:Disconnect() end
         hb = Run.Heartbeat:Connect(function(dt)
@@ -520,12 +494,14 @@ return function(C, R, UI)
             local root = hrp()
             if root then wave(root.Position) end
 
+            -- steady cadence, no burst
             releaseAcc = releaseAcc + dt
             local interval = 1 / RELEASE_RATE_HZ
-            if releaseAcc >= interval and #releaseQueue > 0 and orbAreaClear() then
+            while releaseAcc >= interval do
                 releaseAcc = releaseAcc - interval
                 local rec = table.remove(releaseQueue, 1)
                 if rec then releaseOne(rec) end
+                if MAX_RELEASE_PER_TICK <= 1 then break end
             end
 
             flushStaleStaged()
