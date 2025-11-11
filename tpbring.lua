@@ -46,6 +46,9 @@ return function(C, R, UI)
             if part and part.Parent then part.CanCollide = can end
         end
     end
+    local function setAnchored(m, on)
+        for _,p in ipairs(allParts(m)) do p.Anchored = on end
+    end
     local function setNoCollide(m)
         local s = {}
         for _,p in ipairs(allParts(m)) do s[p]=p.CanCollide; p.CanCollide=false end
@@ -109,38 +112,46 @@ return function(C, R, UI)
 
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local PICK_RADIUS          = 400
-    local ORB_HEIGHT           = 0
-    local MAX_CONCURRENT       = 40
-    local START_STAGGER        = 0.01
-    local STEP_WAIT            = 0.016
+    local DRAG_SPEED            = 220
+    local PICK_RADIUS           = 200
+    local ORB_HEIGHT            = 10
+    local MAX_CONCURRENT        = 1
+    local START_STAGGER         = 0.01
+    local STEP_WAIT             = 0.016
 
-    local INFLT_ATTR           = "OrbInFlightAt"
-    local JOB_ATTR             = "OrbJob"
-    local DONE_ATTR            = "OrbDelivered"
+    local LAND_MIN              = 0.30
+    local LAND_MAX              = 0.55
+    local ARRIVE_EPS_H          = 0.9
+    local STALL_SEC             = 0.6
 
-    local QUEUE_TIMEOUT_S      = 2.0
-    local ORB_UNSTICK_RAD      = 2.5
-    local ORB_UNSTICK_HZ       = 10
-    local RELEASE_RATE_HZ      = 18
-    local MAX_RELEASE_PER_TICK = 10
+    local HOVER_ABOVE_ORB       = 1.2
+    local RELEASE_RATE_HZ       = 60
+    local MAX_RELEASE_PER_TICK  = 1
+    local STAGE_TIMEOUT_S       = 1.2
 
-    local RIM_R      = 0.85
-    local PHASE_STEP = 0.35
-    local SWAY       = 0.18
-    local SWAY_FREQ  = 3.0
-    local _theta     = 0.0
+    local ORB_UNSTICK_HZ        = 20
+    local ORB_UNSTICK_RAD       = 2.2
+    local ORB_UNSTICK_VY        = -18
+
+    local HOVER_STUCK_SEC       = 0.9
+    local HOVER_STUCK_EPS       = 0.15
+    local HOVER_NUDGE_VY        = -12
+
+    local STOP_SMASH_VY         = -140
+    local STOP_SMASH_RADIUS     = 12
+
+    local INFLT_ATTR = "OrbInFlightAt"
+    local JOB_ATTR   = "OrbJob"
+    local DONE_ATTR  = "OrbDelivered"
 
     local CURRENT_RUN_ID = nil
-    local running    = false
-    local hb         = nil
-    local orb        = nil
-    local orbPosVec  = nil
-    local inflight   = {}
-    local queue      = {}
-    local releaseAcc = 0.0
-    local activeEnq  = 0
-    local CURRENT_TARGET_SET = nil
+    local running      = false
+    local hb           = nil
+    local orb          = nil
+    local orbPosVec    = nil
+    local inflight     = {}
+    local releaseQueue = {}
+    local releaseAcc   = 0.0
 
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
@@ -149,9 +160,8 @@ return function(C, R, UI)
     local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel"}
     local scrapAlso = { Log=true }
 
-    local fuelSet = {}
+    local fuelSet, scrapSet = {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
-    local scrapSet = {}
     for _,n in ipairs(junkItems) do scrapSet[n] = true end
     for k,_ in pairs(scrapAlso) do scrapSet[k] = true end
 
@@ -202,7 +212,6 @@ return function(C, R, UI)
         if nm == "Chair" then return false end
         return set[nm] == true
     end
-
     local function nearbyCandidates(center, radius, jobId, set)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -226,92 +235,245 @@ return function(C, R, UI)
         return out
     end
 
-    local function nextRimPoint()
-        _theta = _theta + PHASE_STEP
-        if _theta > math.pi*2 then _theta = _theta - math.pi*2 end
-        local c, s = math.cos(_theta), math.sin(_theta)
-        local rim  = Vector3.new(orbPosVec.X + c*RIM_R, orbPosVec.Y, orbPosVec.Z + s*RIM_R)
-        local wob  = math.sin(_theta*SWAY_FREQ) * SWAY
-        local tangent = Vector3.new(-s, 0, c)
-        return rim + tangent * wob
+    local function hash01(s)
+        local h = 131071
+        for i = 1, #s do h = (h*131 + string.byte(s, i)) % 1000003 end
+        return (h % 100000) / 100000
+    end
+    local function landingOffset(m, jobId)
+        local key = (typeof(m.GetDebugId)=="function" and m:GetDebugId() or (m.Name or "")) .. tostring(jobId)
+        local r1 = hash01(key .. "a")
+        local r2 = hash01(key .. "b")
+        local ang = r1 * math.pi * 2
+        local rad = LAND_MIN + (LAND_MAX - LAND_MIN) * r2
+        return Vector3.new(math.cos(ang)*rad, 0, math.sin(ang)*rad)
     end
 
-    local function queueModel(m, jobId)
-        if not (m and m.Parent) then return end
-        pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
-        pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
-        local snap = setNoCollide(m)
-        zeroAssembly(m)
-        if startDrag then pcall(function() startDrag:FireServer(m) end) end
-        local mp = mainPart(m)
-        local t0 = os.clock()
-        while mp and (os.clock() - t0) < 0.35 do
-            local ownerOk = false
-            pcall(function()
-                local o = mp:GetNetworkOwner()
-                ownerOk = (o == lp)
-            end)
-            if ownerOk then break end
-            Run.Heartbeat:Wait()
-        end
-        inflight[m] = { snap = snap, queuedAt = os.clock() }
-        queue[#queue+1] = m
-        activeEnq += 1
-    end
-
-    local function releaseOne(m)
-        if not (m and m.Parent and orbPosVec) then inflight[m]=nil; activeEnq = math.max(0, activeEnq-1); return end
-        local info = inflight[m]
-        local snap = info and info.snap or snapshotCollide(m)
-        local rim = nextRimPoint()
-        setPivot(m, CFrame.new(rim))
-        setCollideFromSnapshot(snap)
-        zeroAssembly(m)
+    local function stageAtOrb(m, snap, tgt)
+        setAnchored(m, true)
         for _,p in ipairs(allParts(m)) do
-            p.Anchored = false
+            p.CanCollide = false
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+        end
+        setPivot(m, CFrame.new(tgt))
+        inflight[m].staged     = true
+        inflight[m].stagedAt   = os.clock()
+        inflight[m].snap       = snap
+        inflight[m].lastPos    = tgt
+        table.insert(releaseQueue, {model=m})
+    end
+
+    local function hardRelease(m, info)
+        if not (m and m.Parent) then return end
+        local snap = (info and info.snap) or snapshotCollide(m)
+        setAnchored(m, false)
+        zeroAssembly(m)
+        setCollideFromSnapshot(snap)
+        for _,p in ipairs(allParts(m)) do
+            p.AssemblyAngularVelocity = Vector3.new()
+            p.AssemblyLinearVelocity  = Vector3.new()
+            pcall(function() p:SetNetworkOwner(nil) end)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
-        if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
         pcall(function()
             m:SetAttribute(INFLT_ATTR, nil)
             m:SetAttribute(JOB_ATTR, nil)
             m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
         end)
         inflight[m] = nil
-        activeEnq = math.max(0, activeEnq-1)
     end
+
+    local function releaseOne(rec)
+        local m = rec and rec.model
+        if not (m and m.Parent) then return end
+        local info = inflight[m]
+        hardRelease(m, info)
+    end
+
+    local function startConveyor(m, jobId)
+        if not (running and m and m.Parent and orbPosVec) then return end
+        local mp = mainPart(m); if not mp then return end
+        local off = landingOffset(m, jobId)
+        local function target()
+            local base = orbPosVec or mp.Position
+            return Vector3.new(base.X + off.X, base.Y + HOVER_ABOVE_ORB, base.Z + off.Z)
+        end
+        pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
+        pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
+        local snap = setNoCollide(m)
+        setAnchored(m, true)
+        zeroAssembly(m)
+        if startDrag then pcall(function() startDrag:FireServer(m) end) end
+        local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false, lastPos=nil, hoverT=nil }
+        inflight[m] = rec
+
+        rec.conn = Run.Heartbeat:Connect(function(dt)
+            if not (running and m and m.Parent and orbPosVec) then
+                if rec.conn then rec.conn:Disconnect() end
+                inflight[m] = nil
+                return
+            end
+            if rec.staged then return end
+
+            local pivot = m:IsA("Model") and m:GetPivot() or (mp and mp.CFrame)
+            if not pivot then
+                if rec.conn then rec.conn:Disconnect() end
+                inflight[m] = nil
+                return
+            end
+
+            local pos = pivot.Position
+            local tgt = target()
+            local flatDelta = Vector3.new(tgt.X - pos.X, 0, tgt.Z - pos.Z)
+            local distH = flatDelta.Magnitude
+
+            if distH <= ARRIVE_EPS_H and math.abs(tgt.Y - pos.Y) <= 1.0 then
+                if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+                stageAtOrb(m, snap, tgt)
+                if rec.conn then rec.conn:Disconnect() end
+                return
+            end
+
+            if distH >= rec.lastD - 0.02 then
+                if os.clock() - rec.lastT >= STALL_SEC then
+                    off = landingOffset(m, tostring(jobId) .. tostring(os.clock()))
+                    rec.lastT = os.clock()
+                end
+            else
+                rec.lastT = os.clock()
+            end
+            rec.lastD = distH
+
+            local step = math.min(DRAG_SPEED * dt, math.max(0, distH))
+            local dir  = distH > 1e-3 and (flatDelta / math.max(distH,1e-3)) or Vector3.new()
+            local vy   = math.clamp((tgt.Y - pos.Y), -7, 7)
+            local newPos = Vector3.new(pos.X, pos.Y + vy * dt * 10, pos.Z) + dir * step
+            setPivot(m, CFrame.new(newPos, newPos + (dir.Magnitude>0 and dir or Vector3.new(0,0,1))))
+        end)
+    end
+
+    local activeCount = 0
+    local CURRENT_TARGET_SET = nil
 
     local function wave(center)
         local jobId = tostring(os.clock())
         local list = nearbyCandidates(center, PICK_RADIUS, jobId, CURRENT_TARGET_SET or {})
         for i=1,#list do
             if not running then break end
-            while running and activeEnq >= MAX_CONCURRENT do Run.Heartbeat:Wait() end
+            while running and activeCount >= MAX_CONCURRENT do Run.Heartbeat:Wait() end
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                queueModel(m, jobId)
+                activeCount += 1
+                task.spawn(function()
+                    startConveyor(m, jobId)
+                    task.delay(8, function() activeCount = math.max(0, activeCount-1) end)
+                end)
                 task.wait(START_STAGGER)
             end
         end
+    end
+
+    local function flushStaleStaged()
+        local now = os.clock()
+        for m,info in pairs(inflight) do
+            if info and info.staged and (now - (info.stagedAt or now)) >= STAGE_TIMEOUT_S then
+                local queued = false
+                for _,rec in ipairs(releaseQueue) do if rec.model == m then queued = true; break end end
+                if not queued then table.insert(releaseQueue, {model=m}) end
+            end
+        end
+    end
+
+    do
+        local acc = 0
+        Run.Heartbeat:Connect(function(dt)
+            if not (running and orbPosVec) then return end
+            acc = acc + dt
+            if acc < (1/ORB_UNSTICK_HZ) then return end
+            acc = 0
+            local items = itemsRootOrNil(); if not items then return end
+            for _,m in ipairs(items:GetChildren()) do
+                if not m:IsA("Model") then continue end
+                local mp = mainPart(m); if not mp then continue end
+                local d = (mp.Position - orbPosVec).Magnitude
+                if d <= ORB_UNSTICK_RAD then
+                    for _,p in ipairs(allParts(m)) do
+                        p.Anchored = false
+                        p.CanCollide = true
+                        p.AssemblyAngularVelocity = Vector3.new()
+                        if math.abs(p.AssemblyLinearVelocity.Y) < 0.05 then
+                            p.AssemblyLinearVelocity = Vector3.new(0, ORB_UNSTICK_VY, 0)
+                        end
+                    end
+                end
+            end
+            for m,info in pairs(inflight) do
+                if info and info.staged then continue end
+                if m and m.Parent then
+                    local mp = mainPart(m)
+                    if mp and orbPosVec then
+                        local near = (mp.Position - orbPosVec)
+                        if math.abs(near.Y - HOVER_ABOVE_ORB) <= HOVER_STUCK_EPS and near.Magnitude <= (LAND_MAX + 1.5) then
+                            info.hoverT = info.hoverT or os.clock()
+                            if os.clock() - info.hoverT >= HOVER_STUCK_SEC then
+                                for _,p in ipairs(allParts(m)) do
+                                    p.Anchored = false
+                                    p.AssemblyLinearVelocity = Vector3.new(0, HOVER_NUDGE_VY, 0)
+                                end
+                            end
+                        else
+                            info.hoverT = nil
+                        end
+                    end
+                end
+            end
+        end)
     end
 
     local function stopAll()
         running = false
         if hb then hb:Disconnect(); hb=nil end
         STOP_BTN.Visible = false
-        for i=#queue,1,-1 do
-            local m = queue[i]
-            if m and m.Parent then releaseOne(m) end
-            table.remove(queue, i)
+
+        for i=#releaseQueue,1,-1 do
+            local rec = releaseQueue[i]
+            if rec and rec.model and rec.model.Parent then releaseOne(rec) end
+            table.remove(releaseQueue, i)
         end
-        for m,info in pairs(inflight) do
+
+        for m,rec in pairs(inflight) do
+            if rec and rec.conn then rec.conn:Disconnect() end
             if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
-            setCollideFromSnapshot(info and info.snap or snapshotCollide(m))
+            setAnchored(m, false)
+            setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
             zeroAssembly(m)
             inflight[m] = nil
         end
-        activeEnq = 0
+
+        if orbPosVec then
+            local items = itemsRootOrNil()
+            if items then
+                for _,m in ipairs(items:GetChildren()) do
+                    if m:IsA("Model") then
+                        local mp = mainPart(m)
+                        if mp and (mp.Position - orbPosVec).Magnitude <= STOP_SMASH_RADIUS then
+                            for _,p in ipairs(allParts(m)) do
+                                p.Anchored = false
+                                p.CanCollide = true
+                                p.AssemblyAngularVelocity = Vector3.new()
+                                p.AssemblyLinearVelocity  = Vector3.new(0, STOP_SMASH_VY, 0)
+                                pcall(function() p:SetNetworkOwner(nil) end)
+                                pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
         destroyOrb()
+        activeCount = 0
     end
 
     STOP_BTN.MouseButton1Click:Connect(stopAll)
@@ -345,59 +507,35 @@ return function(C, R, UI)
             return
         end
         if not pos then return end
+
         CURRENT_RUN_ID = tostring(os.clock())
         spawnOrbAt(pos, color)
         running = true
         STOP_BTN.Visible = true
-        queue = {}
-        inflight = {}
-        activeEnq = 0
-        releaseAcc = 0
-        CURRENT_TARGET_SET = set
+        releaseQueue = {}
+        releaseAcc   = 0
+        local TARGET = set
         if hb then hb:Disconnect() end
+
         hb = Run.Heartbeat:Connect(function(dt)
             if not running then return end
             local root = hrp(); if root then wave(root.Position) end
             releaseAcc = releaseAcc + dt
             local interval = 1 / RELEASE_RATE_HZ
-            local n = math.min(MAX_RELEASE_PER_TICK, math.floor(releaseAcc / interval))
-            if n > 0 then
-                releaseAcc = releaseAcc - n * interval
-                for i=1,n do
-                    local m = table.remove(queue, 1)
-                    if not m then break end
-                    releaseOne(m)
+            local toRelease = math.min(MAX_RELEASE_PER_TICK, math.floor(releaseAcc / interval))
+            if toRelease > 0 then
+                releaseAcc = releaseAcc - toRelease * interval
+                for i=1,toRelease do
+                    local rec = table.remove(releaseQueue, 1)
+                    if not rec then break end
+                    releaseOne(rec)
                 end
             end
-            local now = os.clock()
-            for m,info in pairs(inflight) do
-                if info and info.queuedAt and (now - info.queuedAt) > QUEUE_TIMEOUT_S then
-                    local found = false
-                    for i,v in ipairs(queue) do if v == m then table.remove(queue, i); found=true; break end end
-                    if found then table.insert(queue, 1, m) else releaseOne(m) end
-                    inflight[m].queuedAt = now
-                end
-            end
+            flushStaleStaged()
             task.wait(STEP_WAIT)
         end)
-    end
 
-    do
-        local acc = 0
-        Run.Heartbeat:Connect(function(dt)
-            if not (running and orbPosVec) then return end
-            acc = acc + dt
-            if acc < (1/ORB_UNSTICK_HZ) then return end
-            acc = 0
-            local items = itemsRootOrNil(); if not items then return end
-            for _,m in ipairs(items:GetChildren()) do
-                if not m:IsA("Model") then continue end
-                local mp = mainPart(m); if not mp then continue end
-                if (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
-                    for _,p in ipairs(allParts(m)) do p.Anchored = false end
-                end
-            end
-        end)
+        CURRENT_TARGET_SET = TARGET
     end
 
     tab:Button({
