@@ -115,7 +115,7 @@ return function(C, R, UI)
     local DRAG_SPEED            = 220
     local PICK_RADIUS           = 200
     local ORB_HEIGHT            = 10
-    local MAX_CONCURRENT        = 1
+    local MAX_CONCURRENT        = 40
     local START_STAGGER         = 0.01
     local STEP_WAIT             = 0.016
 
@@ -125,8 +125,8 @@ return function(C, R, UI)
     local STALL_SEC             = 0.6
 
     local HOVER_ABOVE_ORB       = 1.2
-    local RELEASE_RATE_HZ       = 60
-    local MAX_RELEASE_PER_TICK  = 1
+    local RELEASE_RATE_HZ       = 24
+    local MAX_RELEASE_PER_TICK  = 12
     local STAGE_TIMEOUT_S       = 1.2
 
     local ORB_UNSTICK_HZ        = 20
