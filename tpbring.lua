@@ -9,7 +9,7 @@ return function(C, R, UI)
     local tab = UI and UI.Tabs and (UI.Tabs.TPBring or UI.Tabs.Bring or UI.Tabs.Auto or UI.Tabs.Main)
     if not tab then return end
 
-    -- ========== small helpers ==========
+    -- ===== Helpers =====
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
@@ -57,7 +57,7 @@ return function(C, R, UI)
     end
     local function itemsRootOrNil() return WS:FindFirstChild("Items") end
 
-    -- remotes
+    -- Remotes + safe wrappers
     local startDrag, stopDrag = nil, nil
     do
         local re = RS:FindFirstChild("RemoteEvents")
@@ -66,8 +66,19 @@ return function(C, R, UI)
             stopDrag  = re:FindFirstChild("StopDraggingItem")
         end
     end
+    local function safeStartDrag(model)
+        if startDrag and model and model.Parent then
+            local ok = pcall(function() startDrag:FireServer(model) end)
+            return ok
+        end
+    end
+    local function finallyStopDrag(model)
+        if not (stopDrag and model and model.Parent) then return end
+        task.defer(function() pcall(function() stopDrag:FireServer(model) end) end)
+        task.delay(0.15, function() pcall(function() stopDrag:FireServer(model) end) end)
+    end
 
-    -- edge buttons
+    -- Edge buttons
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -96,44 +107,42 @@ return function(C, R, UI)
     end
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    -- ========== tuning ==========
-    local PICK_RADIUS          = 400
-    local ORB_HEIGHT           = 20
-    local LAND_MIN             = 0.15   -- tighter cluster
-    local LAND_MAX             = 0.35
+    -- ===== Tuning =====
+    local PICK_RADIUS          = 200
+    local ORB_HEIGHT           = 10
+    local LAND_MIN             = 0.12  -- tighter cluster
+    local LAND_MAX             = 0.28
     local HOVER_ABOVE_ORB      = 0.9
     local ARRIVE_EPS_H         = 0.7
     local STAGE_TIMEOUT_S      = 1.25
 
-    -- release exactly one at a time, very fast
-    local RELEASE_INTERVAL     = 0.035  -- ~28 items/sec
-    local MAX_STAGED           = 1      -- strictly one pending in queue
+    -- release pipeline: one at a time, high cadence
+    local RELEASE_INTERVAL     = 0.04   -- ~25 per second
+    local MAX_STAGED           = 6      -- small buffer so it never clogs
 
-    -- repick/flight guards
     local STUCK_TTL            = 6.0
     local INFLT_ATTR           = "OrbInFlightAt"
     local JOB_ATTR             = "OrbJob"
     local DONE_ATTR            = "OrbDelivered"
 
-    -- state
+    -- ===== State =====
     local CURRENT_RUN_ID = nil
     local running   = false
     local hb        = nil
     local orb       = nil
     local orbPosVec = nil
 
-    local inflight     = {}   -- model -> {snap=..., staged=bool, stagedAt=number}
-    local releaseQueue = {}   -- { {model=m, pos=vec3}, ... }
-    local releaseTick  = 0
+    local inflight     = {}        -- model -> {snap=..., staged=bool, stagedAt=number}
+    local releaseQueue = {}        -- FIFO of models staged at orb
+    local releaserTask = nil
 
-    -- item sets
+    -- ===== Items =====
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
     local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel"}
     local scrapAlso = { Log=true }
-
     local fuelSet = {}; for _,n in ipairs(fuelItems) do fuelSet[n]=true end
     local scrapSet = {}; for _,n in ipairs(junkItems) do scrapSet[n]=true end; for k,_ in pairs(scrapAlso) do scrapSet[k]=true end
 
@@ -159,11 +168,11 @@ return function(C, R, UI)
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         if isWallVariant(m) or isUnderLogWall(m) then return false end
         local nm = m.Name or ""
-        if nm == "Chair" then return false end
+        if nm == "Chair" then return false end -- exclude chair
         return set[nm] == true
     end
 
-    -- orb
+    -- ===== Orb =====
     local function spawnOrbAt(pos, color)
         if orb then pcall(function() orb:Destroy() end) end
         local o = Instance.new("Part")
@@ -179,7 +188,6 @@ return function(C, R, UI)
         orbPosVec=nil
     end
 
-    -- positions
     local function campfireOrbPos()
         local fire = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("MainFire")
         if not fire then return nil end
@@ -193,7 +201,7 @@ return function(C, R, UI)
         return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
     end
 
-    -- spread around orb
+    -- ===== Spread around orb =====
     local function hash01(s)
         local h = 131071
         for i=1,#s do h=(h*131 + string.byte(s,i))%1000003 end
@@ -207,7 +215,7 @@ return function(C, R, UI)
         return Vector3.new(math.cos(ang)*rad, 0, math.sin(ang)*rad)
     end
 
-    -- candidate search
+    -- ===== Candidate search =====
     local function nearbyCandidates(center, radius, jobId, set)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -231,7 +239,7 @@ return function(C, R, UI)
         return out
     end
 
-    -- stage at orb (teleport), release later
+    -- ===== Staging and release =====
     local function stageAtOrb(m, snap, tgt)
         setAnchored(m, true)
         for _,p in ipairs(allParts(m)) do
@@ -240,21 +248,16 @@ return function(C, R, UI)
             p.AssemblyAngularVelocity = Vector3.new()
         end
         setPivot(m, CFrame.new(tgt))
-        local rec = inflight[m] or {}
-        rec.snap = snap; rec.staged = true; rec.stagedAt = os.clock()
-        inflight[m] = rec
-        table.insert(releaseQueue, {model=m, pos=tgt})
+        inflight[m] = { snap = snap, staged = true, stagedAt = os.clock() }
+        table.insert(releaseQueue, m)
     end
 
     local function releaseOne()
-        local rec = table.remove(releaseQueue, 1)
-        if not rec then return end
-        local m = rec.model
+        local m = table.remove(releaseQueue, 1)
         if not (m and m.Parent) then return end
         local info = inflight[m]
         local snap = info and info.snap or snapshotCollide(m)
 
-        -- restore natural physics
         setAnchored(m, false)
         zeroAssembly(m)
         setCollideFromSnapshot(snap)
@@ -264,7 +267,6 @@ return function(C, R, UI)
             pcall(function() p:SetNetworkOwner(nil) end)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
-
         pcall(function()
             m:SetAttribute(INFLT_ATTR, nil)
             m:SetAttribute(JOB_ATTR, nil)
@@ -273,7 +275,21 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
-    -- one-item pipeline: teleport to orb then queue single release
+    -- Dedicated releaser loop (prevents “one staged forever”)
+    local function startReleaser()
+        if releaserTask then return end
+        releaserTask = task.spawn(function()
+            while running do
+                if #releaseQueue > 0 then
+                    releaseOne()
+                end
+                task.wait(RELEASE_INTERVAL)
+            end
+            releaserTask = nil
+        end)
+    end
+
+    -- Teleport-to-orb pipeline
     local function startConveyor(m, jobId)
         if not (running and m and m.Parent and orbPosVec) then return end
         local mp = mainPart(m); if not mp then return end
@@ -287,30 +303,22 @@ return function(C, R, UI)
         local snap = setNoCollide(m)
         zeroAssembly(m)
         setAnchored(m, true)
-        if startDrag then pcall(function() startDrag:FireServer(m) end) end
 
+        local started = safeStartDrag(m)
         stageAtOrb(m, snap, tgt)
-        if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
+        if started then finallyStopDrag(m) end
     end
 
-    local activeCount = 0
     local CURRENT_TARGET_SET = nil
-
     local function wave(center)
         local jobId = tostring(os.clock())
         local list = nearbyCandidates(center, PICK_RADIUS, jobId, CURRENT_TARGET_SET or {})
         for i=1,#list do
             if not running then break end
-            -- strictly one staged at a time
             while running and (#releaseQueue >= MAX_STAGED) do Run.Heartbeat:Wait() end
-            while running and activeCount >= 1 do Run.Heartbeat:Wait() end -- one in-flight op at a time
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                activeCount += 1
-                task.spawn(function()
-                    startConveyor(m, jobId)
-                    activeCount = math.max(0, activeCount-1)
-                end)
+                task.spawn(function() startConveyor(m, jobId) end)
             end
         end
     end
@@ -320,8 +328,8 @@ return function(C, R, UI)
         for m,info in pairs(inflight) do
             if info and info.staged and (now - (info.stagedAt or now)) >= STAGE_TIMEOUT_S then
                 local queued=false
-                for _,q in ipairs(releaseQueue) do if q.model==m then queued=true; break end end
-                if not queued then table.insert(releaseQueue, {model=m, pos=mainPart(m) and mainPart(m).Position or orbPosVec}) end
+                for _,q in ipairs(releaseQueue) do if q==m then queued=true; break end end
+                if not queued then table.insert(releaseQueue, m) end
             end
         end
     end
@@ -330,10 +338,8 @@ return function(C, R, UI)
         running = false
         if hb then hb:Disconnect(); hb=nil end
         STOP_BTN.Visible = false
-
-        -- release anything staged so they are not left frozen
-        for i=#releaseQueue,1,-1 do releaseOne() end
-
+        -- drain queue so nothing stays frozen
+        while #releaseQueue > 0 do releaseOne() end
         for m,rec in pairs(inflight) do
             if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
             setAnchored(m, false)
@@ -341,15 +347,27 @@ return function(C, R, UI)
             zeroAssembly(m)
             inflight[m] = nil
         end
-        activeCount = 0
         destroyOrb()
     end
     STOP_BTN.MouseButton1Click:Connect(stopAll)
 
-    -- start
+    -- ===== Start =====
+    local function campfireOrbPos()
+        local fire = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("MainFire")
+        if not fire then return nil end
+        local cf = (mainPart(fire) and mainPart(fire).CFrame) or fire:GetPivot()
+        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+    end
+    local function scrapperOrbPos()
+        local scr = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("Scrapper")
+        if not scr then return nil end
+        local cf = (mainPart(scr) and mainPart(scr).CFrame) or scr:GetPivot()
+        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+    end
+
     local function startAll(mode)
         if running then return end
-        if not hrp then return end
+        if not hrp() then return end
 
         local pos, set, color
         if mode == "fuel" then
@@ -370,20 +388,13 @@ return function(C, R, UI)
         running = true
         STOP_BTN.Visible = true
         releaseQueue = {}
-        releaseTick  = os.clock()
         CURRENT_TARGET_SET = set
+        startReleaser()
 
         if hb then hb:Disconnect() end
         hb = Run.Heartbeat:Connect(function()
             if not running then return end
             local root = hrp(); if root then wave(root.Position) end
-
-            -- release exactly one at fixed cadence
-            if #releaseQueue > 0 and (os.clock() - releaseTick) >= RELEASE_INTERVAL then
-                releaseTick = os.clock()
-                releaseOne()
-            end
-
             flushStaleStaged()
         end)
     end
@@ -403,4 +414,15 @@ return function(C, R, UI)
             startAll("scrap")
         end
     })
+
+    Players.LocalPlayer.CharacterAdded:Connect(function()
+        if running and not (orb and orb.Parent) then
+            if CURRENT_TARGET_SET == fuelSet then
+                local p = campfireOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(255,200,50)) end
+            elseif CURRENT_TARGET_SET == scrapSet then
+                local p = scrapperOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(120,255,160)) end
+            end
+            startReleaser()
+        end
+    end)
 end
