@@ -110,7 +110,7 @@ return function(C, R, UI)
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
     local PICK_RADIUS          = 400
-    local ORB_HEIGHT           = 5
+    local ORB_HEIGHT           = 0
     local MAX_CONCURRENT       = 40
     local START_STAGGER        = 0.01
     local STEP_WAIT            = 0.016
