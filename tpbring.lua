@@ -54,7 +54,6 @@ return function(C, R, UI)
         for _,p in ipairs(allParts(m)) do s[p]=p.CanCollide; p.CanCollide=false end
         return s
     end
-    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
 
     local startDrag, stopDrag = nil, nil
     do
@@ -64,73 +63,83 @@ return function(C, R, UI)
             stopDrag  = re:FindFirstChild("StopDraggingItem")
         end
     end
-    local function safeStartDrag(model)
-        if startDrag and model and model.Parent then
-            local ok = pcall(function() startDrag:FireServer(model) end)
-            return ok
-        end
-    end
-    local function finallyStopDrag(model)
-        if not (stopDrag and model and model.Parent) then return end
-        task.defer(function() pcall(function() stopDrag:FireServer(model) end) end)
-        task.delay(0.15, function() pcall(function() stopDrag:FireServer(model) end) end)
-    end
 
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
-        edgeGui = Instance.new("ScreenGui"); edgeGui.Name="EdgeButtons"; edgeGui.ResetOnSpawn=false; edgeGui.Parent=playerGui
+        edgeGui = Instance.new("ScreenGui")
+        edgeGui.Name = "EdgeButtons"
+        edgeGui.ResetOnSpawn = false
+        edgeGui.Parent = playerGui
     end
     local stack = edgeGui:FindFirstChild("EdgeStack")
     if not stack then
-        stack = Instance.new("Frame"); stack.Name="EdgeStack"; stack.AnchorPoint=Vector2.new(1,0)
-        stack.Position = UDim2.new(1,-6,0,6); stack.Size = UDim2.new(0,130,1,-12); stack.BackgroundTransparency=1; stack.Parent=edgeGui
+        stack = Instance.new("Frame")
+        stack.Name = "EdgeStack"
+        stack.AnchorPoint = Vector2.new(1,0)
+        stack.Position = UDim2.new(1,-6,0,6)
+        stack.Size = UDim2.new(0,130,1,-12)
+        stack.BackgroundTransparency = 1
+        stack.Parent = edgeGui
         local list = Instance.new("UIListLayout")
-        list.FillDirection = Enum.FillDirection.Vertical; list.SortOrder = Enum.SortOrder.LayoutOrder
-        list.Padding = UDim.new(0,6); list.HorizontalAlignment = Enum.HorizontalAlignment.Right; list.Parent = stack
+        list.FillDirection = Enum.FillDirection.Vertical
+        list.SortOrder = Enum.SortOrder.LayoutOrder
+        list.Padding = UDim.new(0,6)
+        list.HorizontalAlignment = Enum.HorizontalAlignment.Right
+        list.Parent = stack
     end
     local function makeEdgeBtn(name, label, order)
         local b = stack:FindFirstChild(name)
         if not b then
             b = Instance.new("TextButton")
-            b.Name = name; b.Size = UDim2.new(1,0,0,30); b.Text = label; b.TextSize = 12; b.Font = Enum.Font.GothamBold
-            b.BackgroundColor3 = Color3.fromRGB(30,30,35); b.TextColor3 = Color3.new(1,1,1); b.BorderSizePixel = 0
-            b.Visible=false; b.LayoutOrder = order or 1; b.Parent = stack
+            b.Name = name
+            b.Size = UDim2.new(1,0,0,30)
+            b.Text = label
+            b.TextSize = 12
+            b.Font = Enum.Font.GothamBold
+            b.BackgroundColor3 = Color3.fromRGB(30,30,35)
+            b.TextColor3 = Color3.new(1,1,1)
+            b.BorderSizePixel = 0
+            b.Visible = false
+            b.LayoutOrder = order or 1
+            b.Parent = stack
             local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0,8); corner.Parent = b
         else
-            b.Text = label; b.LayoutOrder = order or b.LayoutOrder; b.Visible=false
+            b.Text = label; b.LayoutOrder = order or b.LayoutOrder; b.Visible = false
         end
         return b
     end
+
     local STOP_BTN = makeEdgeBtn("TPBringStop", "STOP", 50)
 
-    local PICK_RADIUS            = 200
-    local ORB_HEIGHT             = 10
-    local LAND_MIN               = 0.12
-    local LAND_MAX               = 0.28
-    local HOVER_ABOVE_ORB        = 0.9
-    local SCRAP_HOVER            = 1.4
-    local ARRIVE_EPS_H           = 0.7
-    local STAGE_TIMEOUT_S        = 1.25
-    local RELEASE_INTERVAL       = 0.04
-    local MAX_STAGED             = 6
-    local STUCK_TTL              = 6.0
-    local ORB_UNSTICK_RAD        = 2.2
-    local ORB_UNSTICK_HZ         = 12
+    local PICK_RADIUS        = 200
+    local MAX_CONCURRENT     = 40
+    local START_STAGGER      = 0.005
+    local STEP_WAIT          = 0.016
+
+    local ORB_HEIGHT         = 10
+    local HOVER_ABOVE_ORB    = 1.1
+
+    local RELEASE_RATE_HZ    = 30
+    local SWEEP_RADIUS       = 0.70
+    local SWEEP_START_DEG    = -60
+    local SWEEP_END_DEG      =  60
+    local SWEEP_STEP_DEG     =  6
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
     local DONE_ATTR  = "OrbDelivered"
 
     local CURRENT_RUN_ID = nil
-    local running   = false
-    local hb        = nil
-    local orb       = nil
-    local orbPosVec = nil
-    local inflight  = {}
-    local releaseQueue = {}
-    local releaserTask = nil
-    local CURRENT_TARGET_SET = nil
+    local running    = false
+    local hb         = nil
+    local orb        = nil
+    local orbPosVec  = nil
+
+    local inflight   = {}
+    local queue      = {}
+    local releaseAcc = 0
+    local sweepDeg   = SWEEP_START_DEG
 
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
@@ -139,8 +148,11 @@ return function(C, R, UI)
     local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel"}
     local scrapAlso = { Log=true }
 
-    local fuelSet = {}; for _,n in ipairs(fuelItems) do fuelSet[n]=true end
-    local scrapSet = {}; for _,n in ipairs(junkItems) do scrapSet[n]=true end; for k,_ in pairs(scrapAlso) do scrapSet[k]=true end
+    local fuelSet = {}
+    for _,n in ipairs(fuelItems) do fuelSet[n] = true end
+    local scrapSet = {}
+    for _,n in ipairs(junkItems) do scrapSet[n] = true end
+    for k,_ in pairs(scrapAlso) do scrapSet[k] = true end
 
     local function isWallVariant(m)
         if not (m and m:IsA("Model")) then return false end
@@ -158,6 +170,28 @@ return function(C, R, UI)
         end
         return false
     end
+    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
+
+    local function spawnOrbAt(pos, color)
+        if orb then pcall(function() orb:Destroy() end) end
+        local o = Instance.new("Part")
+        o.Name = "tp_orb_fixed"
+        o.Shape = Enum.PartType.Ball
+        o.Size = Vector3.new(1.5,1.5,1.5)
+        o.Material = Enum.Material.Neon
+        o.Color = color or Color3.fromRGB(80,180,255)
+        o.Anchored, o.CanCollide, o.CanTouch, o.CanQuery = true,false,false,false
+        o.CFrame = CFrame.new(pos + Vector3.new(0, ORB_HEIGHT, 0))
+        o.Parent = WS
+        local l = Instance.new("PointLight"); l.Range = 16; l.Brightness = 2.5; l.Parent = o
+        orb = o
+        orbPosVec = orb.Position
+    end
+    local function destroyOrb()
+        if orb then pcall(function() orb:Destroy() end) orb=nil end
+        orbPosVec = nil
+    end
+
     local function wantedBySet(m, set)
         if not (m and m:IsA("Model") and m.Parent) then return false end
         local itemsFolder = itemsRootOrNil()
@@ -167,48 +201,6 @@ return function(C, R, UI)
         if nm == "Chair" then return false end
         return set[nm] == true
     end
-
-    local function spawnOrbAt(pos, color)
-        if orb then pcall(function() orb:Destroy() end) end
-        local o = Instance.new("Part")
-        o.Name="tp_orb_fixed"; o.Shape=Enum.PartType.Ball; o.Size=Vector3.new(1.5,1.5,1.5)
-        o.Material=Enum.Material.Neon; o.Color = color or Color3.fromRGB(80,180,255)
-        o.Anchored=true; o.CanCollide=false; o.CanTouch=false; o.CanQuery=false
-        o.CFrame = CFrame.new(pos + Vector3.new(0, ORB_HEIGHT, 0)); o.Parent = WS
-        local l = Instance.new("PointLight"); l.Range=16; l.Brightness=2.5; l.Parent=o
-        orb=o; orbPosVec=o.Position
-    end
-    local function destroyOrb()
-        if orb then pcall(function() orb:Destroy() end) orb=nil end
-        orbPosVec=nil
-    end
-
-    local function campfireOrbPos()
-        local fire = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("MainFire")
-        if not fire then return nil end
-        local cf = (mainPart(fire) and mainPart(fire).CFrame) or fire:GetPivot()
-        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
-    end
-    local function scrapperOrbPos()
-        local scr = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("Scrapper")
-        if not scr then return nil end
-        local cf = (mainPart(scr) and mainPart(scr).CFrame) or scr:GetPivot()
-        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 14, 0))
-    end
-
-    local function hash01(s)
-        local h = 131071
-        for i=1,#s do h=(h*131 + string.byte(s,i))%1000003 end
-        return (h%100000)/100000
-    end
-    local function landingOffset(m, jobId)
-        local key = (typeof(m.GetDebugId)=="function" and m:GetDebugId() or (m.Name or "")) .. tostring(jobId)
-        local r1 = hash01(key.."a"); local r2 = hash01(key.."b")
-        local ang = r1 * math.pi * 2
-        local rad = LAND_MIN + (LAND_MAX - LAND_MIN) * r2
-        return Vector3.new(math.cos(ang)*rad, 0, math.sin(ang)*rad)
-    end
-
     local function nearbyCandidates(center, radius, jobId, set)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -222,7 +214,7 @@ return function(C, R, UI)
                 if done ~= CURRENT_RUN_ID then
                     local tIn = m:GetAttribute(INFLT_ATTR)
                     local jIn = m:GetAttribute(JOB_ATTR)
-                    if tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < STUCK_TTL then
+                    if tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < 6.0 then
                     else
                         uniq[m]=true; out[#out+1]=m
                     end
@@ -232,25 +224,39 @@ return function(C, R, UI)
         return out
     end
 
-    local function stageAtOrb(m, snap, tgt)
+    local function queueModel(m, jobId)
+        if not (m and m.Parent) then return end
+        pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
+        pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
+        local snap = setNoCollide(m)
         setAnchored(m, true)
-        for _,p in ipairs(allParts(m)) do
-            p.CanCollide = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-        end
-        setPivot(m, CFrame.new(tgt))
-        inflight[m] = { snap = snap, staged = true, stagedAt = os.clock() }
-        table.insert(releaseQueue, m)
+        zeroAssembly(m)
+        if startDrag then pcall(function() startDrag:FireServer(m) end) end
+        inflight[m] = { snap = snap, t=os.clock() }
+        queue[#queue+1] = m
     end
 
-    local function releaseOne()
-        local m = table.remove(releaseQueue, 1)
-        if not (m and m.Parent) then return end
+    local function nextRimPoint()
+        local rad = math.rad(sweepDeg)
+        local p = Vector3.new(
+            orbPosVec.X + math.cos(rad) * SWEEP_RADIUS,
+            orbPosVec.Y + HOVER_ABOVE_ORB,
+            orbPosVec.Z + math.sin(rad) * SWEEP_RADIUS
+        )
+        sweepDeg = sweepDeg + SWEEP_STEP_DEG
+        if sweepDeg > SWEEP_END_DEG then sweepDeg = SWEEP_START_DEG end
+        return p
+    end
+
+    local function releaseOne(m)
+        if not (m and m.Parent and orbPosVec) then inflight[m]=nil; return end
         local info = inflight[m]
         local snap = info and info.snap or snapshotCollide(m)
-        setCollideFromSnapshot(snap)
+        local rim = nextRimPoint()
+        setAnchored(m, true)
+        setPivot(m, CFrame.new(rim))
         setAnchored(m, false)
+        setCollideFromSnapshot(snap)
         zeroAssembly(m)
         for _,p in ipairs(allParts(m)) do
             p.AssemblyAngularVelocity = Vector3.new()
@@ -258,6 +264,7 @@ return function(C, R, UI)
             pcall(function() p:SetNetworkOwner(nil) end)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
+        if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
         pcall(function()
             m:SetAttribute(INFLT_ATTR, nil)
             m:SetAttribute(JOB_ATTR, nil)
@@ -266,97 +273,35 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
-    local function startReleaser()
-        if releaserTask then return end
-        releaserTask = task.spawn(function()
-            while running do
-                local ok = pcall(function()
-                    for i = 1, math.min(3, #releaseQueue) do
-                        releaseOne()
-                    end
-                end)
-                if not ok then
-                    releaserTask = nil
-                    task.wait(0.05)
-                    startReleaser()
-                    return
-                end
-                task.wait(RELEASE_INTERVAL)
-            end
-            releaserTask = nil
-        end)
-    end
-
-    local function startConveyor(m, jobId)
-        if not (running and m and m.Parent and orbPosVec) then return end
-        local mp = mainPart(m); if not mp then return end
-        pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
-        pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
-        local off = landingOffset(m, jobId)
-        local hover = (CURRENT_TARGET_SET == scrapSet) and SCRAP_HOVER or HOVER_ABOVE_ORB
-        local tgt = Vector3.new(orbPosVec.X + off.X, orbPosVec.Y + hover, orbPosVec.Z + off.Z)
-        local snap = setNoCollide(m)
-        zeroAssembly(m)
-        setAnchored(m, true)
-        local started = safeStartDrag(m)
-        stageAtOrb(m, snap, tgt)
-        if started then finallyStopDrag(m) end
-    end
+    local activeCount = 0
+    local CURRENT_TARGET_SET = nil
 
     local function wave(center)
         local jobId = tostring(os.clock())
         local list = nearbyCandidates(center, PICK_RADIUS, jobId, CURRENT_TARGET_SET or {})
         for i=1,#list do
             if not running then break end
-            while running and (#releaseQueue >= MAX_STAGED) do Run.Heartbeat:Wait() end
+            while running and activeCount >= MAX_CONCURRENT do Run.Heartbeat:Wait() end
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                task.spawn(function() startConveyor(m, jobId) end)
+                activeCount += 1
+                task.spawn(function()
+                    queueModel(m, jobId)
+                    task.delay(6, function() activeCount = math.max(0, activeCount-1) end)
+                end)
+                task.wait(START_STAGGER)
             end
         end
-    end
-
-    local function flushStaleStaged()
-        local now = os.clock()
-        for m,info in pairs(inflight) do
-            if info and info.staged and (now - (info.stagedAt or now)) >= STAGE_TIMEOUT_S then
-                local found=false
-                for _,q in ipairs(releaseQueue) do if q==m then found=true break end end
-                if not found then table.insert(releaseQueue, 1, m) end
-            end
-        end
-    end
-
-    do
-        local acc = 0
-        Run.Heartbeat:Connect(function(dt)
-            if not (running and orbPosVec) then return end
-            acc = acc + dt
-            if acc < (1/ORB_UNSTICK_HZ) then return end
-            acc = 0
-            local items = itemsRootOrNil(); if not items then return end
-            for _,m in ipairs(items:GetChildren()) do
-                if not m:IsA("Model") then continue end
-                local mp = mainPart(m); if not mp then continue end
-                if (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
-                    for _,p in ipairs(allParts(m)) do
-                        p.Anchored = false
-                        p.CanCollide = true
-                        p.AssemblyAngularVelocity = Vector3.new()
-                        p.AssemblyLinearVelocity  = Vector3.new(0, -8, 0)
-                        pcall(function() p:SetNetworkOwner(nil) end)
-                        pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-                    end
-                end
-            end
-        end)
     end
 
     local function stopAll()
         running = false
         if hb then hb:Disconnect(); hb=nil end
         STOP_BTN.Visible = false
-        while #releaseQueue > 0 do releaseOne() end
+        while #queue > 0 do
+            local m = table.remove(queue, 1)
+            if m and m.Parent then releaseOne(m) end
+        end
         for m,rec in pairs(inflight) do
             if stopDrag then pcall(function() stopDrag:FireServer(m) end) end
             setAnchored(m, false)
@@ -364,9 +309,24 @@ return function(C, R, UI)
             zeroAssembly(m)
             inflight[m] = nil
         end
+        activeCount = 0
         destroyOrb()
     end
+
     STOP_BTN.MouseButton1Click:Connect(stopAll)
+
+    local function campfireOrbPos()
+        local fire = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("MainFire")
+        if not fire then return nil end
+        local cf = (mainPart(fire) and mainPart(fire).CFrame) or fire:GetPivot()
+        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+    end
+    local function scrapperOrbPos()
+        local scr = WS:FindFirstChild("Map") and WS.Map:FindFirstChild("Campground") and WS.Map.Campground:FindFirstChild("Scrapper")
+        if not scr then return nil end
+        local cf = (mainPart(scr) and mainPart(scr).CFrame) or scr:GetPivot()
+        return (cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0))
+    end
 
     local function startAll(mode)
         if running then return end
@@ -384,23 +344,45 @@ return function(C, R, UI)
             return
         end
         if not pos then return end
+
         CURRENT_RUN_ID = tostring(os.clock())
         spawnOrbAt(pos, color)
         running = true
         STOP_BTN.Visible = true
-        releaseQueue = {}
+        queue = {}
+        releaseAcc = 0
+        sweepDeg = SWEEP_START_DEG
         CURRENT_TARGET_SET = set
-        startReleaser()
+
         if hb then hb:Disconnect() end
-        hb = Run.Heartbeat:Connect(function()
+        hb = Run.Heartbeat:Connect(function(dt)
             if not running then return end
             local root = hrp(); if root then wave(root.Position) end
-            flushStaleStaged()
+            releaseAcc = releaseAcc + dt
+            local interval = 1 / RELEASE_RATE_HZ
+            while releaseAcc >= interval do
+                releaseAcc = releaseAcc - interval
+                local m = table.remove(queue, 1)
+                if m then releaseOne(m) else break end
+            end
+            task.wait(STEP_WAIT)
         end)
     end
 
-    tab:Button({ Title = "Send Fuel",  Callback = function() if running then return end startAll("fuel")  end })
-    tab:Button({ Title = "Send Scrap", Callback = function() if running then return end startAll("scrap") end })
+    tab:Button({
+        Title = "Send Fuel",
+        Callback = function()
+            if running then return end
+            startAll("fuel")
+        end
+    })
+    tab:Button({
+        Title = "Send Scrap",
+        Callback = function()
+            if running then return end
+            startAll("scrap")
+        end
+    })
 
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if running and not (orb and orb.Parent) then
@@ -409,7 +391,6 @@ return function(C, R, UI)
             elseif CURRENT_TARGET_SET == scrapSet then
                 local p = scrapperOrbPos(); if p then spawnOrbAt(p, Color3.fromRGB(120,255,160)) end
             end
-            startReleaser()
         end
     end)
 end
