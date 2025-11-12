@@ -17,9 +17,9 @@ return function(C, R, UI)
     local SEARCH_RADIUS      = 200
     local TICK               = 0.02
 
-    local CAMPFIRE_AVOID_RADIUS = 35
+    local CAMPFIRE_AVOID_RADIUS = 30
     local SCRAPPER_AVOID_RADIUS = 35
-    local CAMPFIRE_AVOID_UP     = 8
+    local CAMPFIRE_AVOID_UP     = 20
     local CAMPFIRE_REEVAL_S     = 0.2
 
     local BULL_MAX_LOGS   = 120
