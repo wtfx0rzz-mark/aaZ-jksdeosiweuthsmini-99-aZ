@@ -13,29 +13,38 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
-    local MAX_LOGS           = 50
-    local SEARCH_RADIUS      = 200
-    local TICK               = 0.02
+    ----------------------------------------------------------------
+    -- Tunables
+    ----------------------------------------------------------------
+    local MAX_LOGS               = 50
+    local SEARCH_RADIUS          = 200
+    local TICK                   = 0.02
 
-    local CAMPFIRE_AVOID_RADIUS = 30
-    local SCRAPPER_AVOID_RADIUS = 35
-    local CAMPFIRE_AVOID_UP     = 20
-    local CAMPFIRE_REEVAL_S     = 0.2
+    -- Chaotic/avoidance
+    local CAMPFIRE_AVOID_RADIUS  = 35
+    local SCRAPPER_AVOID_RADIUS  = 35
+    local AVOID_LIFT             = 8
+    local AVOID_REEVAL_S         = 0.2
 
+    -- Bulldozer
     local BULL_MAX_LOGS   = 120
     local BULL_THICKNESS  = 3
     local BULL_PUSH_STUDS = 10
     local BULL_GAP_STUDS  = 2.0
 
-    local BOX_RADIUS      = 20
-    local BOX_TOP_ROWS    = 2
+    -- Box trap
+    local BOX_RADIUS         = 20
+    local BOX_TOP_ROWS       = 2
+    local BOX_LOCK_IN_PLACE  = true   -- true = lock at snapshot, refresh every BOX_REFRESH_S; false = follow
+    local BOX_REFRESH_S      = 5.0    -- re-fit cadence when locked
+    local BOX_MAX_PER_TARGET = 16     -- pillar + roof budget per target
+    ----------------------------------------------------------------
 
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
         if obj:IsA("Model") then
-            if obj.PrimaryPart then return obj.PrimaryPart end
-            return obj:FindFirstChildWhichIsA("BasePart")
+            return obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
         end
         return nil
     end
@@ -44,7 +53,7 @@ return function(C, R, UI)
         local ch = p.Character or p.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
-    local function getAllParts(target)
+    local function allParts(target)
         local t = {}
         if not target then return t end
         if target:IsA("BasePart") then
@@ -57,7 +66,7 @@ return function(C, R, UI)
         return t
     end
     local function setCollide(model, on, snapshot)
-        local parts = getAllParts(model)
+        local parts = allParts(model)
         if on and snapshot then
             for part,can in pairs(snapshot) do
                 if part and part.Parent then part.CanCollide = can end
@@ -65,11 +74,26 @@ return function(C, R, UI)
             return
         end
         local snap = {}
-        for _,p in ipairs(parts) do snap[p]=p.CanCollide; p.CanCollide=false end
+        for _,p in ipairs(parts) do
+            snap[p] = p.CanCollide
+            p.CanCollide = false
+        end
         return snap
     end
+    local function hardEnableCollision(model)
+        for _,p in ipairs(allParts(model)) do
+            p.Anchored = false
+            p.CanCollide = true
+            p.CanQuery  = true
+            p.CanTouch  = true
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+            pcall(function() p:SetNetworkOwner(nil) end)
+            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+        end
+    end
     local function zeroAssembly(model)
-        for _,p in ipairs(getAllParts(model)) do
+        for _,p in ipairs(allParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
             p.Anchored = false
@@ -84,24 +108,27 @@ return function(C, R, UI)
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
         return nil
     end
-    local function resolveRemotes()
-        return {
-            StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem"),
-            StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
-        }
-    end
-    local rcache = resolveRemotes()
-    local function safeStartDrag(r, model)
-        if r and r.StartDrag and model and model.Parent then pcall(function() r.StartDrag:FireServer(model) end); return true end
+    local rcache = {
+        StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem"),
+        StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
+    }
+    local function safeStartDrag(model)
+        if rcache.StartDrag and model and model.Parent then
+            pcall(function() rcache.StartDrag:FireServer(model) end)
+            return true
+        end
         return false
     end
-    local function safeStopDrag(r, model)
-        if r and r.StopDrag and model and model.Parent then pcall(function() r.StopDrag:FireServer(model) end); return true end
+    local function safeStopDrag(model)
+        if rcache.StopDrag and model and model.Parent then
+            pcall(function() rcache.StopDrag:FireServer(model) end)
+            return true
+        end
         return false
     end
-    local function finallyStopDrag(r, model)
-        task.delay(0.05, function() pcall(safeStopDrag, r, model) end)
-        task.delay(0.20, function() pcall(safeStopDrag, r, model) end)
+    local function finallyStopDrag(model)
+        task.delay(0.05, function() pcall(safeStopDrag, model) end)
+        task.delay(0.20, function() pcall(safeStopDrag, model) end)
     end
 
     local function logsNearMe(maxCount, exclude)
@@ -163,27 +190,41 @@ return function(C, R, UI)
         return nil
     end
 
-    local running = false
-    local activeJobs = {}
-    local modelToTarget = setmetatable({}, {__mode="k"})
-    local assignedSet = setmetatable({}, {__mode="k"})
-
-    local lastAvoidCheck, campModel, campCenter = 0, nil, nil
-    local scrapModel, scrapCenter = nil, nil
-
+    local lastAvoidCheck, campCenter, scrapCenter = 0, nil, nil
     local function refreshAvoidCenters()
-        campModel = resolveCampfireModel()
-        local c = fireCenterPart(campModel)
-        campCenter = c and (c.Position or (campModel:GetPivot().Position)) or nil
-        scrapModel = resolveScrapperModel()
-        local s = fireCenterPart(scrapModel) or (scrapModel and scrapModel.PrimaryPart)
-        scrapCenter = s and (s.Position or (scrapModel:GetPivot().Position)) or nil
+        local camp = resolveCampfireModel()
+        local c = fireCenterPart(camp)
+        campCenter = c and (c.Position or (camp:GetPivot().Position)) or nil
+        local scr  = resolveScrapperModel()
+        local s = fireCenterPart(scr) or (scr and scr.PrimaryPart)
+        scrapCenter = s and (s.Position or (scr:GetPivot().Position)) or nil
+    end
+    local function avoidLift(basePos)
+        local now = os.clock()
+        if now - (lastAvoidCheck or 0) >= AVOID_REEVAL_S then
+            refreshAvoidCenters()
+            lastAvoidCheck = now
+        end
+        local dCamp = campCenter and (basePos - campCenter).Magnitude or math.huge
+        local dScr  = scrapCenter and (basePos - scrapCenter).Magnitude or math.huge
+        if dCamp <= CAMPFIRE_AVOID_RADIUS or dScr <= SCRAPPER_AVOID_RADIUS then
+            return AVOID_LIFT
+        end
+        return 0
     end
 
+    ----------------------------------------------------------------
+    -- Chaotic float (unchanged behavior; used as reference)
+    ----------------------------------------------------------------
+    local chaoticRunning = false
+    local chaoticActiveJobs = {}
+    local chaoticAssigned = setmetatable({}, {__mode="k"})
+    local chaoticTargetOf = setmetatable({}, {__mode="k"})
+
     local function floatAroundTarget(model, targetPlayer, seed)
-        modelToTarget[model] = targetPlayer
-        assignedSet[model] = true
-        local started = safeStartDrag(rcache, model)
+        chaoticTargetOf[model] = targetPlayer
+        chaoticAssigned[model] = true
+        local started = safeStartDrag(model)
         task.wait(0.05)
         local snap = setCollide(model, false)
         zeroAssembly(model)
@@ -199,222 +240,73 @@ return function(C, R, UI)
             return Vector3.new(x, y, z)
         end
         local slot, reslotAt = nil, 0
-        local avoidUp, avoidUntil = 0, 0
 
-        activeJobs[model] = true
-        while running and activeJobs[model] do
-            local root = hrp(modelToTarget[model])
+        chaoticActiveJobs[model] = true
+        while chaoticRunning and chaoticActiveJobs[model] do
+            local root = hrp(chaoticTargetOf[model])
             if not root then break end
 
-            local now = os.clock()
-            if now - (lastAvoidCheck or 0) >= CAMPFIRE_REEVAL_S then
-                refreshAvoidCenters()
-                lastAvoidCheck = now
-            end
-            local dCamp = campCenter and (root.Position - campCenter).Magnitude or math.huge
-            local dScr  = scrapCenter and (root.Position - scrapCenter).Magnitude or math.huge
-            if dCamp <= CAMPFIRE_AVOID_RADIUS or dScr <= SCRAPPER_AVOID_RADIUS then
-                avoidUp = CAMPFIRE_AVOID_UP
-                avoidUntil = now + 0.35
-            elseif now >= avoidUntil then
-                avoidUp = 0
-            end
-
-            if (not slot) or now >= reslotAt then
+            if (not slot) or os.clock() >= reslotAt then
                 slot = pickOffset()
-                reslotAt = now + rng:NextNumber(0.45, 1.20)
+                reslotAt = os.clock() + rng:NextNumber(0.45, 1.20)
             end
-            local jx = math.sin(now* (rng:NextNumber(1.2,2.4))) * 1.4 + math.cos(now*(rng:NextNumber(2.0,3.6))) * 0.9
-            local jz = math.cos(now* (rng:NextNumber(1.0,2.0))) * 1.4 + math.sin(now*(rng:NextNumber(2.0,4.0))) * 0.9
-            local jy = math.sin(now* (rng:NextNumber(1.0,2.0))) * 0.9 + math.cos(now*(rng:NextNumber(2.0,4.0))) * 0.6
-            local off = slot + Vector3.new(jx, jy + avoidUp, jz)
             local base = root.Position
-            local pos  = base + off
+            local lift = avoidLift(base)
+            local noise = Vector3.new(
+                math.sin(os.clock()*1.7 + seed)*1.3,
+                math.cos(os.clock()*2.1 + seed)*0.8,
+                math.cos(os.clock()*1.3 + seed*1.9)*1.1
+            )
+            local pos  = base + slot + noise + Vector3.new(0, lift, 0)
             local look = (base - pos).Unit
             setPivot(model, CFrame.new(pos, pos + look))
-            for _,p in ipairs(getAllParts(model)) do
-                p.AssemblyLinearVelocity  = Vector3.new()
-                p.AssemblyAngularVelocity = Vector3.new()
-                p.Anchored = false
-                p.CanCollide = true
-            end
+            hardEnableCollision(model)
             task.wait(TICK)
         end
         setCollide(model, true, snap)
-        if started then finallyStopDrag(rcache, model) end
-        activeJobs[model] = nil
-        assignedSet[model] = nil
-        modelToTarget[model] = nil
+        if started then finallyStopDrag(model) end
+        chaoticActiveJobs[model] = nil
+        chaoticAssigned[model] = nil
+        chaoticTargetOf[model] = nil
     end
 
-    local function assignAndStart(models, targets, startIndex)
-        if #targets == 0 then return startIndex end
-        local idx = startIndex or 1
+    local function logsNearMeExcluding(excl, n)
+        return logsNearMe(n or MAX_LOGS, excl)
+    end
+    local function assignChaotic(models, targets)
+        if #targets == 0 then return end
+        local idx = 1
         for i,mdl in ipairs(models) do
-            if not assignedSet[mdl] then
+            if not chaoticAssigned[mdl] then
+                chaoticAssigned[mdl] = true
                 local tgt = targets[idx]
-                assignedSet[mdl] = true
-                modelToTarget[mdl] = tgt
+                chaoticTargetOf[mdl] = tgt
                 task.spawn(function() floatAroundTarget(mdl, tgt, i*0.73 + idx*1.11) end)
                 idx += 1
                 if idx > #targets then idx = 1 end
             end
         end
-        return idx
     end
-
-    local function selectedPlayersList(selectedSet)
-        local out = {}
-        for userIdStr,_ in pairs(selectedSet or {}) do
-            local uid = tonumber(userIdStr)
-            if uid then
-                for _,p in ipairs(Players:GetPlayers()) do
-                    if p.UserId == uid and p ~= lp then out[#out+1] = p; break end
-                end
+    local function chaoticSupervisor(targets)
+        while chaoticRunning do
+            for m,_ in pairs(chaoticAssigned) do
+                if (not m) or (not m.Parent) or (not chaoticActiveJobs[m]) then chaoticAssigned[m] = nil end
             end
-        end
-        return out
-    end
-    local function playerChoices()
-        local vals = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then vals[#vals+1] = ("%s#%d"):format(p.Name, p.UserId) end
-        end
-        table.sort(vals)
-        return vals
-    end
-    local function parseSelection(choice)
-        local set = {}
-        if type(choice) == "table" then
-            for _,v in ipairs(choice) do local uid = tonumber((tostring(v):match("#(%d+)$") or "")); if uid then set[tostring(uid)] = true end end
-        else
-            local uid = tonumber((tostring(choice or ""):match("#(%d+)$") or "")); if uid then set[tostring(uid)] = true end
-        end
-        return set
-    end
-
-    local function supervisor(targets)
-        local rr = 1
-        while running do
-            for m,_ in pairs(assignedSet) do
-                if (not m) or (not m.Parent) or (not activeJobs[m]) then assignedSet[m] = nil end
-            end
-            local cur = 0; for _ in pairs(activeJobs) do cur+=1 end
+            local cur = 0; for _ in pairs(chaoticActiveJobs) do cur+=1 end
             local need = math.max(0, math.min(MAX_LOGS, #targets * math.ceil(MAX_LOGS / math.max(1,#targets))) - cur)
             if need > 0 then
                 local exclude = {}
-                for m,_ in pairs(assignedSet) do exclude[m] = true end
-                local pool = logsNearMe(need*2, exclude)
-                if #pool > 0 then rr = assignAndStart(pool, targets, rr) end
+                for m,_ in pairs(chaoticAssigned) do exclude[m] = true end
+                local pool = logsNearMeExcluding(exclude, need*2)
+                if #pool > 0 then assignChaotic(pool, targets) end
             end
             Run.Heartbeat:Wait()
         end
     end
 
-    local function startFloat(initialLogs, targets)
-        if #targets == 0 then return end
-        running = true
-        activeJobs = {}
-        assignedSet = setmetatable({}, {__mode="k"})
-        modelToTarget = setmetatable({}, {__mode="k"})
-        refreshAvoidCenters()
-        assignAndStart(initialLogs, targets, 1)
-        task.spawn(function() supervisor(targets) end)
-    end
-
-    local function stopAll()
-        running = false
-        for m,_ in pairs(activeJobs) do
-            if m and m.Parent then
-                for _,p in ipairs(getAllParts(m)) do
-                    p.Anchored = false
-                    p.CanCollide = true
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
-                    pcall(function() p:SetNetworkOwner(nil) end)
-                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-                end
-            end
-            activeJobs[m] = nil
-            assignedSet[m] = nil
-            modelToTarget[m] = nil
-        end
-    end
-
-    tab:Section({ Title = "Troll: Chaotic Log Smog" })
-    local selectedPlayers = {}
-    local playerDD = tab:Dropdown({
-        Title = "Players",
-        Values = playerChoices(),
-        Multi = true,
-        AllowNone = true,
-        Callback = function(choice) selectedPlayers = parseSelection(choice) end
-    })
-    tab:Button({ Title = "Refresh Player List", Callback = function()
-        local vals = playerChoices()
-        if playerDD and playerDD.SetValues then playerDD:SetValues(vals) end
-    end })
-    tab:Button({ Title = "Start", Callback = function()
-        stopAll()
-        local targets = selectedPlayersList(selectedPlayers)
-        if #targets == 0 then return end
-        local logs = logsNearMe(MAX_LOGS)
-        if #logs == 0 then return end
-        startFloat(logs, targets)
-    end })
-    tab:Button({ Title = "Stop", Callback = function() stopAll() end })
-
-    local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
-    local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
-    if not edgeGui then
-        edgeGui = Instance.new("ScreenGui")
-        edgeGui.Name = "EdgeButtons"
-        edgeGui.ResetOnSpawn = false
-        pcall(function() edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling end)
-        edgeGui.Parent = playerGui
-    end
-    local stack = edgeGui:FindFirstChild("EdgeStack")
-    if not stack then
-        stack = Instance.new("Frame")
-        stack.Name = "EdgeStack"
-        stack.AnchorPoint = Vector2.new(1, 0)
-        stack.Position = UDim2.new(1, -6, 0, 6)
-        stack.Size = UDim2.new(0, 130, 1, -12)
-        stack.BackgroundTransparency = 1
-        stack.BorderSizePixel = 0
-        stack.Parent = edgeGui
-        local list = Instance.new("UIListLayout")
-        list.Name = "VList"
-        list.FillDirection = Enum.FillDirection.Vertical
-        list.SortOrder = Enum.SortOrder.LayoutOrder
-        list.Padding = UDim.new(0, 6)
-        list.HorizontalAlignment = Enum.HorizontalAlignment.Right
-        list.Parent = stack
-    end
-    local function makeEdgeBtn(name, label, order)
-        local b = stack:FindFirstChild(name)
-        if not b then
-            b = Instance.new("TextButton")
-            b.Name = name
-            b.Size = UDim2.new(1, 0, 0, 30)
-            b.Text = label
-            b.TextSize = 12
-            b.Font = Enum.Font.GothamBold
-            b.BackgroundColor3 = Color3.fromRGB(30,30,35)
-            b.TextColor3 = Color3.new(1,1,1)
-            b.BorderSizePixel = 0
-            b.Visible = false
-            b.LayoutOrder = order or 50
-            b.Parent = stack
-            local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = b
-        else
-            b.Text = label
-            b.LayoutOrder = order or b.LayoutOrder
-            b.Visible = false
-        end
-        return b
-    end
-
+    ----------------------------------------------------------------
+    -- Bulldozer
+    ----------------------------------------------------------------
     local function groundAhead(root)
         if not root then return nil end
         local ch   = lp.Character
@@ -426,17 +318,12 @@ return function(C, R, UI)
         local hit = WS:Raycast(castFrom, Vector3.new(0, -2000, 0), params)
         return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
     end
-
     local function wallPositions(frontCF, count, thickness, gapBack)
         local t = math.max(1, thickness or 1)
         local cols = math.clamp(math.ceil(math.sqrt(count / t)), 4, 12)
         local rows = math.clamp(math.ceil(count / (cols * t)), 2, 10)
-        local spacingX = 2.2
-        local spacingY = 1.6
-        local spacingZ = 1.6
-        local fw = frontCF.LookVector
-        local rt = frontCF.RightVector
-        local up = frontCF.UpVector
+        local spacingX, spacingY, spacingZ = 2.2, 1.6, 1.6
+        local fw, rt, up = frontCF.LookVector, frontCF.RightVector, frontCF.UpVector
         local center = frontCF.Position + fw * 2.5
         local totalW = (cols - 1) * spacingX
         local totalH = (rows - 1) * spacingY
@@ -463,7 +350,6 @@ return function(C, R, UI)
         end
         return positions, nil, fw
     end
-
     local function placeAt(models, cfs, keepNoCollide)
         local snaps = {}
         for i,m in ipairs(models) do
@@ -476,26 +362,18 @@ return function(C, R, UI)
         end
         return snaps
     end
-
     local function pushForwardHold(models, fw, studs)
         local dist = math.max(0, studs or 10)
-        local speed = 32
-        local step = 0.03
-        local tEnd = dist / speed
-        local t = 0
+        local speed, step = 32, 0.03
+        local t, tEnd = 0, dist / speed
         while t < tEnd do
             for _,m in ipairs(models) do
                 if m and m.Parent then
                     local pivot = m:IsA("Model") and m:GetPivot() or (mainPart(m) and mainPart(m).CFrame)
                     if pivot then
-                        local newPos = pivot.Position + fw * (speed * step)
+                        local newPos = pivot.Position + fw * (speed * step) + Vector3.new(0, avoidLift(pivot.Position), 0)
                         setPivot(m, CFrame.new(newPos, newPos + fw))
-                        for _,p in ipairs(getAllParts(m)) do
-                            p.Anchored = false
-                            p.CanCollide = true
-                            p.AssemblyLinearVelocity  = Vector3.new()
-                            p.AssemblyAngularVelocity = Vector3.new()
-                        end
+                        hardEnableCollision(m)
                     end
                 end
             end
@@ -503,14 +381,11 @@ return function(C, R, UI)
             task.wait(step)
         end
     end
-
-    local bullBtn = makeEdgeBtn("LogBulldozerEdge", "Log Bulldozer", 50)
     local function bulldozeOnce()
         local root = hrp(); if not root then return end
         local logs = logsNearMe(BULL_MAX_LOGS, {})
         if #logs == 0 then return end
-        local r = rcache
-        for _,m in ipairs(logs) do safeStartDrag(r, m) end
+        for _,m in ipairs(logs) do safeStartDrag(m) end
         task.wait(0.03)
         local baseGround = groundAhead(root)
         local frontCF = CFrame.new(
@@ -531,46 +406,32 @@ return function(C, R, UI)
         task.delay(0.10, function()
             for m,s in pairs(snapsA) do setCollide(m, true, s) end
             for m,s in pairs(snapsB) do setCollide(m, true, s) end
-            for _,m in ipairs(logs) do finallyStopDrag(r, m) end
+            for _,m in ipairs(logs) do finallyStopDrag(m) end
         end)
     end
-    bullBtn.MouseButton1Click:Connect(function() bulldozeOnce() end)
-    local showBulldozer = false
-    tab:Toggle({
-        Title = "Edge Button: Log Bulldozer",
-        Value = false,
-        Callback = function(state)
-            showBulldozer = state and true or false
-            if bullBtn then bullBtn.Visible = showBulldozer end
-        end
-    })
 
+    ----------------------------------------------------------------
+    -- Box trap with stop, lock/follow, roof center, auto-replace, avoidance
+    ----------------------------------------------------------------
     local function targetsWithin(radius)
         local root = hrp(); if not root then return {} end
         local center = root.Position
-        local out = {}
+        local out, seen = {}, {}
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
         local parts = WS:GetPartBoundsInRadius(center, radius, params) or {}
-        local uniqModel = {}
         for _,part in ipairs(parts) do
             if part:IsA("BasePart") then
                 local m = part:FindFirstAncestorOfClass("Model")
-                if m and m.Parent and not uniqModel[m] then
-                    local isPlayer = m:FindFirstChildOfClass("Humanoid") ~= nil and m:FindFirstChild("HumanoidRootPart") ~= nil
+                if m and m.Parent and not seen[m] then
+                    local isPlayer = m:FindFirstChild("HumanoidRootPart") and m:FindFirstChildOfClass("Humanoid")
                     if isPlayer then
                         local owner = Players:GetPlayerFromCharacter(m)
-                        if not owner or owner ~= lp then
-                            uniqModel[m] = true
-                            out[#out+1] = m
-                        end
+                        if not owner or owner ~= lp then seen[m] = true; out[#out+1] = m end
                     else
                         local hum = m:FindFirstChildOfClass("Humanoid")
-                        if hum then
-                            uniqModel[m] = true
-                            out[#out+1] = m
-                        end
+                        if hum then seen[m] = true; out[#out+1] = m end
                     end
                 end
             end
@@ -578,128 +439,281 @@ return function(C, R, UI)
         return out
     end
 
-    local boxBtn = makeEdgeBtn("BoxTrapEdge", "Box Trap", 51)
-
-    local function makePillarCFs(centerPos, side, baseY, heightY)
+    local function makeCageCFs(centerPos, side, baseY, heightY)
+        -- 4 pillars + a simple roof ring and one center roof log
         local half = side * 0.5
-        local rt = Vector3.new(1,0,0)
-        local fw = Vector3.new(0,0,1)
-        local up = Vector3.new(0,1,0)
+        local rt, fw, up = Vector3.new(1,0,0), Vector3.new(0,0,1), Vector3.new(0,1,0)
         local c = centerPos
-        local pts = {
+        local corner = {
             c + rt*half + fw*half,
             c - rt*half + fw*half,
             c + rt*half - fw*half,
             c - rt*half - fw*half,
         }
-        local cfs = {}
-        for i=1,#pts do
-            local p = Vector3.new(pts[i].X, baseY, pts[i].Z)
-            cfs[#cfs+1] = CFrame.new(p, p + up)
+        local pillars = {}
+        for i=1,4 do
+            local p = Vector3.new(corner[i].X, baseY, corner[i].Z)
+            pillars[#pillars+1] = CFrame.new(p, p + up)
         end
-        local top = {}
-        for i=1,#pts do
+        local roof = {}
+        for i=1,4 do
             for r=0,BOX_TOP_ROWS-1 do
-                local p = Vector3.new(pts[i].X, heightY + r*1.4, pts[i].Z)
-                top[#top+1] = CFrame.new(p, p + fw)
+                local p = Vector3.new(corner[i].X, heightY + r*1.4, corner[i].Z)
+                roof[#roof+1] = CFrame.new(p, p + fw)
             end
         end
-        return cfs, top
+        -- center roof log (new)
+        local centerRoof = CFrame.new(Vector3.new(c.X, heightY + 0.7, c.Z), c + fw)
+        return pillars, roof, centerRoof
     end
 
-    local holdJobs = setmetatable({}, {__mode="k"})
+    -- Box trap state
+    local boxTrapOn = false
+    local boxSlots = {}    -- [targetModel] = { logs = {m1=..., ...}, anchors = {fn per log}, lastSnapPos = Vector3 }
+    local holdThreads = setmetatable({}, {__mode="k"})
+
     local function startHold(model, anchorFn)
-        if holdJobs[model] then return end
-        local r = rcache
-        local started = safeStartDrag(r, model)
+        if holdThreads[model] then return end
+        local started = safeStartDrag(model)
         local snap = setCollide(model, false)
         zeroAssembly(model)
-        holdJobs[model] = task.spawn(function()
-            while true do
+        holdThreads[model] = task.spawn(function()
+            while boxTrapOn do
                 if not model or not model.Parent then break end
                 local cf = anchorFn(); if not cf then break end
+                -- avoidance lift applied via anchorFn or here:
+                local pos = cf.Position
+                local lift = avoidLift(pos)
+                if lift ~= 0 then cf = cf + Vector3.new(0, lift, 0) end
                 setPivot(model, cf)
-                for _,p in ipairs(getAllParts(model)) do
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
-                    p.Anchored = false
-                    p.CanCollide = true
-                end
+                hardEnableCollision(model)
                 task.wait(TICK)
             end
             setCollide(model, true, snap)
-            if started then finallyStopDrag(r, model) end
-            holdJobs[model] = nil
+            if started then finallyStopDrag(model) end
+            holdThreads[model] = nil
         end)
     end
 
-    local function boxTrapOnce()
-        local root = hrp(); if not root then return end
-        local tgts = targetsWithin(BOX_RADIUS)
-        if #tgts == 0 then return end
-
-        local used = {}
-        local function takeLogs(n)
-            local pool = logsNearMe(n*2, used)
-            local out = {}
-            for i=1, math.min(n, #pool) do
-                out[#out+1] = pool[i]
-                used[pool[i]] = true
+    local function stopBoxTrap()
+        boxTrapOn = false
+        for mdl, th in pairs(holdThreads) do
+            if th then pcall(task.cancel, th) end
+            if mdl and mdl.Parent then
+                hardEnableCollision(mdl)
+                finallyStopDrag(mdl)
             end
-            return out
+            holdThreads[mdl] = nil
         end
-
-        for _,tgt in ipairs(tgts) do
-            local mp = mainPart(tgt); if not mp then continue end
-            local sizeY = (mp.Size and mp.Size.Y) or 4
-            local baseY = math.max( (mp.Position.Y - sizeY*0.5) + 0.5, mp.Position.Y - 2 )
-            local heightY = mp.Position.Y + sizeY*0.5 + 2.5
-            local side = math.clamp(math.max(mp.Size.X, mp.Size.Z) + 2.5, 4.0, 8.0)
-            local pillars, top = makePillarCFs(mp.Position, side, baseY, heightY)
-            local need = #pillars + math.min(#top, 8)
-            local logs = takeLogs(need)
-            if #logs == 0 then break end
-
-            local idx = 1
-            for i=1,#pillars do
-                local which = logs[idx]; if not which then break end
-                local pi = i
-                startHold(which, function()
-                    local mp2 = mainPart(tgt); if not mp2 then return nil end
-                    local sizeY2 = (mp2.Size and mp2.Size.Y) or sizeY
-                    local base2 = math.max( (mp2.Position.Y - sizeY2*0.5) + 0.5, mp2.Position.Y - 2 )
-                    local side2 = math.clamp(math.max(mp2.Size.X, mp2.Size.Z) + 2.5, 4.0, 8.0)
-                    local p2, _ = makePillarCFs(mp2.Position, side2, base2, base2+1)
-                    return p2[pi]
-                end)
-                idx += 1
-            end
-            local topCount = math.min(#top, #logs - (idx-1))
-            for j=1,topCount do
-                local which = logs[idx]; if not which then break end
-                local tj = j
-                startHold(which, function()
-                    local mp2 = mainPart(tgt); if not mp2 then return nil end
-                    local sizeY2 = (mp2.Size and mp2.Size.Y) or sizeY
-                    local base2 = math.max( (mp2.Position.Y - sizeY2*0.5) + 0.5, mp2.Position.Y - 2 )
-                    local height2 = mp2.Position.Y + sizeY2*0.5 + 2.5
-                    local side2 = math.clamp(math.max(mp2.Size.X, mp2.Size.Z) + 2.5, 4.0, 8.0)
-                    local _, t2 = makePillarCFs(mp2.Position, side2, base2, height2)
-                    return t2[tj]
-                end)
-                idx += 1
-            end
-        end
+        boxSlots = {}
     end
-    boxBtn.MouseButton1Click:Connect(function() boxTrapOnce() end)
 
-    local showBoxTrap = false
-    tab:Toggle({
-        Title = "Edge Button: Box Trap",
-        Value = false,
-        Callback = function(state)
-            showBoxTrap = state and true or false
-            if boxBtn then boxBtn.Visible = showBoxTrap end
+    local function takeLogs(n, exclude)
+        local pool = logsNearMe(n*2, exclude)
+        local out = {}
+        for i=1, math.min(n, #pool) do
+            out[#out+1] = pool[i]
+            if exclude then exclude[pool[i]] = true end
         end
+        return out
+    end
+
+    local function ensureSlotLog(slotRec, idx, maker)
+        local m = slotRec.logs[idx]
+        if m and m.Parent and holdThreads[m] then return m end
+        -- need replacement
+        local replace = takeLogs(1, slotRec.used)[1]
+        if not replace then return nil end
+        slotRec.logs[idx] = replace
+        slotRec.used[replace] = true
+        startHold(replace, maker)
+        return replace
+    end
+
+    local function fitBoxForTarget(targetModel, snapPos)
+        local mp = mainPart(targetModel); if not mp then return nil end
+        local sizeY = (mp.Size and mp.Size.Y) or 4
+        local baseY = math.max((mp.Position.Y - sizeY*0.5) + 0.5, mp.Position.Y - 2)
+        local heightY = mp.Position.Y + sizeY*0.5 + 2.5
+        local side = math.clamp(math.max(mp.Size.X, mp.Size.Z) + 2.5, 4.0, 8.0)
+        local center = (BOX_LOCK_IN_PLACE and snapPos) or mp.Position
+
+        local pillars, roof, centerRoof = makeCageCFs(center, side, baseY, heightY)
+        -- cap the number of roof logs to budget
+        while (#pillars + #roof + 1) > BOX_MAX_PER_TARGET and #roof > 0 do
+            table.remove(roof) -- trim roof if over budget
+        end
+        return pillars, roof, centerRoof
+    end
+
+    local function startBoxTrap()
+        stopBoxTrap() -- reset
+        local targets = targetsWithin(BOX_RADIUS)
+        if #targets == 0 then return end
+
+        boxTrapOn = true
+        local exclude = {}
+        for _,tgt in ipairs(targets) do
+            local mp = mainPart(tgt); if not mp then continue end
+            local snapPos = mp.Position
+            local pillars, roof, centerRoof = fitBoxForTarget(tgt, snapPos)
+            local total = math.min(BOX_MAX_PER_TARGET, #pillars + #roof + 1)
+            local list = takeLogs(total, exclude)
+            if #list == 0 then break end
+
+            local slot = { logs = {}, used = {}, lastSnap = snapPos, make = {} }
+            boxSlots[tgt] = slot
+            for _,m in ipairs(list) do slot.used[m] = true end
+
+            local k = 1
+            for i=1,#pillars do
+                local myIndex = k
+                slot.make[myIndex] = function()
+                    if not boxTrapOn then return nil end
+                    if not tgt or not tgt.Parent then return nil end
+                    local usePos = (BOX_LOCK_IN_PLACE and slot.lastSnap) or (mainPart(tgt) and mainPart(tgt).Position) or snapPos
+                    local p, _, _ = makeCageCFs(usePos, math.clamp(math.max((mainPart(tgt).Size or Vector3.new(4,4,4)).X, (mainPart(tgt).Size or Vector3.new(4,4,4)).Z) + 2.5, 4.0, 8.0),
+                                                math.max((usePos.Y - ((mainPart(tgt).Size and mainPart(tgt).Size.Y) or 4)*0.5) + 0.5, usePos.Y - 2),
+                                                usePos.Y + (((mainPart(tgt).Size and mainPart(tgt).Size.Y) or 4)*0.5) + 2.5)
+                    return p[i]
+                end
+                slot.logs[myIndex] = list[k]; startHold(list[k], slot.make[myIndex]); k += 1
+            end
+            for j=1,#roof do
+                if k > #list then break end
+                local myIndex = k
+                slot.make[myIndex] = function()
+                    if not boxTrapOn then return nil end
+                    if not tgt or not tgt.Parent then return nil end
+                    local usePos = (BOX_LOCK_IN_PLACE and slot.lastSnap) or (mainPart(tgt) and mainPart(tgt).Position) or snapPos
+                    local _, r, _ = makeCageCFs(usePos, math.clamp(math.max((mainPart(tgt).Size or Vector3.new(4,4,4)).X, (mainPart(tgt).Size or Vector3.new(4,4,4)).Z) + 2.5, 4.0, 8.0),
+                                                math.max((usePos.Y - ((mainPart(tgt).Size and mainPart(tgt).Size.Y) or 4)*0.5) + 0.5, usePos.Y - 2),
+                                                usePos.Y + (((mainPart(tgt).Size and mainPart(tgt).Size.Y) or 4)*0.5) + 2.5)
+                    return r[j]
+                end
+                slot.logs[myIndex] = list[k]; startHold(list[k], slot.make[myIndex]); k += 1
+            end
+            -- center roof log
+            if k <= #list then
+                local myIndex = k
+                slot.make[myIndex] = function()
+                    if not boxTrapOn then return nil end
+                    if not tgt or not tgt.Parent then return nil end
+                    local mp2 = mainPart(tgt); if not mp2 then return nil end
+                    local sizeY = (mp2.Size and mp2.Size.Y) or 4
+                    local heightY = mp2.Position.Y + sizeY*0.5 + 2.5
+                    local centerRoof = CFrame.new(Vector3.new(((BOX_LOCK_IN_PLACE and slot.lastSnap) or mp2.Position).X, heightY + 0.7, ((BOX_LOCK_IN_PLACE and slot.lastSnap) or mp2.Position).Z), mp2.Position + Vector3.new(0,0,1))
+                    return centerRoof
+                end
+                slot.logs[myIndex] = list[k]; startHold(list[k], slot.make[myIndex]); k += 1
+            end
+        end
+
+        -- Replacement + optional re-fit supervisor
+        task.spawn(function()
+            local acc = 0
+            while boxTrapOn do
+                local dt = Run.Heartbeat:Wait()
+                acc += dt
+                for tgt, slot in pairs(boxSlots) do
+                    if not tgt or not tgt.Parent then boxSlots[tgt] = nil else
+                        -- lock-in-place refresh
+                        if BOX_LOCK_IN_PLACE and acc >= BOX_REFRESH_S then
+                            local mp = mainPart(tgt)
+                            if mp then slot.lastSnap = slot.lastSnap or mp.Position end
+                            -- keep same positions; only re-evaluate make() lazily per tick
+                        elseif (not BOX_LOCK_IN_PLACE) then
+                            -- follow: nothing to do; makers read live target position
+                        end
+                        -- auto-replace any missing logs
+                        for i=1,#slot.logs do
+                            ensureSlotLog(slot, i, slot.make[i])
+                        end
+                    end
+                end
+                if acc >= BOX_REFRESH_S then acc = 0 end
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- UI
+    ----------------------------------------------------------------
+    tab:Section({ Title = "Troll: Chaotic Log Smog" })
+    local selectedPlayers = {}
+    local function playerChoices()
+        local vals = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p ~= lp then vals[#vals+1] = ("%s#%d"):format(p.Name, p.UserId) end
+        end
+        table.sort(vals)
+        return vals
+    end
+    local function parseSelection(choice)
+        local set = {}
+        if type(choice) == "table" then
+            for _,v in ipairs(choice) do local uid = tonumber((tostring(v):match("#(%d+)$") or "")); if uid then set[tostring(uid)] = true end end
+        else
+            local uid = tonumber((tostring(choice or ""):match("#(%d+)$") or "")); if uid then set[tostring(uid)] = true end
+        end
+        return set
+    end
+    local playerDD = tab:Dropdown({
+        Title = "Players",
+        Values = playerChoices(),
+        Multi = true,
+        AllowNone = true,
+        Callback = function(choice) selectedPlayers = parseSelection(choice) end
     })
+    tab:Button({ Title = "Refresh Player List", Callback = function()
+        local vals = playerChoices()
+        if playerDD and playerDD.SetValues then playerDD:SetValues(vals) end
+    end })
+
+    tab:Button({ Title = "Chaos: Start", Callback = function()
+        chaoticRunning = false
+        for _,th in pairs(chaoticActiveJobs) do pcall(task.cancel, th) end
+        chaoticActiveJobs, chaoticAssigned, chaoticTargetOf = {}, setmetatable({}, {__mode="k"}), setmetatable({}, {__mode="k"})
+        local targets = {}
+        for userIdStr,_ in pairs(selectedPlayers or {}) do
+            local uid = tonumber(userIdStr)
+            for _,p in ipairs(Players:GetPlayers()) do
+                if p.UserId == uid and p ~= lp then targets[#targets+1] = p break end
+            end
+        end
+        if #targets == 0 then return end
+        local pool = logsNearMe(MAX_LOGS, {})
+        if #pool == 0 then return end
+        chaoticRunning = true
+        assignChaotic(pool, targets)
+        task.spawn(function() chaoticSupervisor(targets) end)
+    end })
+    tab:Button({ Title = "Chaos: Stop", Callback = function()
+        chaoticRunning = false
+        for mdl,th in pairs(chaoticActiveJobs) do if th then pcall(task.cancel, th) end chaoticActiveJobs[mdl]=nil end
+        for mdl,_ in pairs(chaoticAssigned) do if mdl and mdl.Parent then finallyStopDrag(mdl); hardEnableCollision(mdl) end chaoticAssigned[mdl]=nil end
+        chaoticTargetOf = {}
+    end })
+
+    tab:Section({ Title = "Troll: Bulldozer" })
+    tab:Button({ Title = "Log Bulldozer", Callback = function() bulldozeOnce() end })
+    tab:Slider({
+        Title = "Bulldozer Thickness",
+        Value = { Min = 1, Max = 5, Default = BULL_THICKNESS },
+        Callback = function(v) local nv=tonumber(type(v)=="table" and (v.Value or v.Default) or v); if nv then BULL_THICKNESS = math.clamp(nv,1,5) end end
+    })
+
+    tab:Section({ Title = "Troll: Box Trap" })
+    tab:Toggle({
+        Title = "Box Trap Lock In Place",
+        Value = BOX_LOCK_IN_PLACE,
+        Callback = function(state) BOX_LOCK_IN_PLACE = state and true or false end
+    })
+    tab:Slider({
+        Title = "Box Trap Refresh (s)",
+        Value = { Min = 1, Max = 15, Default = BOX_REFRESH_S },
+        Callback = function(v) local nv=tonumber(type(v)=="table" and (v.Value or v.Default) or v); if nv then BOX_REFRESH_S = math.clamp(nv,1,30) end end
+    })
+    tab:Button({ Title = "Box Trap: Start", Callback = function() startBoxTrap() end })
+    tab:Button({ Title = "Box Trap: Stop",  Callback = function() stopBoxTrap()  end })
 end
