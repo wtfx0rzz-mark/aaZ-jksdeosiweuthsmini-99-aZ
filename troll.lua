@@ -11,19 +11,24 @@ return function(C, R, UI)
     local lp = Players.LocalPlayer
     local Tabs = (UI and UI.Tabs) or {}
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
-    assert(tab, "Troll tab not found in UI")
+    assert(tab, "Troll tab not found")
 
-    local MAX_LOGS          = 50
-    local SEARCH_RADIUS     = 200
-    local TICK              = 0.02
+    local MAX_LOGS           = 50
+    local SEARCH_RADIUS      = 200
+    local TICK               = 0.02
 
-    local CAMPFIRE_AVOID_RADIUS = 20
+    local CAMPFIRE_AVOID_RADIUS = 35
+    local SCRAPPER_AVOID_RADIUS = 35
     local CAMPFIRE_AVOID_UP     = 8
     local CAMPFIRE_REEVAL_S     = 0.2
 
-    local BULL_MAX_LOGS    = 120
-    local BULL_THICKNESS   = 3
-    local BULL_PUSH_STUDS  = 10
+    local BULL_MAX_LOGS   = 120
+    local BULL_THICKNESS  = 3
+    local BULL_PUSH_STUDS = 10
+    local BULL_GAP_STUDS  = 2.0
+
+    local BOX_RADIUS      = 20
+    local BOX_TOP_ROWS    = 2
 
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
@@ -67,6 +72,7 @@ return function(C, R, UI)
         for _,p in ipairs(getAllParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
+            p.Anchored = false
         end
     end
     local function setPivot(model, cf)
@@ -138,7 +144,18 @@ return function(C, R, UI)
         for _,d in ipairs(WS:GetDescendants()) do
             if d:IsA("Model") then
                 local n = (d.Name or ""):lower()
-                if n == "mainfire" or n == "campfire" or n == "camp fire" then
+                if n:find("campfire",1,true) or n=="mainfire" or n=="camp fire" then
+                    return d
+                end
+            end
+        end
+        return nil
+    end
+    local function resolveScrapperModel()
+        for _,d in ipairs(WS:GetDescendants()) do
+            if d:IsA("Model") then
+                local n = (d.Name or ""):lower()
+                if n:find("scrap",1,true) or n:find("scrapper",1,true) then
                     return d
                 end
             end
@@ -151,11 +168,16 @@ return function(C, R, UI)
     local modelToTarget = setmetatable({}, {__mode="k"})
     local assignedSet = setmetatable({}, {__mode="k"})
 
-    local lastCampCheck, campModel, campCenter = 0, nil, nil
-    local function refreshCamp()
+    local lastAvoidCheck, campModel, campCenter = 0, nil, nil
+    local scrapModel, scrapCenter = nil, nil
+
+    local function refreshAvoidCenters()
         campModel = resolveCampfireModel()
         local c = fireCenterPart(campModel)
         campCenter = c and (c.Position or (campModel:GetPivot().Position)) or nil
+        scrapModel = resolveScrapperModel()
+        local s = fireCenterPart(scrapModel) or (scrapModel and scrapModel.PrimaryPart)
+        scrapCenter = s and (s.Position or (scrapModel:GetPivot().Position)) or nil
     end
 
     local function floatAroundTarget(model, targetPlayer, seed)
@@ -185,20 +207,17 @@ return function(C, R, UI)
             if not root then break end
 
             local now = os.clock()
-            if now - (lastCampCheck or 0) >= CAMPFIRE_REEVAL_S then
-                refreshCamp()
-                lastCampCheck = now
+            if now - (lastAvoidCheck or 0) >= CAMPFIRE_REEVAL_S then
+                refreshAvoidCenters()
+                lastAvoidCheck = now
             end
-            if campCenter then
-                local d = (root.Position - campCenter).Magnitude
-                if d <= CAMPFIRE_AVOID_RADIUS then
-                    avoidUp = CAMPFIRE_AVOID_UP
-                    avoidUntil = now + 0.35
-                elseif now >= avoidUntil then
-                    avoidUp = 0
-                end
-            else
-                avoidUp = (now >= avoidUntil) and 0 or avoidUp
+            local dCamp = campCenter and (root.Position - campCenter).Magnitude or math.huge
+            local dScr  = scrapCenter and (root.Position - scrapCenter).Magnitude or math.huge
+            if dCamp <= CAMPFIRE_AVOID_RADIUS or dScr <= SCRAPPER_AVOID_RADIUS then
+                avoidUp = CAMPFIRE_AVOID_UP
+                avoidUntil = now + 0.35
+            elseif now >= avoidUntil then
+                avoidUp = 0
             end
 
             if (not slot) or now >= reslotAt then
@@ -298,7 +317,7 @@ return function(C, R, UI)
         activeJobs = {}
         assignedSet = setmetatable({}, {__mode="k"})
         modelToTarget = setmetatable({}, {__mode="k"})
-        refreshCamp()
+        refreshAvoidCenters()
         assignAndStart(initialLogs, targets, 1)
         task.spawn(function() supervisor(targets) end)
     end
@@ -396,8 +415,6 @@ return function(C, R, UI)
         return b
     end
 
-    local bullBtn = makeEdgeBtn("LogBulldozerEdge", "Log Bulldozer", 50)
-
     local function groundAhead(root)
         if not root then return nil end
         local ch   = lp.Character
@@ -410,7 +427,7 @@ return function(C, R, UI)
         return hit and hit.Position or (castFrom - Vector3.new(0, 3, 0))
     end
 
-    local function wallPositionsThick(frontCF, count, thickness)
+    local function wallPositions(frontCF, count, thickness, gapBack)
         local t = math.max(1, thickness or 1)
         local cols = math.clamp(math.ceil(math.sqrt(count / t)), 4, 12)
         local rows = math.clamp(math.ceil(count / (cols * t)), 2, 10)
@@ -421,10 +438,10 @@ return function(C, R, UI)
         local rt = frontCF.RightVector
         local up = frontCF.UpVector
         local center = frontCF.Position + fw * 2.5
-        local positions = {}
         local totalW = (cols - 1) * spacingX
         local totalH = (rows - 1) * spacingY
         local totalD = (t - 1)   * spacingZ
+        local positions = {}
         for d=0,t-1 do
             for r=0,rows-1 do
                 for c=0,cols-1 do
@@ -439,30 +456,33 @@ return function(C, R, UI)
             end
             if #positions >= count then break end
         end
-        return positions, fw
+        if gapBack and gapBack > 0 then
+            local back = {}
+            for i=1,#positions do back[i] = positions[i] - fw * gapBack end
+            return positions, back, fw
+        end
+        return positions, nil, fw
     end
 
-    local function placeWall(models, frontCF, thickness)
-        local poses, fw = wallPositionsThick(frontCF, #models, thickness)
+    local function placeAt(models, cfs, keepNoCollide)
+        local snaps = {}
         for i,m in ipairs(models) do
-            if m and m.Parent then
-                local snap = setCollide(m, false)
+            if m and m.Parent and cfs[i] then
+                snaps[m] = setCollide(m, false)
                 zeroAssembly(m)
-                setPivot(m, poses[i])
-                setCollide(m, true, snap)
+                setPivot(m, cfs[i])
+                if not keepNoCollide then setCollide(m, true, snaps[m]); snaps[m] = nil end
             end
         end
-        return fw
+        return snaps
     end
 
-    local function pushForward(models, fw, studs)
+    local function pushForwardHold(models, fw, studs)
         local dist = math.max(0, studs or 10)
         local speed = 32
         local step = 0.03
         local tEnd = dist / speed
         local t = 0
-        local snaps = {}
-        for _,m in ipairs(models) do snaps[m] = setCollide(m, false) end
         while t < tEnd do
             for _,m in ipairs(models) do
                 if m and m.Parent then
@@ -475,8 +495,6 @@ return function(C, R, UI)
                             p.CanCollide = true
                             p.AssemblyLinearVelocity  = Vector3.new()
                             p.AssemblyAngularVelocity = Vector3.new()
-                            p:SetNetworkOwner(nil)
-                            if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end
                         end
                     end
                 end
@@ -484,27 +502,38 @@ return function(C, R, UI)
             t += step
             task.wait(step)
         end
-        for m,s in pairs(snaps) do setCollide(m, true, s) end
     end
 
+    local bullBtn = makeEdgeBtn("LogBulldozerEdge", "Log Bulldozer", 50)
     local function bulldozeOnce()
         local root = hrp(); if not root then return end
         local logs = logsNearMe(BULL_MAX_LOGS, {})
         if #logs == 0 then return end
         local r = rcache
         for _,m in ipairs(logs) do safeStartDrag(r, m) end
-        task.wait(0.05)
+        task.wait(0.03)
         local baseGround = groundAhead(root)
         local frontCF = CFrame.new(
             Vector3.new(baseGround.X, baseGround.Y + 3.0, baseGround.Z),
             (root.Position + root.CFrame.LookVector*6)
         )
-        local fw = placeWall(logs, frontCF, BULL_THICKNESS)
-        task.wait(0.05)
-        pushForward(logs, fw, BULL_PUSH_STUDS)
-        task.delay(0.1, function() for _,m in ipairs(logs) do finallyStopDrag(r, m) end end)
+        local half = math.ceil(#logs/2)
+        local groupA, groupB = {}, {}
+        for i=1,#logs do if i<=half then groupA[#groupA+1]=logs[i] else groupB[#groupB+1]=logs[i] end end
+        local cfsA, _, fw = wallPositions(frontCF, #groupA, BULL_THICKNESS, 0)
+        local cfsB = {table.unpack(cfsA)}
+        for i=1,#cfsB do cfsB[i] = cfsB[i] - fw * BULL_GAP_STUDS end
+        local snapsA = placeAt(groupA, cfsA, true)
+        local snapsB = placeAt(groupB, cfsB, true)
+        task.wait(0.03)
+        pushForwardHold(groupA, fw, BULL_PUSH_STUDS)
+        pushForwardHold(groupB, fw, BULL_PUSH_STUDS)
+        task.delay(0.10, function()
+            for m,s in pairs(snapsA) do setCollide(m, true, s) end
+            for m,s in pairs(snapsB) do setCollide(m, true, s) end
+            for _,m in ipairs(logs) do finallyStopDrag(r, m) end
+        end)
     end
-
     bullBtn.MouseButton1Click:Connect(function() bulldozeOnce() end)
     local showBulldozer = false
     tab:Toggle({
@@ -515,8 +544,6 @@ return function(C, R, UI)
             if bullBtn then bullBtn.Visible = showBulldozer end
         end
     })
-
-    local boxBtn = makeEdgeBtn("BoxTrapEdge", "Box Trap", 51)
 
     local function targetsWithin(radius)
         local root = hrp(); if not root then return {} end
@@ -551,6 +578,8 @@ return function(C, R, UI)
         return out
     end
 
+    local boxBtn = makeEdgeBtn("BoxTrapEdge", "Box Trap", 51)
+
     local function makePillarCFs(centerPos, side, baseY, heightY)
         local half = side * 0.5
         local rt = Vector3.new(1,0,0)
@@ -570,37 +599,55 @@ return function(C, R, UI)
         end
         local top = {}
         for i=1,#pts do
-            local p = Vector3.new(pts[i].X, heightY, pts[i].Z)
-            top[#top+1] = CFrame.new(p, p + fw)
+            for r=0,BOX_TOP_ROWS-1 do
+                local p = Vector3.new(pts[i].X, heightY + r*1.4, pts[i].Z)
+                top[#top+1] = CFrame.new(p, p + fw)
+            end
         end
         return cfs, top
     end
 
-    local function takeLogs(n, exclude)
-        local ex = exclude or {}
-        local pool = logsNearMe(n*2, ex)
-        local out = {}
-        for i=1, math.min(n, #pool) do
-            out[#out+1] = pool[i]
-            ex[pool[i]] = true
-        end
-        return out, ex
-    end
-
-    local function placeAtCF(m, cf)
-        local snap = setCollide(m, false)
-        zeroAssembly(m)
-        setPivot(m, cf)
-        setCollide(m, true, snap)
+    local holdJobs = setmetatable({}, {__mode="k"})
+    local function startHold(model, anchorFn)
+        if holdJobs[model] then return end
+        local r = rcache
+        local started = safeStartDrag(r, model)
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
+        holdJobs[model] = task.spawn(function()
+            while true do
+                if not model or not model.Parent then break end
+                local cf = anchorFn(); if not cf then break end
+                setPivot(model, cf)
+                for _,p in ipairs(getAllParts(model)) do
+                    p.AssemblyLinearVelocity  = Vector3.new()
+                    p.AssemblyAngularVelocity = Vector3.new()
+                    p.Anchored = false
+                    p.CanCollide = true
+                end
+                task.wait(TICK)
+            end
+            setCollide(model, true, snap)
+            if started then finallyStopDrag(r, model) end
+            holdJobs[model] = nil
+        end)
     end
 
     local function boxTrapOnce()
         local root = hrp(); if not root then return end
-        local tgts = targetsWithin(20)
+        local tgts = targetsWithin(BOX_RADIUS)
         if #tgts == 0 then return end
 
         local used = {}
-        local r = rcache
+        local function takeLogs(n)
+            local pool = logsNearMe(n*2, used)
+            local out = {}
+            for i=1, math.min(n, #pool) do
+                out[#out+1] = pool[i]
+                used[pool[i]] = true
+            end
+            return out
+        end
 
         for _,tgt in ipairs(tgts) do
             local mp = mainPart(tgt); if not mp then continue end
@@ -608,32 +655,42 @@ return function(C, R, UI)
             local baseY = math.max( (mp.Position.Y - sizeY*0.5) + 0.5, mp.Position.Y - 2 )
             local heightY = mp.Position.Y + sizeY*0.5 + 2.5
             local side = math.clamp(math.max(mp.Size.X, mp.Size.Z) + 2.5, 4.0, 8.0)
-
-            local need = 4 + 2
-            local logs, ex = takeLogs(need, used)
-            used = ex
+            local pillars, top = makePillarCFs(mp.Position, side, baseY, heightY)
+            local need = #pillars + math.min(#top, 8)
+            local logs = takeLogs(need)
             if #logs == 0 then break end
 
-            for _,m in ipairs(logs) do safeStartDrag(r, m) end
-            task.wait(0.03)
-
-            local pillars, top = makePillarCFs(mp.Position, side, baseY, heightY)
-
-            local pi = 1
-            while pi <= 4 and pi <= #logs do
-                placeAtCF(logs[pi], pillars[pi]); pi += 1
+            local idx = 1
+            for i=1,#pillars do
+                local which = logs[idx]; if not which then break end
+                local pi = i
+                startHold(which, function()
+                    local mp2 = mainPart(tgt); if not mp2 then return nil end
+                    local sizeY2 = (mp2.Size and mp2.Size.Y) or sizeY
+                    local base2 = math.max( (mp2.Position.Y - sizeY2*0.5) + 0.5, mp2.Position.Y - 2 )
+                    local side2 = math.clamp(math.max(mp2.Size.X, mp2.Size.Z) + 2.5, 4.0, 8.0)
+                    local p2, _ = makePillarCFs(mp2.Position, side2, base2, base2+1)
+                    return p2[pi]
+                end)
+                idx += 1
             end
-            local ti = 1
-            while pi <= #logs and ti <= #top do
-                placeAtCF(logs[pi], top[ti]); pi += 1; ti += 1
+            local topCount = math.min(#top, #logs - (idx-1))
+            for j=1,topCount do
+                local which = logs[idx]; if not which then break end
+                local tj = j
+                startHold(which, function()
+                    local mp2 = mainPart(tgt); if not mp2 then return nil end
+                    local sizeY2 = (mp2.Size and mp2.Size.Y) or sizeY
+                    local base2 = math.max( (mp2.Position.Y - sizeY2*0.5) + 0.5, mp2.Position.Y - 2 )
+                    local height2 = mp2.Position.Y + sizeY2*0.5 + 2.5
+                    local side2 = math.clamp(math.max(mp2.Size.X, mp2.Size.Z) + 2.5, 4.0, 8.0)
+                    local _, t2 = makePillarCFs(mp2.Position, side2, base2, height2)
+                    return t2[tj]
+                end)
+                idx += 1
             end
-
-            task.delay(0.1, function()
-                for _,m in ipairs(logs) do finallyStopDrag(rcache, m) end
-            end)
         end
     end
-
     boxBtn.MouseButton1Click:Connect(function() boxTrapOnce() end)
 
     local showBoxTrap = false
