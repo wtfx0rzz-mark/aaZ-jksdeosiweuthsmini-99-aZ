@@ -13,7 +13,7 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- Tunables (your last shared values)
     ----------------------------------------------------------------
-    local MAX_LOGS               = 50
+    local MAX_LOGS               = 80
     local SEARCH_RADIUS          = 200
     local TICK                   = 0.02
 
@@ -25,7 +25,7 @@ return function(C, R, UI)
     local BULL_MAX_LOGS   = 120
     local BULL_THICKNESS  = 3
     local BULL_PUSH_STUDS = 20
-    local BULL_GAP_STUDS  = 1.0
+    local BULL_GAP_STUDS  = 1.5
     local BULL_SPEED      = 42
 
     local BOX_RADIUS         = 20
