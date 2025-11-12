@@ -12,6 +12,9 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
+    -- Delay before the FIRST player dropdown population (seconds)
+    local INITIAL_POPULATE_DELAY = 2.0
+
     -- Core scan + orbit tuning
     local TICK = 0.02
     local SEARCH_RADIUS = 200
@@ -398,6 +401,8 @@ return function(C, R, UI)
         end
         local base = root.Position + vel * leadT
         local look = (speed > 1e-3) and (vel / speed) or (root.CFrame.LookVector)
+
+        -- Bias up only if actually inside hazard radius
         local inside, c = insideHazard(base)
         if inside and c then
             base = Vector3.new(base.X, math.max(base.Y, c.Y + CFG.HazardTopPad), base.Z)
@@ -499,7 +504,7 @@ return function(C, R, UI)
         return true
     end
 
-    -- Reconcile adoption shed
+    -- Reconcile adoption/shed
     local function reconcile()
         if not running then return end
         local myRoot = hrp(); if not myRoot then return end
@@ -547,66 +552,24 @@ return function(C, R, UI)
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
     local selectedSet = {}
-    local playerDD
+    local playerDD -- created ONCE after INITIAL_POPULATE_DELAY
 
-    local function currentSelectionNames()
-        local names = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            if p ~= lp and selectedSet[p.UserId] then
-                names[#names+1] = ("%s#%d"):format(p.Name, p.UserId)
+    local function buildPlayerDropdownOnce()
+        if playerDD then return end
+        playerDD = tab:Dropdown({
+            Title = "Players",
+            Values = playersList(),
+            Multi = true,
+            AllowNone = true,
+            Callback = function(choice)
+                selectedSet = parseSelection(choice)
             end
-        end
-        table.sort(names)
-        return names
+        })
     end
 
-    local function updatePlayerDropdownInPlace()
-        if not playerDD then return end
-        local vals = playersList()
-        local preselect = currentSelectionNames()
+    -- Defer the first and only population to give joiners time to appear
+    task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
-        -- Try common setter names without reconstructing the widget
-        if playerDD.SetValues then
-            playerDD:SetValues(vals)
-        elseif playerDD.SetOptions then
-            playerDD:SetOptions(vals)
-        elseif playerDD.SetItems then
-            playerDD:SetItems(vals)
-        end
-
-        -- Re-apply selection if API exists
-        if playerDD.SetSelected then
-            playerDD:SetSelected(preselect)
-        elseif playerDD.SetValue then
-            -- Some UIs accept table for multi-select
-            pcall(function() playerDD:SetValue(preselect) end)
-        end
-    end
-
-    playerDD = tab:Dropdown({
-        Title = "Players",
-        Values = playersList(),
-        Multi = true,
-        AllowNone = true,
-        Default = currentSelectionNames(),
-        Callback = function(choice)
-            selectedSet = parseSelection(choice)
-        end
-    })
-
-    -- Live updates keep the dropdown in place
-    local playerAddedConn = Players.PlayerAdded:Connect(function(p)
-        if p ~= lp then
-            task.delay(0.2, updatePlayerDropdownInPlace)
-        end
-    end)
-    local playerRemovingConn = Players.PlayerRemoving:Connect(function(p)
-        if p ~= lp then
-            task.delay(0.2, updatePlayerDropdownInPlace)
-        end
-    end)
-
-    -- Controls
     tab:Slider({
         Title = "Logs",
         Value = { Min = 1, Max = 50, Default = 5 },
@@ -637,8 +600,8 @@ return function(C, R, UI)
         Callback = function()
             stopAll()
             resolveRemotes()
-            -- Ensure the dropdown is current but do not rebuild it
-            updatePlayerDropdownInPlace()
+            -- Build dropdown now if user pressed Start before the delayed population
+            if not playerDD then buildPlayerDropdownOnce() end
             targets = selectedPlayersList(selectedSet)
             if #targets == 0 then return end
             running = true
