@@ -11,9 +11,12 @@ return function(C, R, UI)
     assert(tab, "Troll tab not found in UI")
 
     local DRAG_RADIUS       = 200
-    local MAX_LOGS_PER_USER = 50
+    local MAX_LOGS_PER_USER = 20
     local UPDATE_HZ         = 30
     local PART_MIN_SIZE     = 0.35
+
+    local drop
+    local selectedNames = {}
 
     local function hrp()
         local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -23,7 +26,7 @@ return function(C, R, UI)
         if not (m and m:IsA("Model")) then return nil end
         return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
     end
-    local function getParts(obj)
+    local function partsOf(obj)
         local t = {}
         if not obj then return t end
         if obj:IsA("Model") then
@@ -37,9 +40,7 @@ return function(C, R, UI)
 
     local function resolveRemotes()
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return {} end
-        local function pick(...)
-            for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
-        end
+        local function pick(...) for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end end
         return {
             StartDrag = pick("RequestStartDraggingItem","StartDraggingItem"),
             StopDrag  = pick("StopDraggingItem","RequestStopDraggingItem"),
@@ -62,6 +63,69 @@ return function(C, R, UI)
         return false
     end
 
+    local function playerList()
+        local t = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p ~= lp then t[#t+1] = p.Name end
+        end
+        table.sort(t)
+        return t
+    end
+    local function setSelectedFromDropdown(choice)
+        local set = {}
+        if type(choice) == "table" then
+            for _,v in ipairs(choice) do if v and v ~= "" then set[v] = true end end
+        elseif choice and choice ~= "" then
+            set[choice] = true
+        end
+        selectedNames = set
+    end
+    local function refreshDropdown()
+        local vals = playerList()
+        if drop and drop.SetValues then drop:SetValues(vals) end
+    end
+    Players.PlayerAdded:Connect(refreshDropdown)
+    Players.PlayerRemoving:Connect(refreshDropdown)
+
+    local function pickTargetParts(char)
+        local parts = {}
+        for _,bp in ipairs(partsOf(char)) do
+            if bp.Name ~= "HumanoidRootPart" then
+                local s = bp.Size
+                if s.X >= PART_MIN_SIZE or s.Y >= PART_MIN_SIZE or s.Z >= PART_MIN_SIZE then
+                    parts[#parts+1] = bp
+                end
+            end
+        end
+        if #parts == 0 then
+            local p = char and char:FindFirstChild("HumanoidRootPart")
+            if p then parts[#parts+1] = p end
+        end
+        return parts
+    end
+
+    local function golden(i) return i * 2.399963229728653 end
+
+    local function ensureDragOwnership(model)
+        for _,p in ipairs(partsOf(model)) do
+            p.Anchored = false
+            p.CanCollide = false
+            p.CanTouch = false
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+            pcall(function() p:SetNetworkOwner(lp) end)
+        end
+    end
+    local function placeAt(model, cf)
+        if not model or not model.Parent then return end
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local mp = mainPart(model)
+            if mp then mp.CFrame = cf end
+        end
+    end
+
     local function nearbyLogs(center, radius, excludeSet)
         local items = itemsRootOrNil(); if not items then return {} end
         local params = OverlapParams.new()
@@ -74,96 +138,15 @@ return function(C, R, UI)
             if m and not uniq[m] and m.Parent == items and m.Name == "Log" and not excludeSet[m] then
                 local mp = mainPart(m)
                 if mp and (mp.Position - center).Magnitude <= radius then
-                    uniq[m] = true
-                    out[#out+1] = m
+                    uniq[m] = true; out[#out+1] = m
                 end
             end
         end
         return out
     end
 
-    local selectedNames = {}
-    local function setSelectedFromDropdown(choice)
-        local set = {}
-        if type(choice) == "table" then
-            for _,v in ipairs(choice) do if v and v ~= "" then set[v] = true end end
-        elseif choice and choice ~= "" then
-            set[choice] = true
-        end
-        selectedNames = set
-    end
-
-    local function playerList()
-        local t = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then t[#t+1] = p.Name end
-        end
-        table.sort(t)
-        return t
-    end
-
-    local drop
-    local function refreshDropdown()
-        local vals = playerList()
-        if drop and drop.SetValues then
-            drop:SetValues(vals)
-        end
-    end
-
-    local function pickTargetParts(char)
-        local parts = {}
-        for _,bp in ipairs(getParts(char)) do
-            if bp.Name ~= "HumanoidRootPart" then
-                local s = bp.Size
-                if s.X >= PART_MIN_SIZE or s.Y >= PART_MIN_SIZE or s.Z >= PART_MIN_SIZE then
-                    parts[#parts+1] = bp
-                end
-            end
-        end
-        if #parts == 0 then
-            local hrpPart = char and char:FindFirstChild("HumanoidRootPart")
-            if hrpPart then parts[#parts+1] = hrpPart end
-        end
-        return parts
-    end
-
-    local function goldenOffset(i, part)
-        local a = i * 2.399963229728653
-        local r = 0.15 + 0.035 * i
-        local s = part.Size
-        local xr = math.clamp(s.X * 0.45, 0.2, 1.0)
-        local yr = math.clamp(s.Y * 0.45, 0.2, 1.0)
-        local zr = math.clamp(s.Z * 0.45, 0.2, 1.0)
-        local rx = math.cos(a) * xr
-        local rz = math.sin(a) * zr
-        local ry = ((i * 0.37) % 1.0 - 0.5) * 2 * yr
-        return Vector3.new(rx, ry, rz) * (1 + (i%3)*0.05)
-    end
-
-    local function ensureNoCollide(model)
-        for _,p in ipairs(getParts(model)) do
-            p.Anchored = true
-            p.CanCollide = false
-            p.CanTouch = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-            pcall(function() p:SetNetworkOwner(nil) end)
-            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-        end
-    end
-
-    local function placeAt(model, cf)
-        if not model or not model.Parent then return end
-        if model:IsA("Model") then
-            model:PivotTo(cf)
-        else
-            local mp = mainPart(model)
-            if mp then mp.CFrame = cf end
-        end
-    end
-
-    local attachments = {}         -- player.UserId -> { entries = { {model=, part=, idx=, dragging=true} }, conn=HeartbeatConn }
-    local claimed = setmetatable({}, {__mode="k"}) -- model -> true
+    local attachments = {}                   -- uid -> { entries = { {model, part, idx, ω, r, h, φ} }, conn }
+    local claimed     = setmetatable({}, {__mode="k"}) -- model -> true
 
     local function detachForUserId(uid)
         local pack = attachments[uid]
@@ -172,12 +155,9 @@ return function(C, R, UI)
             local e = pack.entries[i]
             if e.model and e.model.Parent then
                 stopDrag(e.model)
-                for _,p in ipairs(getParts(e.model)) do
-                    p.Anchored = false
+                for _,p in ipairs(partsOf(e.model)) do
                     p.CanCollide = true
                     p.CanTouch = true
-                    p.AssemblyAngularVelocity = Vector3.new()
-                    p.AssemblyLinearVelocity  = Vector3.new()
                 end
             end
             claimed[e.model] = nil
@@ -188,26 +168,28 @@ return function(C, R, UI)
     end
 
     local function ensureFollowLoop(uid, char)
-        local pack = attachments[uid]
-        if not pack then return end
+        local pack = attachments[uid]; if not pack then return end
         if pack.conn then return end
-        local acc, dtTarget = 0, 1/UPDATE_HZ
+        local acc, tickDt = 0, 1/UPDATE_HZ
         pack.conn = Run.Heartbeat:Connect(function(dt)
             acc += dt
-            if acc < dtTarget then return end
+            if acc < tickDt then return end
             acc = 0
             if not char or not char.Parent then detachForUserId(uid); return end
+            local now = os.clock()
             for i=#pack.entries,1,-1 do
                 local e = pack.entries[i]
-                local model = e.model
-                local part  = e.part
+                local model, part = e.model, e.part
                 if not (model and model.Parent and part and part.Parent) then
                     claimed[model] = nil
                     table.remove(pack.entries, i)
                 else
-                    ensureNoCollide(model)
-                    local off = goldenOffset(e.idx, part)
-                    local cf  = part.CFrame * CFrame.new(off)
+                    ensureDragOwnership(model)
+                    local ang = e.φ + now * e.ω
+                    local x = math.cos(ang) * e.r
+                    local z = math.sin(ang) * e.r
+                    local y = e.h
+                    local cf = part.CFrame * CFrame.new(x, y, z)
                     placeAt(model, cf)
                 end
             end
@@ -231,20 +213,26 @@ return function(C, R, UI)
 
         local root = hrp(); if not root then return end
         local pool = nearbyLogs(root.Position, DRAG_RADIUS, claimed)
-        local parts = pickTargetParts(char)
-        if #parts == 0 then return end
+        if #pool == 0 then ensureFollowLoop(uid, char); return end
+
+        local targets = pickTargetParts(char); if #targets == 0 then return end
 
         local added = 0
-        local idxStart = #pack.entries + 1
+        local baseIdx = #pack.entries
         for i=1,#pool do
             if added >= need then break end
             local m = pool[i]
             if m and m.Parent and not claimed[m] then
                 local ok = startDrag(m)
                 claimed[m] = true
-                ensureNoCollide(m)
-                local part = parts[((idxStart + added - 1) % #parts) + 1]
-                pack.entries[#pack.entries+1] = { model = m, part = part, idx = idxStart + added, dragging = ok }
+                ensureDragOwnership(m)
+                local idx = baseIdx + added + 1
+                local part = targets[((idx - 1) % #targets) + 1]
+                local ω = 1.2 + (idx % 5) * 0.15
+                local r = 1.0 + (idx % 7) * 0.08
+                local h = -0.2 + ((idx * 0.37) % 1.0) * 0.9
+                local φ = golden(idx)
+                pack.entries[#pack.entries+1] = { model=m, part=part, idx=idx, ω=ω, r=r, h=h, φ=φ }
                 added += 1
             end
         end
@@ -254,34 +242,17 @@ return function(C, R, UI)
     local function addSelectedPlayers()
         for name,_ in pairs(selectedNames) do
             local plr = Players:FindFirstChild(name)
-            if plr and plr:IsA("Player") then
-                attachLogsToPlayer(plr)
-            end
+            if plr and plr:IsA("Player") then attachLogsToPlayer(plr) end
         end
     end
-
     local function stopForUnselected()
-        local current = {}
-        for name,_ in pairs(selectedNames) do current[name] = true end
-        for uid,pack in pairs(attachments) do
-            local keep = false
+        local keep = {}
+        for name,_ in pairs(selectedNames) do keep[name] = true end
+        for uid,_ in pairs(attachments) do
             local plr = Players:GetPlayerByUserId(tonumber(uid) or 0)
-            if plr and current[plr.Name] then keep = true end
-            if not keep then detachForUserId(uid) end
+            if not (plr and keep[plr.Name]) then detachForUserId(uid) end
         end
     end
-
-    local function onPlayerRemoving(plr)
-        if not plr then return end
-        detachForUserId(tostring(plr.UserId))
-        refreshDropdown()
-    end
-    local function onPlayerAdded(_)
-        refreshDropdown()
-    end
-
-    Players.PlayerAdded:Connect(onPlayerAdded)
-    Players.PlayerRemoving:Connect(onPlayerRemoving)
 
     tab:Section({ Title = "Target Players" })
     drop = tab:Dropdown({
@@ -293,16 +264,6 @@ return function(C, R, UI)
     })
 
     tab:Section({ Title = "Controls" })
-    tab:Button({
-        Title = "Start",
-        Callback = function()
-            addSelectedPlayers()
-        end
-    })
-    tab:Button({
-        Title = "Stop",
-        Callback = function()
-            stopForUnselected()
-        end
-    })
+    tab:Button({ Title = "Start", Callback = addSelectedPlayers })
+    tab:Button({ Title = "Stop",  Callback = stopForUnselected })
 end
