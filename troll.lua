@@ -12,26 +12,41 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found in UI")
 
-    -- Search/selection
+    -- Search / selection
     local MAX_LOGS       = 50
     local SEARCH_RADIUS  = 200
 
-    -- Motion
-    local TICK              = 0.03
-    local FLOAT_RADIUS_MIN  = 3.0
-    local FLOAT_RADIUS_MAX  = 7.5
-    local ANGULAR_SPEED_MIN = 0.7
-    local ANGULAR_SPEED_MAX = 1.8
+    -- Motion: chaotic 3D “smog” volume
+    local TICK                 = 0.02
+    local CLOUD_RADIUS_MIN     = 2.0      -- inner radius around target
+    local CLOUD_RADIUS_MAX     = 9.0      -- outer radius
+    local HEIGHT_BASE          = 0.5      -- relative to target HRP Y
+    local HEIGHT_RANGE_MIN     = -2.0
+    local HEIGHT_RANGE_MAX     = 3.0
 
-    -- Height: orbit around torso level, small wobble
-    local HEIGHT_BASE      = 1.25   -- studs above HRP
-    local HEIGHT_WOBBLE    = 0.35   -- +/- wobble
-    local HEIGHT_WOBBLE_HZ = 0.6
+    -- Jitter layers (bigger = messier)
+    local JIT_XZ1              = 1.4
+    local JIT_XZ2              = 0.9
+    local JIT_Y1               = 0.9
+    local JIT_Y2               = 0.6
+    local W_XZ1_MIN, W_XZ1_MAX = 1.2, 2.4
+    local W_XZ2_MIN, W_XZ2_MAX = 2.0, 3.6
+    local W_Y1_MIN,  W_Y1_MAX  = 1.0, 2.0
+    local W_Y2_MIN,  W_Y2_MAX  = 2.0, 4.0
 
-    -- Drag and safety
-    local DRAG_SETTLE     = 0.06
-    local JOB_TIMEOUT_S   = 90
-    local REASSIGN_IF_LOST_S = 2.0
+    -- Re-slot frequently
+    local RESLOT_EVERY_MIN     = 0.45
+    local RESLOT_EVERY_MAX     = 1.20
+
+    -- Dash bursts: quick aggressive sweeps through target
+    local BURST_CHANCE_PER_SEC = 0.15
+    local BURST_DURATION       = 0.18
+    local BURST_PUSH           = 6.5      -- extra studs towards/through the target during burst
+
+    -- Drag + safety
+    local DRAG_SETTLE          = 0.05
+    local JOB_TIMEOUT_S        = 120
+    local REASSIGN_IF_LOST_S   = 2.0
 
     local function hrp(p)
         p = p or lp
@@ -115,8 +130,7 @@ return function(C, R, UI)
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
         local parts = WS:GetPartBoundsInRadius(center, SEARCH_RADIUS, params) or {}
-        local items = {}
-        local uniq  = {}
+        local items, uniq = {}, {}
         for _,part in ipairs(parts) do
             if part:IsA("BasePart") then
                 local m = part:FindFirstAncestorOfClass("Model")
@@ -186,39 +200,101 @@ return function(C, R, UI)
         end
     end
 
-    -- Updated orbit: keep Y near target HRP + HEIGHT_BASE with a small wobble
-    local function floatAroundTarget(model, targetPlayer, seed)
-        local st = os.clock()
-        local r  = math.random(FLOAT_RADIUS_MIN*100, FLOAT_RADIUS_MAX*100)/100
-        local w  = math.random(ANGULAR_SPEED_MIN*100, ANGULAR_SPEED_MAX*100)/100
-        local phase = (seed or 0) % (2*math.pi)
-        activeJobs[model] = { stop = false }
-        local jobRef = activeJobs[model]
+    -- Random helper
+    local function rngFor(seed)
+        return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1))
+    end
 
+    -- Pick a 3D slot within an ellipsoidal shell around target.
+    local function pickCloudSlot(rng)
+        local r  = rng:NextNumber(CLOUD_RADIUS_MIN, CLOUD_RADIUS_MAX)
+        local th = rng:NextNumber(0, math.pi*2)
+        local ph = rng:NextNumber(-0.85, 0.85) -- favor a band, but allow above/below
+        local x = r * math.cos(th) * math.cos(ph)
+        local z = r * math.sin(th) * math.cos(ph)
+        local y = HEIGHT_BASE + rng:NextNumber(HEIGHT_RANGE_MIN, HEIGHT_RANGE_MAX)
+        return Vector3.new(x, y, z)
+    end
+
+    local function floatAroundTarget(model, targetPlayer, seed)
         local started = safeStartDrag(rcache, model)
         task.wait(DRAG_SETTLE)
         local snap = setCollide(model, false)
         zeroAssembly(model)
 
-        local lastSeen = os.clock()
+        local state = {
+            rng         = rngFor((seed or 0) + os.clock()),
+            slot        = nil,
+            reslotAt    = 0,
+            burstUntil  = 0,
+            burstDir    = 1,  -- push through or away
+            t0          = os.clock(),
+            lastSeen    = os.clock(),
+            phases = {
+                xz1 = math.random()*math.pi*2,
+                xz2 = math.random()*math.pi*2,
+                y1  = math.random()*math.pi*2,
+                y2  = math.random()*math.pi*2,
+            },
+            w = {
+                xz1 = math.random()*(W_XZ1_MAX-W_XZ1_MIN)+W_XZ1_MIN,
+                xz2 = math.random()*(W_XZ2_MAX-W_XZ2_MIN)+W_XZ2_MIN,
+                y1  = math.random()*(W_Y1_MAX -W_Y1_MIN )+W_Y1_MIN,
+                y2  = math.random()*(W_Y2_MAX -W_Y2_MIN )+W_Y2_MIN,
+            },
+        }
 
-        while running and jobRef == activeJobs[model] do
+        local function ensureSlot()
+            local now = os.clock()
+            if (not state.slot) or now >= state.reslotAt then
+                state.slot = pickCloudSlot(state.rng)
+                state.reslotAt = now + state.rng:NextNumber(RESLOT_EVERY_MIN, RESLOT_EVERY_MAX)
+            end
+        end
+
+        local function maybeBurst()
+            local now = os.clock()
+            if now < state.burstUntil then return end
+            if state.rng:NextNumber() < BURST_CHANCE_PER_SEC * TICK then
+                state.burstUntil = now + BURST_DURATION
+                state.burstDir   = (state.rng:NextNumber() < 0.5) and -1 or 1
+            end
+        end
+
+        activeJobs[model] = true
+        while running and activeJobs[model] do
             local root = hrp(targetPlayer)
             if not root then
-                if os.clock() - lastSeen > REASSIGN_IF_LOST_S then break end
+                if os.clock() - state.lastSeen > REASSIGN_IF_LOST_S then break end
             else
-                lastSeen = os.clock()
+                state.lastSeen = os.clock()
+                ensureSlot()
+                maybeBurst()
+
                 local base = root.Position
-                local t = os.clock() - st
-                local ang = phase + w * t
-                local y  = base.Y + HEIGHT_BASE + math.sin(t * HEIGHT_WOBBLE_HZ) * HEIGHT_WOBBLE
-                local pos = Vector3.new(
-                    base.X + math.cos(ang) * r,
-                    y,
-                    base.Z + math.sin(ang) * r
-                )
+                local t = os.clock() - state.t0
+
+                -- Multi-layer jitter
+                local jx = math.sin(t * state.w.xz1 + state.phases.xz1) * JIT_XZ1
+                         + math.cos(t * state.w.xz2 + state.phases.xz2) * JIT_XZ2
+                local jz = math.cos(t * state.w.xz1 * 0.8 + state.phases.xz1*0.7) * JIT_XZ1
+                         + math.sin(t * state.w.xz2 * 1.3 + state.phases.xz2*0.5) * JIT_XZ2
+                local jy = math.sin(t * state.w.y1  + state.phases.y1 ) * JIT_Y1
+                         + math.cos(t * state.w.y2  + state.phases.y2 ) * JIT_Y2
+
+                local off = state.slot + Vector3.new(jx, jy, jz)
+
+                -- Dash burst through/away from target
+                if os.clock() < state.burstUntil then
+                    local dirToTarget = (base - (base + off)).Unit
+                    off = off + dirToTarget * (BURST_PUSH * state.burstDir)
+                end
+
+                local pos = base + off
                 local look = (base - pos).Unit
                 setPivot(model, CFrame.new(pos, pos + look))
+
+                -- Keep velocity dead for tight control
                 for _,p in ipairs(getAllParts(model)) do
                     p.AssemblyLinearVelocity  = Vector3.new()
                     p.AssemblyAngularVelocity = Vector3.new()
@@ -233,15 +309,14 @@ return function(C, R, UI)
     end
 
     local function startFloat(logs, targets)
+        if #targets == 0 or #logs == 0 then return end
         running = true
         activeJobs = {}
-
-        if #targets == 0 or #logs == 0 then return end
         local idx = 1
         for i,mdl in ipairs(logs) do
             local tgt = targets[idx]
             task.spawn(function()
-                floatAroundTarget(mdl, tgt, i*0.37)
+                floatAroundTarget(mdl, tgt, i*0.73)
             end)
             idx += 1
             if idx > #targets then idx = 1 end
@@ -266,12 +341,12 @@ return function(C, R, UI)
         end
     end
 
+    -- UI
     local selectedPlayers = {}
-
-    tab:Section({ Title = "Troll: Orbit Logs Around Players" })
+    tab:Section({ Title = "Troll: Chaotic Log Smog" })
     local playerDD = tab:Dropdown({
         Title = "Players",
-        Values = playerChoices(),
+        Values = (function() local v = {}; for _,p in ipairs(Players:GetPlayers()) do if p ~= lp then v[#v+1]=("%s#%d"):format(p.Name, p.UserId) end end; table.sort(v); return v end)(),
         Multi = true,
         AllowNone = true,
         Callback = function(choice)
@@ -281,10 +356,9 @@ return function(C, R, UI)
     tab:Button({
         Title = "Refresh Player List",
         Callback = function()
-            local vals = playerChoices()
-            if playerDD and playerDD.SetValues then
-                playerDD:SetValues(vals)
-            end
+            local vals = {}; for _,p in ipairs(Players:GetPlayers()) do if p ~= lp then vals[#vals+1]=("%s#%d"):format(p.Name, p.UserId) end end
+            table.sort(vals)
+            if playerDD and playerDD.SetValues then playerDD:SetValues(vals) end
         end
     })
     tab:Button({
