@@ -12,13 +12,13 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
+    -- Core scan + orbit tuning
     local TICK = 0.02
     local SEARCH_RADIUS = 200
-
     local CFG = {
-        DesiredLogs = 5,
-        Speed       = 1.0,
-        HeightRange = 5.0,
+        DesiredLogs = 5,        -- slider 1..50 (default 5)
+        Speed       = 1.0,      -- slider 0.5..3.0
+        HeightRange = 5.0,      -- slider 1..10  (maps to [-0.4*span, +0.6*span])
         CloudMinR   = 2.0,
         CloudMaxR   = 9.0,
 
@@ -27,7 +27,7 @@ return function(C, R, UI)
         AvoidLift   = 15,
         AvoidReeval = 0.2,
 
-        CameraLead  = 8.0,
+        -- Predictive lead
         LeadBase    = 0.18,
         LeadGain    = 0.25,
         LeadMax     = 0.60,
@@ -36,11 +36,19 @@ return function(C, R, UI)
         FlipThresh  = -0.30,
         FlipPush    = 10.0,
 
-        HazardTopPad = 6.0,
-        HazardRadPad = 2.0,
-        HazardBiasUp = 8.0
+        -- Nudge settings (no UI; automatic)
+        NudgeChancePerSec = 0.18,  -- chance per log per second to start a sweep
+        NudgeDuration     = 0.55,  -- seconds the sweep lasts
+        NudgeAhead        = 6.0,   -- studs in front of face
+        NudgeEyeY         = 2.0,   -- eye height above HRP
+        NudgeSideJitter   = 1.2,   -- sideways jitter for variability
+
+        -- Hazard padding
+        HazardTopPad = 6.0,        -- lift only when inside hazard radius
+        HazardRadPad = 2.0
     }
 
+    -- Chaotic motion tuning
     local BURST_CHANCE_PER_SEC = 0.15
     local BURST_DURATION       = 0.18
     local BURST_PUSH_BASE      = 6.5
@@ -116,7 +124,6 @@ return function(C, R, UI)
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
         return nil
     end
-
     local REM = { StartDrag=nil, StopDrag=nil }
     local function resolveRemotes()
         REM.StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem")
@@ -200,6 +207,7 @@ return function(C, R, UI)
         return minY, maxY
     end
 
+    -- Avoidance caches
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
     local function partCenter(m)
         if not m then return nil end
@@ -251,6 +259,7 @@ return function(C, R, UI)
         return list
     end
 
+    -- Only modify positions when actually inside hazard radius.
     local function projectOutOfHazards(pos)
         local hs = hazardInfo()
         if #hs == 0 then return pos end
@@ -267,10 +276,6 @@ return function(C, R, UI)
                         pos = Vector3.new(rim.X, math.max(pos.Y, c.Y + CFG.HazardTopPad), rim.Z) + Vector3.new(0, CFG.AvoidLift, 0)
                     else
                         pos = Vector3.new(c.X + rSafe, math.max(pos.Y, c.Y + CFG.HazardTopPad), c.Z) + Vector3.new(0, CFG.AvoidLift, 0)
-                    end
-                else
-                    if pos.Y < c.Y + CFG.HazardTopPad then
-                        pos = Vector3.new(pos.X, c.Y + CFG.HazardTopPad, pos.Z)
                     end
                 end
             end
@@ -291,22 +296,18 @@ return function(C, R, UI)
         return false, nil
     end
 
+    -- Runtime state
     local running = false
     local desired = CFG.DesiredLogs
-    local active  = {}
-    local activeList = {}
-    local targets = {}
+    local active  = {}          -- {model -> st}
+    local activeList = {}       -- [models]
+    local targets = {}          -- Players selected
     local reconcileConn, hbConn = nil, nil
     local lastDt = 1/60
     local scanAt = 0
     local scanCache = {}
 
-    local wantCameraLog = false
-    local cameraLogModel = nil
-
-    local playerDD
-    local playerAddedConn, playerRemovingConn
-
+    -- Helpers
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
         local m = off.Magnitude
@@ -314,7 +315,7 @@ return function(C, R, UI)
         return off
     end
 
-    local function adopt(model, tgt, seed, isCamera)
+    local function adopt(model, tgt, seed)
         if active[model] then return end
         active[model] = {
             target = tgt,
@@ -336,7 +337,9 @@ return function(C, R, UI)
             snap = nil,
             lastSeen = os.clock(),
             lastVel = Vector3.zero,
-            isCamera = isCamera == true
+            -- nudge state
+            nudgeUntil = 0,
+            nudgeSide  = 0
         }
         table.insert(activeList, model)
         task.spawn(function()
@@ -347,9 +350,6 @@ return function(C, R, UI)
             for _,p in ipairs(getParts(model)) do pcall(function() p:SetNetworkOwner(lp) end) end
             zeroAssembly(model)
         end)
-        if active[model].isCamera then
-            cameraLogModel = model
-        end
     end
     local function shed(model)
         local st = active[model]
@@ -362,9 +362,6 @@ return function(C, R, UI)
             p.AssemblyAngularVelocity = Vector3.new()
             pcall(function() p:SetNetworkOwner(nil) end)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-        end
-        if model == cameraLogModel then
-            cameraLogModel = nil
         end
     end
 
@@ -393,32 +390,35 @@ return function(C, R, UI)
         end
     end
 
+    -- Predictive base for target
     local function predictiveBaseFor(st)
-        if st.isCamera then
-            local cam = WS.CurrentCamera
-            if cam and cam.CFrame then
-                local pos  = cam.CFrame.Position
-                local look = cam.CFrame.LookVector
-                return pos + look * CFG.CameraLead, look
-            end
-            local r = hrp(lp); if r then return r.Position, r.CFrame.LookVector end
-            return nil, Vector3.new(0,0,-1)
-        else
-            local root = hrp(st.target)
-            if not root then return nil, Vector3.new(0,0,-1) end
-            local vel = root.AssemblyLinearVelocity
-            local speed = vel.Magnitude
-            local leadT = 0
-            if speed > CFG.LeadStop then
-                leadT = math.clamp(CFG.LeadBase + CFG.LeadGain * (speed/16), 0, CFG.LeadMax)
-            end
-            local base = root.Position + vel * leadT
-            local look = (speed > 1e-3) and (vel / speed) or (root.CFrame.LookVector)
-            local inside, c = insideHazard(base)
-            if inside then
-                base = Vector3.new(base.X, math.max(base.Y, c.Y + CFG.HazardTopPad) + CFG.HazardBiasUp, base.Z)
-            end
-            return base, look
+        local root = hrp(st.target)
+        if not root then return nil, Vector3.new(0,0,-1) end
+        local vel = root.AssemblyLinearVelocity
+        local speed = vel.Magnitude
+        local leadT = 0
+        if speed > CFG.LeadStop then
+            leadT = math.clamp(CFG.LeadBase + CFG.LeadGain * (speed/16), 0, CFG.LeadMax)
+        end
+        local base = root.Position + vel * leadT
+        local look = (speed > 1e-3) and (vel / speed) or (root.CFrame.LookVector)
+
+        -- If base lands inside a hazard, bias up
+        local inside, c = insideHazard(base)
+        if inside and c then
+            base = Vector3.new(base.X, math.max(base.Y, c.Y + CFG.HazardTopPad), base.Z)
+        end
+        return base, look
+    end
+
+    -- Maybe start a nudge sweep
+    local function maybeStartNudge(st, dt)
+        if os.clock() < st.nudgeUntil then return end
+        local chance = CFG.NudgeChancePerSec * CFG.Speed
+        if st.rng:NextNumber() < chance * math.clamp(dt, 0.01, 0.1) then
+            st.nudgeUntil = os.clock() + CFG.NudgeDuration
+            -- Randomly nudge from left or right side
+            st.nudgeSide = (st.rng:NextNumber() < 0.5) and -1 or 1
         end
     end
 
@@ -431,6 +431,7 @@ return function(C, R, UI)
         st.lastSeen = os.clock()
         ensureSlot(st)
         maybeBurst(st)
+        maybeStartNudge(st, dt)
 
         local t = (os.clock() - (st.t0 or os.clock())) * CFG.Speed
 
@@ -443,17 +444,48 @@ return function(C, R, UI)
 
         local off = st.slot + Vector3.new(jx, jy, jz)
 
+        -- Direction flip dart
+        local root = hrp(st.target)
+        if root then
+            local vel = root.AssemblyLinearVelocity
+            local speed = vel.Magnitude
+            local newDir = speed > 1e-3 and (vel / speed) or Vector3.zero
+            if st.lastVel.Magnitude > 1e-3 and newDir ~= Vector3.zero then
+                local dot = newDir:Dot(st.lastVel.Magnitude > 1e-3 and st.lastVel.Unit or newDir)
+                if dot < CFG.FlipThresh then
+                    st.burstUntil = os.clock() + CFG.FlipDart
+                    st.burstDir   = 1
+                    st.flipPushDir = newDir
+                end
+            end
+            st.lastVel = vel
+        end
+
         if os.clock() < st.burstUntil then
             local dir = st.flipPushDir or (-off).Unit
             off = off + dir * (CFG.FlipPush + BURST_PUSH_BASE) * CFG.Speed * st.burstDir
         end
         st.flipPushDir = nil
 
+        -- Prevent extreme excursions, keep true 3D
         off = clampOrbital(off)
 
-        local posCandidate = base + off
+        -- Nudge sweep: target a point in front of the face
+        local posCandidate
+        if os.clock() < st.nudgeUntil and root then
+            local eye = root.Position + Vector3.new(0, CFG.NudgeEyeY, 0)
+            local look = baseLook or root.CFrame.LookVector
+            local right = root.CFrame.RightVector
+            local side = right * (st.nudgeSide * CFG.NudgeSideJitter)
+            posCandidate = eye + look * CFG.NudgeAhead + side + Vector3.new(0, jy * 0.3, 0)
+        else
+            posCandidate = base + off
+        end
+
+        -- Hazard handling only if actually inside
         posCandidate = projectOutOfHazards(posCandidate)
 
+        -- Final leash
         local leashR = CFG.CloudMaxR + 6.0
         local vecFromBase = posCandidate - base
         local dist = vecFromBase.Magnitude
@@ -462,13 +494,13 @@ return function(C, R, UI)
         end
 
         local cur = getPivotPos(model) or posCandidate
-        local look = (base - cur)
-        if look.Magnitude < 1e-3 then
-            look = baseLook or Vector3.new(0,0,-1)
+        local lookVec = (base - cur)
+        if lookVec.Magnitude < 1e-3 then
+            lookVec = baseLook or Vector3.new(0,0,-1)
         else
-            look = look.Unit
+            lookVec = lookVec.Unit
         end
-        setPivot(model, CFrame.new(posCandidate, posCandidate + look))
+        setPivot(model, CFrame.new(posCandidate, posCandidate + lookVec))
 
         for _,p in ipairs(getParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
@@ -490,31 +522,15 @@ return function(C, R, UI)
         local have = #activeList
         local batch = 4
 
-        if wantCameraLog and not cameraLogModel and #scanCache > 0 and #targets > 0 then
-            for i=1,#scanCache do
-                local mdl = scanCache[i]
-                if mdl and mdl.Parent and not active[mdl] then
-                    adopt(mdl, targets[1], (#activeList + 1)*0.91, true)
-                    break
-                end
-            end
-        elseif not wantCameraLog and cameraLogModel then
-            if cameraLogModel then shed(cameraLogModel) end
-        end
-
         if have < want and lastDt <= (1/45) then
             local toAdd = math.min(batch, want - have)
             local idx = 1
             while toAdd > 0 and idx <= #scanCache do
                 local mdl = scanCache[idx]; idx = idx + 1
                 if mdl and mdl.Parent and not active[mdl] then
-                    local isCam = false
-                    if wantCameraLog and not cameraLogModel then
-                        isCam = true
-                    end
                     local tgt = targets[ ((#activeList) % math.max(1,#targets)) + 1 ]
                     if tgt then
-                        adopt(mdl, tgt, (#activeList + 1) * 0.73, isCam)
+                        adopt(mdl, tgt, (#activeList + 1) * 0.73)
                         toAdd = toAdd - 1
                     end
                 end
@@ -534,47 +550,55 @@ return function(C, R, UI)
         if hbConn then hbConn:Disconnect(); hbConn=nil end
         for i=#activeList,1,-1 do local mdl=activeList[i]; if mdl then shed(mdl) end end
         active = {}; activeList = {}
-        cameraLogModel = nil
     end
 
+    -- UI + dropdown rebuild
     local selectedSet = {}
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
-    local function refreshDropdownValues()
+    local playerDD
+    local function buildPlayerDropdown()
+        if playerDD and playerDD.Destroy then pcall(function() playerDD:Destroy() end) end
         local vals = playersList()
-        if playerDD then
-            if playerDD.SetValues then
-                playerDD:SetValues(vals)
-            elseif playerDD.SetOptions then
-                playerDD:SetOptions(vals)
-            end
-            if playerDD.GetSelected then
-                local cur = playerDD:GetSelected()
-                selectedSet = parseSelection(cur)
+
+        -- Rehydrate current selection names from IDs so we can re-apply after rebuild
+        local preselect = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p ~= lp and selectedSet[p.UserId] then
+                preselect[#preselect+1] = ("%s#%d"):format(p.Name, p.UserId)
             end
         end
+
+        playerDD = tab:Dropdown({
+            Title = "Players",
+            Values = vals,
+            Multi = true,
+            AllowNone = true,
+            Default = preselect,
+            Callback = function(choice)
+                selectedSet = parseSelection(choice)
+            end
+        })
     end
 
-    playerDD = tab:Dropdown({
-        Title = "Players",
-        Values = playersList(),
-        Multi = true,
-        AllowNone = true,
-        Callback = function(choice) selectedSet = parseSelection(choice) end
-    })
+    buildPlayerDropdown()
 
-    if playerAddedConn then playerAddedConn:Disconnect() end
-    if playerRemovingConn then playerRemovingConn:Disconnect() end
-    playerAddedConn = Players.PlayerAdded:Connect(function(p)
-        if p ~= lp then task.delay(0.1, refreshDropdownValues) end
+    local playerAddedConn = Players.PlayerAdded:Connect(function(p)
+        if p ~= lp then
+            task.delay(0.2, buildPlayerDropdown)
+        end
     end)
-    playerRemovingConn = Players.PlayerRemoving:Connect(function(p)
-        if p ~= lp then task.delay(0.1, refreshDropdownValues) end
+    local playerRemovingConn = Players.PlayerRemoving:Connect(function(p)
+        if p ~= lp then
+            task.delay(0.2, buildPlayerDropdown)
+        end
     end)
 
     tab:Button({
         Title = "Refresh Player List",
-        Callback = function() refreshDropdownValues() end
+        Callback = function()
+            buildPlayerDropdown()
+        end
     })
 
     tab:Slider({
@@ -602,20 +626,12 @@ return function(C, R, UI)
         end
     })
 
-    tab:Toggle({
-        Title = "Bind one log to Camera",
-        Default = false,
-        Callback = function(on)
-            wantCameraLog = on and true or false
-        end
-    })
-
     tab:Button({
         Title = "Start",
         Callback = function()
             stopAll()
             resolveRemotes()
-            refreshDropdownValues()
+            -- selections already in selectedSet
             targets = selectedPlayersList(selectedSet)
             if #targets == 0 then return end
             running = true
@@ -623,7 +639,7 @@ return function(C, R, UI)
                 lastDt = dt
                 if not running then return end
                 for mdl,st in pairs(active) do
-                    if mdl and mdl.Parent and st and (st.target or st.isCamera) then
+                    if mdl and mdl.Parent and st and st.target then
                         local ok = floatStep(mdl, st, dt)
                         if not ok then shed(mdl) end
                     else
