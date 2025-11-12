@@ -10,10 +10,7 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main
     if not tab then return end
 
-    ----------------------------------------------------------------
-    -- Tunables (your last shared values)
-    ----------------------------------------------------------------
-    local MAX_LOGS               = 80
+    local MAX_LOGS               = 50
     local SEARCH_RADIUS          = 200
     local TICK                   = 0.02
 
@@ -23,9 +20,11 @@ return function(C, R, UI)
     local AVOID_REEVAL_S         = 0.2
 
     local BULL_MAX_LOGS   = 120
-    local BULL_THICKNESS  = 3
+    local BULL_WIDTH      = 5     -- columns
+    local BULL_HEIGHT     = 2     -- rows
+    local BULL_THICKNESS  = 2     -- layers front-to-back
     local BULL_PUSH_STUDS = 20
-    local BULL_GAP_STUDS  = 1.5
+    local BULL_GAP_STUDS  = 1.0
     local BULL_SPEED      = 42
 
     local BOX_RADIUS         = 20
@@ -34,28 +33,26 @@ return function(C, R, UI)
     local BOX_REFRESH_S      = 5.0
     local BOX_MAX_PER_TARGET = 18
 
-    ----------------------------------------------------------------
-    -- Chaos parameters (increased 3D energy)
-    ----------------------------------------------------------------
     local CHAOS_PER_PLAYER   = 18
-    local CHAOS_BASE_R       = 6
-    local CHAOS_R_WOBBLE     = 3.5
-    local CHAOS_VERT_BASE    = 2.5     -- base shell height contribution
-    local CHAOS_VERT_BOB     = 4.0     -- extra bob
-    local CHAOS_LAYERS       = 3       -- vertical shells
-    local CHAOS_XZ_JITTER    = 2.2
-    local CHAOS_FREQ_BASE    = 2.6
-    local CHAOS_FREQ_JIT     = 1.8
-    local CHAOS_PAUSE_PROB   = 0.08
-    local CHAOS_PAUSE_MS_MIN = 80
-    local CHAOS_PAUSE_MS_MAX = 240
-    local CHAOS_FLIP_PROB    = 0.07
+    local CLOUD_RADIUS_MIN   = 2.0
+    local CLOUD_RADIUS_MAX   = 9.0
+    local HEIGHT_BASE        = 0.5
+    local HEIGHT_RANGE_MIN   = -2.0
+    local HEIGHT_RANGE_MAX   = 3.0
+    local JIT_XZ1, JIT_XZ2   = 1.4, 0.9
+    local JIT_Y1,  JIT_Y2    = 0.9, 0.6
+    local W_XZ1_MIN, W_XZ1_MAX = 1.2, 2.4
+    local W_XZ2_MIN, W_XZ2_MAX = 2.0, 3.6
+    local W_Y1_MIN,  W_Y1_MAX  = 1.0, 2.0
+    local W_Y2_MIN,  W_Y2_MAX  = 2.0, 4.0
+    local RESLOT_EVERY_MIN   = 0.45
+    local RESLOT_EVERY_MAX   = 1.20
+    local BURST_CHANCE_PER_S = 0.15
+    local BURST_DURATION     = 0.18
+    local BURST_PUSH         = 6.5
+    local CHAOS_STEP_S       = 0.02
     local CHAOS_REPL_S       = 0.35
-    local CHAOS_STEP_S       = 0.015
 
-    ----------------------------------------------------------------
-    -- Utils
-    ----------------------------------------------------------------
     local function hrpOf(p)
         local ch = (p or lp).Character or (p or lp).CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
@@ -69,27 +66,16 @@ return function(C, R, UI)
         end
         return nil
     end
-    local function getItemsFolder() return WS:FindFirstChild("Items") end
-
-    local function isUnderLogWall(inst)
-        local cur = inst
-        while cur and cur ~= WS do
-            local n = (cur.Name or ""):lower()
-            if n == "logwall" or n == "log wall" or (n:find("log",1,true) and n:find("wall",1,true)) then
-                return true
-            end
-            cur = cur.Parent
-        end
-        return false
+    local function cfLookAt(pos, dir)
+        return CFrame.new(pos, pos + (dir.Magnitude > 1e-6 and dir.Unit or Vector3.zAxis))
     end
-
+    local function getItemsFolder() return WS:FindFirstChild("Items") end
     local function worldPosOf(m)
         local mp = mainPart(m)
         if mp then return mp.Position end
         local ok, cf = pcall(function() return m:GetPivot() end)
         return ok and cf.Position or nil
     end
-
     local function resolveRemotes()
         local re = RS:FindFirstChild("RemoteEvents")
         if not re then return {} end
@@ -98,20 +84,9 @@ return function(C, R, UI)
             StopDrag  = re:FindFirstChild("StopDraggingItem") or re:FindFirstChild("RequestStopDraggingItem"),
         }
     end
-    local function startDrag(m)
-        local r = resolveRemotes()
-        if r.StartDrag and m and m.Parent then pcall(function() r.StartDrag:FireServer(m) end) end
-    end
-    local function stopDrag(m)
-        local r = resolveRemotes()
-        if r.StopDrag and m and m.Parent then pcall(function() r.StopDrag:FireServer(m) end) end
-    end
+    local function startDrag(m) local r=resolveRemotes(); if r.StartDrag and m and m.Parent then pcall(function() r.StartDrag:FireServer(m) end) end end
+    local function stopDrag(m)  local r=resolveRemotes(); if r.StopDrag  and m and m.Parent then pcall(function() r.StopDrag:FireServer(m)  end) end end
 
-    local function cfLookAt(pos, dir)
-        return CFrame.new(pos, pos + (dir.Magnitude > 1e-6 and dir.Unit or Vector3.zAxis))
-    end
-
-    -- Move while collidable and unanchored.
     local function moveHoldAt(m, cf)
         if not (m and m.Parent) then return end
         local mp = mainPart(m); if not mp then return end
@@ -127,77 +102,36 @@ return function(C, R, UI)
                 pcall(function() if d.SetNetworkOwnershipAuto then d:SetNetworkOwnershipAuto() end end)
             end
         end
-        if m:IsA("Model") then
-            m:PivotTo(cf)
-        else
-            mp.CFrame = cf
-        end
+        if m:IsA("Model") then m:PivotTo(cf) else mp.CFrame = cf end
     end
 
     local CLAIM_ATTR = "OrbJob"
-    local INFLT_ATTR = "OrbInFlightAt"
-
-    local function releaseTags(m)
-        if not m then return end
-        pcall(function()
-            m:SetAttribute(CLAIM_ATTR, nil)
-            m:SetAttribute(INFLT_ATTR, nil)
-        end)
-    end
+    local function releaseTags(m) pcall(function() m:SetAttribute(CLAIM_ATTR, nil) end) end
     local function claimLog(m, job)
         if not (m and m.Parent) then return false end
         local tag = m:GetAttribute(CLAIM_ATTR)
         if tag and tag ~= tostring(job) then return false end
-        pcall(function()
-            m:SetAttribute(CLAIM_ATTR, tostring(job))
-            m:SetAttribute(INFLT_ATTR, os.clock())
-        end)
+        pcall(function() m:SetAttribute(CLAIM_ATTR, tostring(job)) end)
         return true
     end
 
-    local function nearbyLogs(origin, radius, limit, jobTag)
-        local items = getItemsFolder(); if not items then return {} end
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { lp.Character }
-        local parts = WS:GetPartBoundsInRadius(origin, radius, params) or {}
-        local uniq, out = {}, {}
-        for _,part in ipairs(parts) do
-            if part:IsA("BasePart") then
-                local m = part:FindFirstAncestorOfClass("Model")
-                if m and m.Parent == items and m.Name == "Log" and not uniq[m] and not isUnderLogWall(m) then
-                    local tag = m:GetAttribute(CLAIM_ATTR)
-                    if (not tag) or tag == tostring(jobTag) then
-                        uniq[m] = true
-                        out[#out+1] = m
-                        if #out >= limit then break end
-                    end
-                end
-            end
-        end
-        return out
-    end
-
-    local function campfireModel()
-        local map = WS:FindFirstChild("Map")
-        local cg  = map and map:FindFirstChild("Campground")
-        return cg and cg:FindFirstChild("MainFire")
-    end
-    local function scrapperModel()
-        local map = WS:FindFirstChild("Map")
-        local cg  = map and map:FindFirstChild("Campground")
-        return cg and cg:FindFirstChild("Scrapper")
-    end
-
+    local avoidAcc = 0
     local function avoidLiftIfNearDanger(pos)
-        local fire = campfireModel()
+        avoidAcc += TICK
+        if avoidAcc < AVOID_REEVAL_S then return pos end
+        avoidAcc = 0
+        local fire = (function()
+            local map = WS:FindFirstChild("Map"); local cg = map and map:FindFirstChild("Campground"); return cg and cg:FindFirstChild("MainFire")
+        end)()
         if fire then
             local fp = worldPosOf(fire)
             if fp and (pos - fp).Magnitude <= CAMPFIRE_AVOID_RADIUS then
                 return Vector3.new(pos.X, pos.Y + AVOID_LIFT, pos.Z)
             end
         end
-        local scr = scrapperModel()
+        local scr = (function()
+            local map = WS:FindFirstChild("Map"); local cg = map and map:FindFirstChild("Campground"); return cg and cg:FindFirstChild("Scrapper")
+        end)()
         if scr then
             local sp = worldPosOf(scr)
             if sp and (pos - sp).Magnitude <= SCRAPPER_AVOID_RADIUS then
@@ -207,37 +141,53 @@ return function(C, R, UI)
         return pos
     end
 
-    ----------------------------------------------------------------
-    -- Player dropdown with refresh (auto + manual)
-    ----------------------------------------------------------------
-    local selectedTargets = {}  -- [userId]=true
+    local function nearbyLogs(origin, radius, limit, jobTag)
+        local items = getItemsFolder(); if not items then return {} end
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+        local parts = WS:GetPartBoundsInRadius(origin, radius, params) or {}
+        local uniq, arr = {}, {}
+        for _,part in ipairs(parts) do
+            if part:IsA("BasePart") then
+                local m = part:FindFirstAncestorOfClass("Model")
+                if m and m.Parent == items and m.Name == "Log" and not uniq[m] then
+                    uniq[m] = true
+                    arr[#arr+1] = m
+                end
+            end
+        end
+        local scored = {}
+        for _,m in ipairs(arr) do
+            local mp = mainPart(m)
+            if mp then
+                scored[#scored+1] = {m=m, d=(mp.Position - origin).Magnitude}
+            end
+        end
+        table.sort(scored, function(a,b) return a.d < b.d end)
+        local out = {}
+        for i=1, math.min(limit, #scored) do
+            local m = scored[i].m
+            local tag = m:GetAttribute(CLAIM_ATTR)
+            if (not tag) or tag == tostring(jobTag) then out[#out+1] = m end
+        end
+        return out
+    end
+
+    local selectedTargets = {}
     local function playerList()
         local t = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then table.insert(t, p.Name) end
-        end
-        table.sort(t)
-        return t
+        for _,p in ipairs(Players:GetPlayers()) do if p ~= lp then t[#t+1]=p.Name end end
+        table.sort(t); return t
     end
     local nameToUserId = {}
-    local function rebuildMap()
-        nameToUserId = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            nameToUserId[p.Name] = p.UserId
-        end
-    end
+    local function rebuildMap() nameToUserId = {}; for _,p in ipairs(Players:GetPlayers()) do nameToUserId[p.Name]=p.UserId end end
     rebuildMap()
     Players.PlayerAdded:Connect(rebuildMap)
-    Players.PlayerRemoving:Connect(function(plr)
-        if plr then
-            selectedTargets[plr.UserId] = nil
-            rebuildMap()
-        end
-    end)
+    Players.PlayerRemoving:Connect(function(plr) if plr then selectedTargets[plr.UserId]=nil; rebuildMap() end end)
 
     tab:Section({ Title = "Targets" })
-    local targetDD
-    targetDD = tab:Dropdown({
+    local targetDD = tab:Dropdown({
         Title = "Players",
         Values = playerList(),
         Multi = true,
@@ -246,55 +196,60 @@ return function(C, R, UI)
             rebuildMap()
             selectedTargets = {}
             if type(choice) == "table" then
-                for _,nm in ipairs(choice) do
-                    local uid = nameToUserId[nm]
-                    if uid then selectedTargets[uid] = true end
-                end
+                for _,nm in ipairs(choice) do local uid=nameToUserId[nm]; if uid then selectedTargets[uid]=true end end
             elseif type(choice) == "string" then
-                local uid = nameToUserId[choice]
-                if uid then selectedTargets[uid] = true end
+                local uid=nameToUserId[choice]; if uid then selectedTargets[uid]=true end
             end
         end
     })
-    tab:Button({
-        Title = "Refresh Player List",
-        Callback = function()
-            rebuildMap()
-            if targetDD and targetDD.SetValues then targetDD:SetValues(playerList()) end
-        end
-    })
+    tab:Button({ Title = "Refresh Player List", Callback = function() rebuildMap(); if targetDD and targetDD.SetValues then targetDD:SetValues(playerList()) end end })
 
-    ----------------------------------------------------------------
-    -- CHAOS MODE
-    ----------------------------------------------------------------
     local chaosOn = false
-    local chaosJobId = nil
-    local chaosState = {} -- [uid] = { logs = { [model]=true }, prop = { [model]=per-log-state }, layerSeed }
-    local chaosReplAcc, chaosStepAcc, dangerReevalAcc = 0, 0, 0
+    local chaosState = {}
+    local chaosJobIdByUid = {}
+    local chaosReplAcc, chaosStepAcc = 0, 0
+
+    local function pickCloudSlot(rng)
+        local r  = rng:NextNumber(CLOUD_RADIUS_MIN, CLOUD_RADIUS_MAX)
+        local th = rng:NextNumber(0, math.pi*2)
+        local ph = rng:NextNumber(-0.85, 0.85)
+        local x = r * math.cos(th) * math.cos(ph)
+        local z = r * math.sin(th) * math.cos(ph)
+        local y = HEIGHT_BASE + rng:NextNumber(HEIGHT_RANGE_MIN, HEIGHT_RANGE_MAX)
+        return Vector3.new(x, y, z)
+    end
 
     local function ensureChaosLogs(uid)
-        local root = hrpOf(lp); if not root then return end
+        local plr = Players:GetPlayerByUserId(uid); if not plr then return end
+        local hr  = hrpOf(plr); if not hr then return end
+        local origin = hr.Position
         local rec = chaosState[uid]
-        if not rec then rec = { logs = {}, prop = {}, layerSeed = math.random() } chaosState[uid] = rec end
+        if not rec then rec = { logs = {}, prop = {}, rng = Random.new(os.clock()*100000 + uid) } chaosState[uid] = rec end
         local have = 0
-        for m,_ in pairs(rec.logs) do
-            if m and m.Parent then have += 1 else rec.logs[m]=nil; rec.prop[m]=nil end
-        end
-        local need = math.max(0, math.min(CHAOS_PER_PLAYER, MAX_LOGS) - have)
-        if need > 0 then
-            local got = nearbyLogs(root.Position, SEARCH_RADIUS, need, chaosJobId)
-            for _,m in ipairs(got) do
-                if claimLog(m, chaosJobId) then
-                    startDrag(m)
-                    rec.logs[m] = true
-                    rec.prop[m] = {
-                        seed = math.random(),
-                        dir  = (math.random() < 0.5) and -1 or 1,
-                        pauseUntil = 0,
-                        flipUntil  = 0,
-                        layer = (math.random(1, CHAOS_LAYERS) - 1), -- 0..L-1
-                    }
-                end
+        for m,_ in pairs(rec.logs) do if m and m.Parent then have += 1 else rec.logs[m]=nil; rec.prop[m]=nil end end
+        local targetCount = math.min(CHAOS_PER_PLAYER, MAX_LOGS)
+        if have >= targetCount then return end
+        local need = targetCount - have
+        local jobId = chaosJobIdByUid[uid] or ("CHAOS-%d-%d"):format(uid, math.random(1,1e6))
+        chaosJobIdByUid[uid] = jobId
+        local got = nearbyLogs(origin, SEARCH_RADIUS, need, jobId)
+        for _,m in ipairs(got) do
+            if claimLog(m, jobId) then
+                startDrag(m)
+                rec.logs[m] = true
+                rec.prop[m] = {
+                    phase = { xz1=math.random()*math.pi*2, xz2=math.random()*math.pi*2, y1=math.random()*math.pi*2, y2=math.random()*math.pi*2 },
+                    w = {
+                        xz1 = math.random()*(W_XZ1_MAX-W_XZ1_MIN)+W_XZ1_MIN,
+                        xz2 = math.random()*(W_XZ2_MAX-W_XZ2_MIN)+W_XZ2_MIN,
+                        y1  = math.random()*(W_Y1_MAX -W_Y1_MIN )+W_Y1_MIN,
+                        y2  = math.random()*(W_Y2_MAX -W_Y2_MIN )+W_Y2_MIN,
+                    },
+                    slot    = pickCloudSlot(rec.rng),
+                    reslotT = os.clock() + (math.random()*(RESLOT_EVERY_MAX-RESLOT_EVERY_MIN)+RESLOT_EVERY_MIN),
+                    burstT  = 0,
+                    burstDir= 1,
+                }
             end
         end
     end
@@ -306,48 +261,34 @@ return function(C, R, UI)
             local hr  = plr and hrpOf(plr)
             local rec = chaosState[uid]
             if not hr then
-                if rec then
-                    for m,_ in pairs(rec.logs) do stopDrag(m); releaseTags(m) end
-                    chaosState[uid] = nil
-                end
+                if rec then for m,_ in pairs(rec.logs) do stopDrag(m); releaseTags(m) end chaosState[uid]=nil end
             else
-                if not rec then rec = { logs = {}, prop = {}, layerSeed = math.random() } chaosState[uid] = rec end
+                if not rec then rec = { logs = {}, prop = {}, rng = Random.new(os.clock()*100000 + uid) } chaosState[uid]=rec end
                 local base = hr.Position
-                local i = 0
                 for m,_ in pairs(rec.logs) do
-                    if not (m and m.Parent) then
-                        rec.logs[m] = nil
-                        rec.prop[m] = nil
+                    if not (m and m.Parent) then rec.logs[m]=nil; rec.prop[m]=nil
                     else
-                        i += 1
                         local st = rec.prop[m]
-                        if st.pauseUntil <= tNow and math.random() < CHAOS_PAUSE_PROB then
-                            st.pauseUntil = tNow + (CHAOS_PAUSE_MS_MIN + math.random()*(CHAOS_PAUSE_MS_MAX-CHAOS_PAUSE_MS_MIN))/1000
+                        if tNow >= st.reslotT then
+                            st.slot = pickCloudSlot(rec.rng)
+                            st.reslotT = tNow + (math.random()*(RESLOT_EVERY_MAX-RESLOT_EVERY_MIN)+RESLOT_EVERY_MIN)
                         end
-                        if st.flipUntil <= tNow and math.random() < CHAOS_FLIP_PROB then
-                            st.dir = -st.dir
-                            st.flipUntil = tNow + (0.22 + math.random()*0.5)
+                        if tNow >= st.burstT and math.random() < (BURST_CHANCE_PER_S * CHAOS_STEP_S) then
+                            st.burstT  = tNow + BURST_DURATION
+                            st.burstDir = (math.random() < 0.5) and -1 or 1
                         end
-
-                        -- Per-layer shell height and radius wobble
-                        local layerFrac = (st.layer / math.max(1, CHAOS_LAYERS-1)) -- 0..1
-                        local shellH = CHAOS_VERT_BASE + layerFrac * (CHAOS_VERT_BASE + CHAOS_VERT_BOB)
-                        local rBase  = CHAOS_BASE_R + layerFrac * CHAOS_R_WOBBLE
-
-                        local freq   = CHAOS_FREQ_BASE + (math.random()*2-1)*CHAOS_FREQ_JIT
-                        local phase  = (tNow * freq * st.dir) + (i*0.91) + st.seed*6.28
-
-                        local radial = rBase + math.sin(tNow*0.7 + st.seed*3.1 + i*0.41)*CHAOS_R_WOBBLE
-                        local bob    = math.sin(phase*2.0 + st.seed*1.7) * CHAOS_VERT_BOB
-                        local xzJ    = Vector3.new((math.random()*2-1)*CHAOS_XZ_JITTER, 0, (math.random()*2-1)*CHAOS_XZ_JITTER)
-
-                        local offset = Vector3.new(math.cos(phase)*radial,
-                                                   shellH + bob,
-                                                   math.sin(phase)*radial) + xzJ
-                        local pos = base + offset
-                        pos = avoidLiftIfNearDanger(pos)
-
-                        moveHoldAt(m, cfLookAt(pos, (pos - base)))
+                        local t = tNow
+                        local jx = math.sin(t*st.w.xz1 + st.phase.xz1) * JIT_XZ1 + math.cos(t*st.w.xz2 + st.phase.xz2) * JIT_XZ2
+                        local jz = math.cos(t*st.w.xz1*0.8 + st.phase.xz1*0.7) * JIT_XZ1 + math.sin(t*st.w.xz2*1.3 + st.phase.xz2*0.5) * JIT_XZ2
+                        local jy = math.sin(t*st.w.y1 + st.phase.y1) * JIT_Y1 + math.cos(t*st.w.y2 + st.phase.y2) * JIT_Y2
+                        local off = st.slot + Vector3.new(jx, jy, jz)
+                        if tNow < st.burstT then
+                            local dirToTarget = (base - (base + off)).Unit
+                            off = off + dirToTarget * (BURST_PUSH * st.burstDir)
+                        end
+                        local pos = avoidLiftIfNearDanger(base + off)
+                        local look = (base - pos)
+                        moveHoldAt(m, cfLookAt(pos, look))
                     end
                 end
             end
@@ -357,64 +298,37 @@ return function(C, R, UI)
     local function enableChaos()
         if chaosOn then return end
         chaosOn = true
-        chaosJobId = ("%d-%d"):format(os.time(), math.random(1,1e6))
-        chaosReplAcc, chaosStepAcc, dangerReevalAcc = 0, 0, 0
+        chaosReplAcc, chaosStepAcc = 0, 0
+        chaosJobIdByUid = {}
+        for uid,_ in pairs(selectedTargets) do chaosJobIdByUid[uid] = ("CHAOS-%d-%d"):format(uid, math.random(1,1e6)) end
     end
     local function disableChaos()
         chaosOn = false
-        for uid,rec in pairs(chaosState) do
-            for m,_ in pairs(rec.logs) do stopDrag(m); releaseTags(m) end
-        end
-        chaosState = {}
-        chaosJobId = nil
+        for _,rec in pairs(chaosState) do for m,_ in pairs(rec.logs) do stopDrag(m); releaseTags(m) end end
+        chaosState = {}; chaosJobIdByUid = {}
     end
 
     tab:Section({ Title = "Chaos Swarm" })
-    tab:Toggle({
-        Title = "Enable Chaotic Logs Around Selected Players",
-        Value = false,
-        Callback = function(state)
-            if state then enableChaos() else disableChaos() end
-        end
-    })
+    tab:Toggle({ Title = "Enable Chaotic Logs Around Selected Players", Value = false, Callback = function(s) if s then enableChaos() else disableChaos() end end })
 
-    ----------------------------------------------------------------
-    -- BULLDOZER EDGE BUTTON
-    ----------------------------------------------------------------
-    -- Edge UI (same pattern as your Auto)
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
-        edgeGui = Instance.new("ScreenGui")
-        edgeGui.Name = "EdgeButtons"
-        edgeGui.ResetOnSpawn = false
-        pcall(function() edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling end)
-        edgeGui.Parent = playerGui
+        local g = Instance.new("ScreenGui"); g.Name="EdgeButtons"; g.ResetOnSpawn=false; pcall(function() g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling end); g.Parent=playerGui
+        edgeGui = g
     end
     local stack = edgeGui:FindFirstChild("EdgeStack")
     if not stack then
-        stack = Instance.new("Frame")
-        stack.Name = "EdgeStack"
-        stack.AnchorPoint = Vector2.new(1, 0)
-        stack.Position = UDim2.new(1, -6, 0, 6)
-        stack.Size = UDim2.new(0, 130, 1, -12)
-        stack.BackgroundTransparency = 1
-        stack.BorderSizePixel = 0
-        stack.Parent = edgeGui
-        local list = Instance.new("UIListLayout")
-        list.Name = "VList"
-        list.FillDirection = Enum.FillDirection.Vertical
-        list.SortOrder = Enum.SortOrder.LayoutOrder
-        list.Padding = UDim.new(0, 6)
-        list.HorizontalAlignment = Enum.HorizontalAlignment.Right
-        list.Parent = stack
+        local f = Instance.new("Frame"); f.Name="EdgeStack"; f.AnchorPoint=Vector2.new(1,0); f.Position=UDim2.new(1,-6,0,6); f.Size=UDim2.new(0,130,1,-12); f.BackgroundTransparency=1; f.BorderSizePixel=0; f.Parent=edgeGui
+        local l = Instance.new("UIListLayout"); l.Name="VList"; l.FillDirection=Enum.FillDirection.Vertical; l.SortOrder=Enum.SortOrder.LayoutOrder; l.Padding=UDim.new(0,6); l.HorizontalAlignment=Enum.HorizontalAlignment.Right; l.Parent=f
+        stack = f
     end
     local function makeEdgeBtn(name, label, order)
         local b = stack:FindFirstChild(name)
         if not b then
             b = Instance.new("TextButton")
             b.Name = name
-            b.Size = UDim2.new(1, 0, 0, 30)
+            b.Size = UDim2.new(1,0,0,30)
             b.Text = label
             b.TextSize = 12
             b.Font = Enum.Font.GothamBold
@@ -424,127 +338,166 @@ return function(C, R, UI)
             b.Visible = false
             b.LayoutOrder = order or 10
             b.Parent = stack
-            local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = b
+            local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,8); c.Parent = b
         else
-            b.Text = label
-            b.LayoutOrder = order or b.LayoutOrder
+            b.Text = label; b.LayoutOrder = order or b.LayoutOrder
         end
         return b
     end
 
     local bullBtn = makeEdgeBtn("BulldozerEdge", "Bulldozer", 9)
-    local showBullEdge = true  -- restored, default on
+    local showBullEdge = true
     bullBtn.Visible = showBullEdge
-
-    -- Uniform grid for the wall; compute size by log primary part size if available.
-    local function logSizeY(m)
-        local mp = mainPart(m); if not mp then return 2 end
-        return mp.Size.Y
-    end
-    local function gridFor(count, thickness)
-        local cols = math.max(1, math.ceil(count / math.max(1, thickness)))
-        local rows = math.min(thickness, count)
-        return cols, rows
-    end
+    tab:Toggle({ Title = "Show Edge Button: Bulldozer", Value = showBullEdge, Callback = function(s) showBullEdge=s; if bullBtn then bullBtn.Visible=s end end })
 
     local function bulldozerOnce()
         local root = hrpOf(lp); if not root then return end
         local look = root.CFrame.LookVector
+        local right = root.CFrame.RightVector
         local origin = root.Position + look * 6
+
         local jobId = ("BULL-%d"):format(os.clock()*1000)
-        -- Acquire logs
-        local pool = nearbyLogs(root.Position, SEARCH_RADIUS, BULL_MAX_LOGS, jobId)
+        local neededPerWall = BULL_WIDTH * BULL_HEIGHT
+        local totalNeeded = math.min(neededPerWall * math.max(1, BULL_THICKNESS), BULL_MAX_LOGS)
+        local pool = nearbyLogs(root.Position, SEARCH_RADIUS, totalNeeded, jobId)
         local logs = {}
-        for _,m in ipairs(pool) do
-            if claimLog(m, jobId) then
-                startDrag(m)
-                logs[#logs+1] = m
-            end
-        end
+        for _,m in ipairs(pool) do if claimLog(m, jobId) then startDrag(m); logs[#logs+1]=m end end
         if #logs == 0 then return end
 
-        -- Build two back-to-back walls tightly
-        local cols, rows = gridFor(#logs, BULL_THICKNESS)
-        local firstHalf = math.ceil(#logs/2)
-        local secondHalf = #logs - firstHalf
-        local frontZOffset = 0.75  -- small separation between the two walls
+        local sample = mainPart(logs[1])
+        local spanX = ((sample and sample.Size.X) or 2.5) + BULL_GAP_STUDS
+        local spanY = ((sample and sample.Size.Y) or 2.0) + BULL_GAP_STUDS
+        local layerGap = math.max(0.5, (sample and sample.Size.Z or 1.0) * 0.5)
 
-        -- Estimate spacing from first log dimensions
-        local mp0 = mainPart(logs[1])
-        local spanX = (mp0 and mp0.Size.X or 2.5) + BULL_GAP_STUDS
-        local spanY = (mp0 and mp0.Size.Y or 2.0) + BULL_GAP_STUDS
-
-        local function placeWall(startIdx, count, zBias)
-            for i=0,count-1 do
-                local c = (i % cols)
-                local r = math.floor(i / cols)
-                local dx = (c - (cols-1)/2) * spanX
-                local dy = (r - (rows-1)/2) * spanY
-                local offset = root.CFrame.RightVector * dx + Vector3.new(0, dy, 0) + look * zBias
-                local pos = origin + offset
-                local forward = cfLookAt(pos, look)
-                moveHoldAt(logs[startIdx + i], forward)
-            end
-        end
-
-        placeWall(1, firstHalf, 0)                -- front wall
-        if secondHalf > 0 then
-            placeWall(firstHalf+1, secondHalf, -frontZOffset) -- back wall slightly behind
-        end
-
-        -- Push forward in steps. Keep CanCollide enabled and keep dragging.
-        local travel = 0
-        local step   = math.max(1, BULL_SPEED * TICK)
-        while travel < BULL_PUSH_STUDS do
-            local delta = look * math.min(step, BULL_PUSH_STUDS - travel)
-            origin = origin + delta
-            for i,m in ipairs(logs) do
-                local mp = mainPart(m)
-                if m and m.Parent and mp then
-                    local pos = mp.Position + delta
-                    -- prevent downward drift: lock Y near the first placement height
-                    local yLock = mp.Position.Y
-                    local cf = cfLookAt(Vector3.new(pos.X, yLock, pos.Z), look)
-                    moveHoldAt(m, cf)
+        local idx = 1
+        for layer=0,(math.max(1,BULL_THICKNESS)-1) do
+            local zBias = -layer * layerGap
+            for r=0,(BULL_HEIGHT-1) do
+                for c=0,(BULL_WIDTH-1) do
+                    if idx > #logs then break end
+                    local dx = (c - (BULL_WIDTH-1)/2) * spanX
+                    local dy = (r - (BULL_HEIGHT-1)/2) * spanY
+                    local pos = origin + right*dx + Vector3.new(0,dy,0) + look*zBias
+                    moveHoldAt(logs[idx], cfLookAt(pos, look))
+                    idx += 1
                 end
             end
-            travel += delta.Magnitude
+        end
+
+        local baseY = mainPart(logs[1]).Position.Y
+        local traveled = 0
+        local stepPerTick = math.max(1, BULL_SPEED * TICK)
+        while traveled < BULL_PUSH_STUDS do
+            local delta = look * math.min(stepPerTick, BULL_PUSH_STUDS - traveled)
+            origin = origin + delta
+            for i=1,#logs do
+                local m = logs[i]
+                local mp = mainPart(m)
+                if m and m.Parent and mp then
+                    local p = mp.Position + delta
+                    moveHoldAt(m, cfLookAt(Vector3.new(p.X, baseY, p.Z), look))
+                end
+            end
+            traveled += delta.Magnitude
             Run.Heartbeat:Wait()
         end
-
-        -- Clean up
         for _,m in ipairs(logs) do stopDrag(m); releaseTags(m) end
     end
+    bullBtn.MouseButton1Click:Connect(function() bulldozerOnce() end)
 
-    bullBtn.MouseButton1Click:Connect(function()
-        bulldozerOnce()
-    end)
+    local boxOn, boxJobId = false, nil
+    local boxState = {}
+    local boxReplAcc, boxRefreshAcc = 0, 0
 
-    tab:Toggle({
-        Title = "Show Edge Button: Bulldozer",
-        Value = showBullEdge,
-        Callback = function(state)
-            showBullEdge = state
-            if bullBtn then bullBtn.Visible = state end
+    local function ensureBoxLogs(uid, want)
+        local root = hrpOf(lp); if not root then return end
+        local rec = boxState[uid]
+        if not rec then rec = { logs={}, anchorPos=nil } boxState[uid]=rec end
+        local have = 0
+        for m,_ in pairs(rec.logs) do if m and m.Parent then have+=1 else rec.logs[m]=nil end end
+        local need = math.max(0, math.min(want, BOX_MAX_PER_TARGET) - have)
+        if need <= 0 then return end
+        local got = nearbyLogs(root.Position, SEARCH_RADIUS, need, boxJobId)
+        for _,m in ipairs(got) do if claimLog(m, boxJobId) then startDrag(m); rec.logs[m]=true end end
+    end
+    local function boxLayout(centerPos, upVec, rightVec, forwardVec, count)
+        local pos = {}
+        local perSide = math.max(3, math.floor(count/4))
+        local gap = 2.0
+        local topRows = math.max(1, BOX_TOP_ROWS)
+        for row=0,topRows-1 do
+            local y = 2.5 + row*2.0
+            local base = centerPos + upVec*y + forwardVec*BOX_RADIUS
+            for i=-(perSide-1)/2,(perSide-1)/2 do pos[#pos+1] = base + rightVec*(i*gap) end
+            base = centerPos + upVec*y - forwardVec*BOX_RADIUS
+            for i=-(perSide-1)/2,(perSide-1)/2 do pos[#pos+1] = base + rightVec*(i*gap) end
+            base = centerPos + upVec*y + rightVec*BOX_RADIUS
+            for i=-(perSide-1)/2,(perSide-1)/2 do pos[#pos+1] = base + forwardVec*(i*gap) end
+            base = centerPos + upVec*y - rightVec*BOX_RADIUS
+            for i=-(perSide-1)/2,(perSide-1)/2 do pos[#pos+1] = base + forwardVec*(i*gap) end
         end
-    })
+        local roofBase = centerPos + upVec * (2.5 + topRows*2.0)
+        pos[#pos+1] = roofBase
+        pos[#pos+1] = roofBase + rightVec*(gap*0.8)
+        pos[#pos+1] = roofBase - rightVec*(gap*0.8)
+        pos[#pos+1] = roofBase + forwardVec*(gap*0.8)
+        pos[#pos+1] = roofBase - forwardVec*(gap*0.8)
+        return pos
+    end
+    local function updateBoxFor(uid)
+        local plr = Players:GetPlayerByUserId(uid); if not plr then return end
+        local hr  = hrpOf(plr); if not hr then return end
+        local rec = boxState[uid]; if not rec then rec = { logs={}, anchorPos=nil }; boxState[uid]=rec end
+        local center
+        if BOX_LOCK_IN_PLACE then
+            if not rec.anchorPos then rec.anchorPos = hr.Position end
+            center = rec.anchorPos
+        else
+            center = hr.Position
+        end
+        ensureBoxLogs(uid, BOX_MAX_PER_TARGET)
+        local logsArr = {}
+        for m,_ in pairs(rec.logs) do if m and m.Parent then logsArr[#logsArr+1]=m end end
+        if #logsArr == 0 then return end
+        local look = hr.CFrame.LookVector
+        local right = hr.CFrame.RightVector
+        local up = Vector3.yAxis
+        local targets = boxLayout(center, up, right, look, #logsArr)
+        local n = math.min(#logsArr, #targets)
+        for i=1,n do
+            local pos = avoidLiftIfNearDanger(targets[i])
+            local dir = (pos - center)
+            moveHoldAt(logsArr[i], cfLookAt(pos, dir.Magnitude>1e-3 and dir or look))
+        end
+    end
+    local function enableBox()
+        if boxOn then return end
+        boxOn = true
+        boxJobId = ("BOX-%d"):format(os.clock()*1000)
+        boxReplAcc, boxRefreshAcc = 0, 0
+    end
+    local function disableBox()
+        boxOn = false
+        for _,rec in pairs(boxState) do for m,_ in pairs(rec.logs) do stopDrag(m); releaseTags(m) end end
+        boxState = {}; boxJobId = nil
+    end
 
-    ----------------------------------------------------------------
-    -- Heartbeat loop
-    ----------------------------------------------------------------
+    tab:Section({ Title = "Box Trap" })
+    tab:Toggle({ Title = "Enable Box Trap Around Selected Players", Value = false, Callback = function(s) if s then enableBox() else disableBox() end end })
+    tab:Toggle({ Title = "Box: Lock In Place (vs Follow)", Value = BOX_LOCK_IN_PLACE, Callback = function(s) BOX_LOCK_IN_PLACE = s and true or false; for _,rec in pairs(boxState) do rec.anchorPos = nil end end })
+    tab:Slider({ Title = "Box Radius", Value = { Min = 8, Max = 40, Default = BOX_RADIUS }, Callback = function(v) local nv=type(v)=="table" and (v.Value or v.Default) or v; nv=tonumber(nv); if nv then BOX_RADIUS=math.clamp(nv,4,80) end end })
+
     Run.Heartbeat:Connect(function(dt)
-        -- chaos maintenance
         if chaosOn then
-            chaosReplAcc += dt
-            chaosStepAcc += dt
-            if chaosReplAcc >= CHAOS_REPL_S then
-                for uid,_ in pairs(selectedTargets) do ensureChaosLogs(uid) end
-                chaosReplAcc = 0
-            end
-            while chaosStepAcc >= CHAOS_STEP_S do
-                chaosTick(CHAOS_STEP_S)
-                chaosStepAcc -= CHAOS_STEP_S
-            end
+            chaosReplAcc += dt; chaosStepAcc += dt
+            if chaosReplAcc >= CHAOS_REPL_S then for uid,_ in pairs(selectedTargets) do ensureChaosLogs(uid) end chaosReplAcc=0 end
+            while chaosStepAcc >= CHAOS_STEP_S do chaosTick(CHAOS_STEP_S); chaosStepAcc -= CHAOS_STEP_S end
+        end
+        if boxOn then
+            boxReplAcc += dt; boxRefreshAcc += dt
+            if boxReplAcc >= 0.35 then for uid,_ in pairs(selectedTargets) do ensureBoxLogs(uid, BOX_MAX_PER_TARGET) end boxReplAcc=0 end
+            for uid,_ in pairs(selectedTargets) do updateBoxFor(uid) end
+            if boxRefreshAcc >= BOX_REFRESH_S then for _,rec in pairs(boxState) do if BOX_LOCK_IN_PLACE then rec.anchorPos = rec.anchorPos or nil else rec.anchorPos = nil end end boxRefreshAcc=0 end
         end
     end)
 end
