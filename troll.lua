@@ -14,7 +14,7 @@ return function(C, R, UI)
     assert(tab, "Troll tab not found in UI")
 
     -- Search / selection
-    local MAX_LOGS       = 80
+    local MAX_LOGS       = 50
     local SEARCH_RADIUS  = 200
 
     -- Motion: chaotic 3D swarm
