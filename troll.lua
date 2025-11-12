@@ -12,29 +12,31 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found in UI")
 
-    local MAX_LOGS             = 50
-    local SEARCH_RADIUS        = 200
-    local TICK                 = 0.03
-    local FLOAT_RADIUS_MIN     = 3.0
-    local FLOAT_RADIUS_MAX     = 7.5
-    local FLOAT_HEIGHT_MIN     = 3.0
-    local FLOAT_HEIGHT_MAX     = 8.0
-    local ANGULAR_SPEED_MIN    = 0.7
-    local ANGULAR_SPEED_MAX    = 1.8
-    local DRAG_SETTLE          = 0.06
-    local COLLIDE_OFF_SEC      = 0.20
-    local JOB_TIMEOUT_S        = 90
-    local REASSIGN_IF_LOST_S   = 2.0
+    -- Search/selection
+    local MAX_LOGS       = 50
+    local SEARCH_RADIUS  = 200
+
+    -- Motion
+    local TICK              = 0.03
+    local FLOAT_RADIUS_MIN  = 3.0
+    local FLOAT_RADIUS_MAX  = 7.5
+    local ANGULAR_SPEED_MIN = 0.7
+    local ANGULAR_SPEED_MAX = 1.8
+
+    -- Height: orbit around torso level, small wobble
+    local HEIGHT_BASE      = 1.25   -- studs above HRP
+    local HEIGHT_WOBBLE    = 0.35   -- +/- wobble
+    local HEIGHT_WOBBLE_HZ = 0.6
+
+    -- Drag and safety
+    local DRAG_SETTLE     = 0.06
+    local JOB_TIMEOUT_S   = 90
+    local REASSIGN_IF_LOST_S = 2.0
 
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
-    end
-    local function headPart(p)
-        p = p or lp
-        local ch = p.Character
-        return ch and ch:FindFirstChild("Head")
     end
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
@@ -133,22 +135,6 @@ return function(C, R, UI)
         return out
     end
 
-    local function selectedPlayersList(fromSet)
-        local out = {}
-        for userIdStr,_ in pairs(fromSet or {}) do
-            local uid = tonumber(userIdStr)
-            if uid then
-                for _,p in ipairs(Players:GetPlayers()) do
-                    if p.UserId == uid and p ~= lp then
-                        out[#out+1] = p
-                        break
-                    end
-                end
-            end
-        end
-        return out
-    end
-
     local function playerChoices()
         local vals = {}
         for _,p in ipairs(Players:GetPlayers()) do
@@ -172,10 +158,24 @@ return function(C, R, UI)
         end
         return set
     end
+    local function selectedPlayersList(fromSet)
+        local out = {}
+        for userIdStr,_ in pairs(fromSet or {}) do
+            local uid = tonumber(userIdStr)
+            if uid then
+                for _,p in ipairs(Players:GetPlayers()) do
+                    if p.UserId == uid and p ~= lp then
+                        out[#out+1] = p
+                        break
+                    end
+                end
+            end
+        end
+        return out
+    end
 
     local running = false
-    local activeJobs = {}      -- model -> {stop=bool}
-    local assigned   = {}      -- model -> userId
+    local activeJobs = {}
     local rcache     = resolveRemotes()
 
     local function setPivot(model, cf)
@@ -186,13 +186,12 @@ return function(C, R, UI)
         end
     end
 
+    -- Updated orbit: keep Y near target HRP + HEIGHT_BASE with a small wobble
     local function floatAroundTarget(model, targetPlayer, seed)
         local st = os.clock()
         local r  = math.random(FLOAT_RADIUS_MIN*100, FLOAT_RADIUS_MAX*100)/100
-        local h  = math.random(FLOAT_HEIGHT_MIN*100, FLOAT_HEIGHT_MAX*100)/100
         local w  = math.random(ANGULAR_SPEED_MIN*100, ANGULAR_SPEED_MAX*100)/100
         local phase = (seed or 0) % (2*math.pi)
-        local stop = false
         activeJobs[model] = { stop = false }
         local jobRef = activeJobs[model]
 
@@ -204,16 +203,20 @@ return function(C, R, UI)
         local lastSeen = os.clock()
 
         while running and jobRef == activeJobs[model] do
-            local th = headPart(targetPlayer) or hrp(targetPlayer)
-            if not th then
+            local root = hrp(targetPlayer)
+            if not root then
                 if os.clock() - lastSeen > REASSIGN_IF_LOST_S then break end
             else
                 lastSeen = os.clock()
-                local base = th.Position
+                local base = root.Position
                 local t = os.clock() - st
                 local ang = phase + w * t
-                local off = Vector3.new(math.cos(ang)*r, h + math.sin(t*0.6)*0.75, math.sin(ang)*r)
-                local pos = base + off
+                local y  = base.Y + HEIGHT_BASE + math.sin(t * HEIGHT_WOBBLE_HZ) * HEIGHT_WOBBLE
+                local pos = Vector3.new(
+                    base.X + math.cos(ang) * r,
+                    y,
+                    base.Z + math.sin(ang) * r
+                )
                 local look = (base - pos).Unit
                 setPivot(model, CFrame.new(pos, pos + look))
                 for _,p in ipairs(getAllParts(model)) do
@@ -232,28 +235,22 @@ return function(C, R, UI)
     local function startFloat(logs, targets)
         running = true
         activeJobs = {}
-        assigned   = {}
 
-        local N = #targets
-        if N == 0 or #logs == 0 then return end
-
-        local per = math.floor(#logs / N)
-        local rem = #logs % N
+        if #targets == 0 or #logs == 0 then return end
         local idx = 1
         for i,mdl in ipairs(logs) do
             local tgt = targets[idx]
-            assigned[mdl] = tgt.UserId
             task.spawn(function()
                 floatAroundTarget(mdl, tgt, i*0.37)
             end)
             idx += 1
-            if idx > N then idx = 1 end
+            if idx > #targets then idx = 1 end
         end
     end
 
     local function stopAll()
         running = false
-        for m,rec in pairs(activeJobs) do
+        for m,_ in pairs(activeJobs) do
             if m and m.Parent then
                 pcall(function()
                     for _,p in ipairs(getAllParts(m)) do
@@ -271,7 +268,7 @@ return function(C, R, UI)
 
     local selectedPlayers = {}
 
-    tab:Section({ Title = "Troll: Float Logs Around Players" })
+    tab:Section({ Title = "Troll: Orbit Logs Around Players" })
     local playerDD = tab:Dropdown({
         Title = "Players",
         Values = playerChoices(),
@@ -290,7 +287,6 @@ return function(C, R, UI)
             end
         end
     })
-
     tab:Button({
         Title = "Start",
         Callback = function()
