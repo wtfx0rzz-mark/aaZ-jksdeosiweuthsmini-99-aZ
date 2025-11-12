@@ -12,9 +12,9 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
+    -- Core scan + orbit tuning
     local TICK = 0.02
     local SEARCH_RADIUS = 200
-
     local CFG = {
         DesiredLogs = 5,        -- slider 1..50 (default 5)
         Speed       = 1.0,      -- slider 0.5..3.0
@@ -26,6 +26,15 @@ return function(C, R, UI)
         ScrapRadius = 35,
         AvoidLift   = 15,
         AvoidReeval = 0.2,
+
+        CameraLead  = 8.0,      -- distance forward from camera position for camera-log anchor
+        LeadBase    = 0.18,     -- base seconds of target lead
+        LeadGain    = 0.25,     -- extra lead per (speed/16)
+        LeadMax     = 0.60,     -- clamp
+        LeadStop    = 2.0,      -- below this speed, no lead
+        FlipDart    = 0.22,     -- seconds of dart push on direction flip
+        FlipThresh  = -0.30,    -- dot threshold to trigger flip dart
+        FlipPush    = 10.0      -- dart push magnitude
     }
 
     -- Chaotic motion tuning
@@ -42,8 +51,6 @@ return function(C, R, UI)
     local W_XZ2_MIN, W_XZ2_MAX = 2.0, 3.6
     local W_Y1_MIN,  W_Y1_MAX  = 1.0, 2.0
     local W_Y2_MIN,  W_Y2_MAX  = 2.0, 4.0
-
-    -- Removed JOB_TIMEOUT_S auto-stop entirely
 
     local REASSIGN_IF_LOST_S = 2.0
 
@@ -106,10 +113,7 @@ return function(C, R, UI)
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
         return nil
     end
-    local REM = {
-        StartDrag = nil,
-        StopDrag  = nil,
-    }
+    local REM = { StartDrag=nil, StopDrag=nil }
     local function resolveRemotes()
         REM.StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem")
         REM.StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem")
@@ -155,21 +159,32 @@ return function(C, R, UI)
 
     local function playersList()
         local vals = {}
-        for _,p in ipairs(Players:GetPlayers()) do if p ~= lp then vals[#vals+1]=("%s#%d"):format(p.Name, p.UserId) end end
-        table.sort(vals); return vals
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p ~= lp then
+                vals[#vals+1]=("%s#%d"):format(p.Name, p.UserId)
+            end
+        end
+        table.sort(vals)
+        return vals
     end
     local function parseSelection(choice)
         local set = {}
         if type(choice) == "table" then
-            for _,v in ipairs(choice) do local uid=tonumber((tostring(v):match("#(%d+)$") or "")); if uid then set[uid]=true end end
+            for _,v in ipairs(choice) do
+                local uid=tonumber((tostring(v):match("#(%d+)$") or ""))
+                if uid then set[uid]=true end
+            end
         else
-            local uid=tonumber((tostring(choice or ""):match("#(%d+)$") or "")); if uid then set[uid]=true end
+            local uid=tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
+            if uid then set[uid]=true end
         end
         return set
     end
     local function selectedPlayersList(set)
         local out = {}
-        for _,p in ipairs(Players:GetPlayers()) do if set[p.UserId] and p~=lp then out[#out+1]=p end end
+        for _,p in ipairs(Players:GetPlayers()) do
+            if set[p.UserId] and p~=lp then out[#out+1]=p end
+        end
         return out
     end
 
@@ -181,6 +196,7 @@ return function(C, R, UI)
         return minY, maxY
     end
 
+    -- Avoidance caches
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
     local function partCenter(m)
         if not m then return nil end
@@ -238,17 +254,34 @@ return function(C, R, UI)
         return Vector3.new()
     end
 
+    -- Runtime state
     local running = false
     local desired = CFG.DesiredLogs
-    local active  = {}          -- {model -> state}
-    local activeList = {}       -- array of models for ordering
-    local targets = {}          -- list of Players
+    local active  = {}          -- {model -> st}
+    local activeList = {}       -- [models]
+    local targets = {}          -- Players selected
     local reconcileConn, hbConn = nil, nil
     local lastDt = 1/60
     local scanAt = 0
     local scanCache = {}
 
-    local function adopt(model, tgt, seed)
+    -- Camera-log flag
+    local wantCameraLog = false
+    local cameraLogModel = nil
+
+    -- Player dropdown handle and live update conns
+    local playerDD
+    local playerAddedConn, playerRemovingConn
+
+    -- Helpers
+    local function clampOrbital(off)
+        local maxOff = CFG.CloudMaxR + 3.0
+        local m = off.Magnitude
+        if m > maxOff then return off.Unit * maxOff end
+        return off
+    end
+
+    local function adopt(model, tgt, seed, isCamera)
         if active[model] then return end
         active[model] = {
             target = tgt,
@@ -268,7 +301,9 @@ return function(C, R, UI)
             },
             started = false,
             snap = nil,
-            lastSeen = os.clock()
+            lastSeen = os.clock(),
+            lastVel = Vector3.zero,
+            isCamera = isCamera == true
         }
         table.insert(activeList, model)
         task.spawn(function()
@@ -279,6 +314,9 @@ return function(C, R, UI)
             for _,p in ipairs(getParts(model)) do pcall(function() p:SetNetworkOwner(lp) end) end
             zeroAssembly(model)
         end)
+        if active[model].isCamera then
+            cameraLogModel = model
+        end
     end
     local function shed(model)
         local st = active[model]
@@ -291,6 +329,9 @@ return function(C, R, UI)
             p.AssemblyAngularVelocity = Vector3.new()
             pcall(function() p:SetNetworkOwner(nil) end)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+        end
+        if model == cameraLogModel then
+            cameraLogModel = nil
         end
     end
 
@@ -319,19 +360,50 @@ return function(C, R, UI)
         end
     end
 
-    local function clampOrbital(off)
-        -- Cap distance so jitter+burst cannot fling too far.
-        local maxOff = CFG.CloudMaxR + 3.0
-        local m = off.Magnitude
-        if m > maxOff then
-            return off.Unit * maxOff
+    -- Predictive base position for a target Player or camera
+    local function predictiveBaseFor(st)
+        if st.isCamera then
+            local cam = WS.CurrentCamera
+            if cam and cam.CFrame then
+                local pos  = cam.CFrame.Position
+                local look = cam.CFrame.LookVector
+                return pos + look * CFG.CameraLead, look
+            end
+            -- Fallback to local player if camera missing
+            local r = hrp(lp); if r then return r.Position, r.CFrame.LookVector end
+            return nil, Vector3.new(0,0,-1)
+        else
+            local root = hrp(st.target)
+            if not root then return nil, Vector3.new(0,0,-1) end
+
+            local vel = root.AssemblyLinearVelocity
+            local speed = vel.Magnitude
+            local leadT = 0
+            if speed > CFG.LeadStop then
+                leadT = math.clamp(CFG.LeadBase + CFG.LeadGain * (speed/16), 0, CFG.LeadMax)
+            end
+
+            -- Flip dart: if velocity direction flips, add a brief impulse along new dir
+            local newDir = speed > 1e-3 and (vel / speed) or Vector3.zero
+            if st.lastVel.Magnitude > 1e-3 and newDir ~= Vector3.zero then
+                local dot = newDir:Dot(st.lastVel.Unit)
+                if dot < CFG.FlipThresh then
+                    st.burstUntil = os.clock() + CFG.FlipDart
+                    st.burstDir   = 1
+                    st.flipPushDir = newDir
+                end
+            end
+            st.lastVel = vel
+
+            local base = root.Position + vel * leadT
+            local look = (speed > 1e-3) and newDir or (root.CFrame.LookVector)
+            return base, look
         end
-        return off
     end
 
     local function floatStep(model, st, dt)
-        local tgtRoot = hrp(st.target)
-        if not tgtRoot then
+        local base, baseLook = predictiveBaseFor(st)
+        if not base then
             if os.clock() - st.lastSeen > REASSIGN_IF_LOST_S then return false end
             return true
         end
@@ -339,7 +411,6 @@ return function(C, R, UI)
         ensureSlot(st)
         maybeBurst(st)
 
-        local base = tgtRoot.Position
         local t = (os.clock() - (st.t0 or os.clock())) * CFG.Speed
 
         local jx = math.sin(t * st.w.xz1 + st.phases.xz1) * JIT_XZ1
@@ -351,21 +422,21 @@ return function(C, R, UI)
 
         local off = st.slot + Vector3.new(jx, jy, jz)
 
+        -- Burst push
         if os.clock() < st.burstUntil then
-            local dirToTarget = (-off).Unit -- push tangentially toward/away from target center
-            off = off + dirToTarget * (BURST_PUSH_BASE * CFG.Speed * st.burstDir)
+            local dir = st.flipPushDir or (-off).Unit
+            off = off + dir * (CFG.FlipPush + BURST_PUSH_BASE) * CFG.Speed * st.burstDir
         end
+        st.flipPushDir = nil
 
         -- Prevent extreme excursions
         off = clampOrbital(off)
 
-        -- Candidate position before avoidance
+        -- Candidate position and avoidance
         local posCandidate = base + off
-
-        -- Apply avoidance using the log's own candidate position
         posCandidate = posCandidate + avoidOffsetFor(posCandidate)
 
-        -- Final leash: if somehow beyond a hard radius, snap back near the rim
+        -- Final leash
         local leashR = CFG.CloudMaxR + 6.0
         local vecFromBase = posCandidate - base
         local dist = vecFromBase.Magnitude
@@ -375,7 +446,11 @@ return function(C, R, UI)
 
         local cur = getPivotPos(model) or posCandidate
         local look = (base - cur)
-        if look.Magnitude < 1e-3 then look = Vector3.new(0,0,-1) else look = look.Unit end
+        if look.Magnitude < 1e-3 then
+            look = baseLook or Vector3.new(0,0,-1)
+        else
+            look = look.Unit
+        end
         setPivot(model, CFrame.new(posCandidate, posCandidate + look))
 
         for _,p in ipairs(getParts(model)) do
@@ -387,16 +462,31 @@ return function(C, R, UI)
 
     local function reconcile()
         if not running then return end
-        local root = hrp(); if not root then return end
+        local myRoot = hrp(); if not myRoot then return end
         if os.clock() >= scanAt then
             local exclude = {}
             for m,_ in pairs(active) do exclude[m]=true end
-            scanCache = logsNear(root.Position, exclude, 200)
+            scanCache = logsNear(myRoot.Position, exclude, 200)
             scanAt = os.clock() + 0.8
         end
         local want = math.clamp(desired, 1, 50)
         local have = #activeList
         local batch = 4
+
+        -- Make sure we have exactly one camera log if requested
+        if wantCameraLog and not cameraLogModel and #scanCache > 0 and #targets > 0 then
+            -- Adopt the first available as camera log
+            for i=1,#scanCache do
+                local mdl = scanCache[i]
+                if mdl and mdl.Parent and not active[mdl] then
+                    adopt(mdl, targets[1], (#activeList + 1)*0.91, true)
+                    break
+                end
+            end
+        elseif not wantCameraLog and cameraLogModel then
+            -- Release camera log if toggle off
+            if cameraLogModel then shed(cameraLogModel) end
+        end
 
         if have < want and lastDt <= (1/45) then
             local toAdd = math.min(batch, want - have)
@@ -404,9 +494,14 @@ return function(C, R, UI)
             while toAdd > 0 and idx <= #scanCache do
                 local mdl = scanCache[idx]; idx = idx + 1
                 if mdl and mdl.Parent and not active[mdl] then
+                    -- Skip if this would create a second camera log
+                    local isCam = false
+                    if wantCameraLog and not cameraLogModel then
+                        isCam = true
+                    end
                     local tgt = targets[ ((#activeList) % math.max(1,#targets)) + 1 ]
                     if tgt then
-                        adopt(mdl, tgt, (#activeList + 1) * 0.73)
+                        adopt(mdl, tgt, (#activeList + 1) * 0.73, isCam)
                         toAdd = toAdd - 1
                     end
                 end
@@ -426,22 +521,55 @@ return function(C, R, UI)
         if hbConn then hbConn:Disconnect(); hbConn=nil end
         for i=#activeList,1,-1 do local mdl=activeList[i]; if mdl then shed(mdl) end end
         active = {}; activeList = {}
+        cameraLogModel = nil
     end
 
+    -- UI
     local selectedSet = {}
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
-    local playerDD = tab:Dropdown({
+
+    local function refreshDropdownValues()
+        local vals = playersList()
+        if playerDD then
+            if playerDD.SetValues then
+                playerDD:SetValues(vals)
+            elseif playerDD.SetOptions then
+                playerDD:SetOptions(vals)
+            end
+            -- Force callback to re-read selectedSet if API supports programmatic get
+            if playerDD.GetSelected then
+                local cur = playerDD:GetSelected()
+                selectedSet = parseSelection(cur)
+            end
+        end
+    end
+
+    playerDD = tab:Dropdown({
         Title = "Players",
         Values = playersList(),
         Multi = true,
         AllowNone = true,
         Callback = function(choice) selectedSet = parseSelection(choice) end
     })
+
+    -- Live update players
+    if playerAddedConn then playerAddedConn:Disconnect() end
+    if playerRemovingConn then playerRemovingConn:Disconnect() end
+    playerAddedConn = Players.PlayerAdded:Connect(function(p)
+        if p ~= lp then
+            task.delay(0.1, refreshDropdownValues)
+        end
+    end)
+    playerRemovingConn = Players.PlayerRemoving:Connect(function(p)
+        if p ~= lp then
+            task.delay(0.1, refreshDropdownValues)
+        end
+    end)
+
     tab:Button({
         Title = "Refresh Player List",
         Callback = function()
-            local vals = playersList()
-            if playerDD and playerDD.SetValues then playerDD:SetValues(vals) end
+            refreshDropdownValues()
         end
     })
 
@@ -470,11 +598,22 @@ return function(C, R, UI)
         end
     })
 
+    tab:Toggle({
+        Title = "Bind one log to Camera",
+        Default = false,
+        Callback = function(on)
+            wantCameraLog = on and true or false
+            -- reconcile will adopt or shed the camera log on next tick
+        end
+    })
+
     tab:Button({
         Title = "Start",
         Callback = function()
             stopAll()
             resolveRemotes()
+            -- Ensure dropdown is current
+            refreshDropdownValues()
             targets = selectedPlayersList(selectedSet)
             if #targets == 0 then return end
             running = true
@@ -482,7 +621,7 @@ return function(C, R, UI)
                 lastDt = dt
                 if not running then return end
                 for mdl,st in pairs(active) do
-                    if mdl and mdl.Parent and st and st.target then
+                    if mdl and mdl.Parent and st and (st.target or st.isCamera) then
                         local ok = floatStep(mdl, st, dt)
                         if not ok then shed(mdl) end
                     else
@@ -493,8 +632,8 @@ return function(C, R, UI)
             reconcileConn = Run.Heartbeat:Connect(function()
                 reconcile()
             end)
-            -- No auto-stop timer
         end
     })
+
     tab:Button({ Title = "Stop", Callback = function() stopAll() end })
 end
