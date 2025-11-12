@@ -472,9 +472,26 @@ return function(C, R, UI)
 
     local function itemsRootOrNil() return WS:FindFirstChild("Items") end
 
+    local function isInsideTree(m)
+        local cur = m and m.Parent
+        while cur and cur ~= WS do
+            local nm = (cur.Name or ""):lower()
+            if nm:find("tree",1,true) then return true end
+            if cur == itemsRootOrNil() then break end
+            cur = cur.Parent
+        end
+        return false
+    end
+
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
+        if selectedSet["Apple"] then
+            if m.Name ~= "Apple" then return false end
+            if itemsFolder and m.Parent ~= itemsFolder then return false end
+            if isInsideTree(m) then return false end
+            return true
+        end
         local nm = m and m.Name or ""
         local l  = nm:lower()
         if selectedSet[nm] then return true end
@@ -498,14 +515,24 @@ return function(C, R, UI)
         return false
     end
 
-    local function nearestSelectedModelFromPart(part, selectedSet)
+    local function topModelUnderItems(part, itemsFolder)
         local cur = part
-        while cur and cur ~= WS do
-            if cur:IsA("Model") and nameMatches(selectedSet, cur) then
-                return cur
-            end
+        local lastModel = nil
+        while cur and cur ~= WS and cur ~= itemsFolder do
+            if cur:IsA("Model") then lastModel = cur end
             cur = cur.Parent
         end
+        if lastModel and lastModel.Parent == itemsFolder then
+            return lastModel
+        end
+        return lastModel
+    end
+
+    local function nearestSelectedModelFromPart(part, selectedSet)
+        if not part or not part:IsA("BasePart") then return nil end
+        local itemsFolder = itemsRootOrNil()
+        local m = topModelUnderItems(part, itemsFolder) or part:FindFirstAncestorOfClass("Model")
+        if m and nameMatches(selectedSet, m) then return m end
         return nil
     end
 
@@ -515,17 +542,14 @@ return function(C, R, UI)
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         if isExcludedModel(m) or isUnderLogWall(m) then return false end
         if m.Name == "Log" and isWallVariant(m) then return false end
-
         local tIn = m:GetAttribute(INFLT_ATTR)
         local jIn = m:GetAttribute(JOB_ATTR)
         if tIn and jIn and tostring(jIn) ~= tostring(jobId) and os.clock() - tIn < STUCK_TTL then
             return false
         end
-
         if not nameMatches(selectedSet, m) then
             return false
         end
-
         local mp = mainPart(m); if not mp then return false end
         return (mp.Position - center).Magnitude <= radius
     end
