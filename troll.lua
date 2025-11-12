@@ -1,292 +1,312 @@
 -- troll.lua
 return function(C, R, UI)
-    local Players  = C.Services.Players
-    local RS       = C.Services.RS
-    local WS       = C.Services.WS
-    local Run      = C.Services.Run
-    local lp       = Players.LocalPlayer
+    C  = C  or _G.C
+    UI = UI or _G.UI
+    local Players  = (C and C.Services and C.Services.Players)  or game:GetService("Players")
+    local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
+    local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
+    local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
 
-    local tab = UI and UI.Tabs and UI.Tabs.Troll
-    assert(tab, "Troll tab not found")
+    local lp = Players.LocalPlayer
+    local Tabs = (UI and UI.Tabs) or {}
+    local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
+    assert(tab, "Troll tab not found in UI")
 
-    -- Tunables
-    local DRAG_RADIUS        = 200
-    local MAX_PER_TARGET     = 20
-    local RAIN_MIN_Y         = 18
-    local RAIN_MAX_Y         = 35
-    local RING_MIN_R         = 0.5
-    local RING_MAX_R         = 3.2
-    local RING_STEP_R        = 0.11
-    local DROP_SPIN_AV       = 8
-    local COLLIDE_RESTORE_S  = 0.25
-    local CLEAN_ATTRS_DELAY  = 0.6
-    local BETWEEN_DROPS_S    = 0.07
+    local MAX_LOGS             = 50
+    local SEARCH_RADIUS        = 200
+    local TICK                 = 0.03
+    local FLOAT_RADIUS_MIN     = 3.0
+    local FLOAT_RADIUS_MAX     = 7.5
+    local FLOAT_HEIGHT_MIN     = 3.0
+    local FLOAT_HEIGHT_MAX     = 8.0
+    local ANGULAR_SPEED_MIN    = 0.7
+    local ANGULAR_SPEED_MAX    = 1.8
+    local DRAG_SETTLE          = 0.06
+    local COLLIDE_OFF_SEC      = 0.20
+    local JOB_TIMEOUT_S        = 90
+    local REASSIGN_IF_LOST_S   = 2.0
 
-    local running = false
-    local selected = {}
-    local statusLabel
-
-    -- Utilities
     local function hrp(p)
-        local who = p or lp
-        local ch = who.Character or who.CharacterAdded:Wait()
+        p = p or lp
+        local ch = p.Character or p.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
-    local function mainPart(m)
-        if not (m and m:IsA("Model")) then return nil end
-        return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+    local function headPart(p)
+        p = p or lp
+        local ch = p.Character
+        return ch and ch:FindFirstChild("Head")
     end
-    local function allParts(m)
+    local function mainPart(obj)
+        if not obj or not obj.Parent then return nil end
+        if obj:IsA("BasePart") then return obj end
+        if obj:IsA("Model") then
+            if obj.PrimaryPart then return obj.PrimaryPart end
+            return obj:FindFirstChildWhichIsA("BasePart")
+        end
+        return nil
+    end
+    local function getAllParts(target)
         local t = {}
-        if not m then return t end
-        for _,d in ipairs(m:GetDescendants()) do
-            if d:IsA("BasePart") then t[#t+1] = d end
+        if not target then return t end
+        if target:IsA("BasePart") then
+            t[1] = target
+        elseif target:IsA("Model") then
+            for _,d in ipairs(target:GetDescendants()) do
+                if d:IsA("BasePart") then t[#t+1] = d end
+            end
         end
         return t
     end
-    local function itemsRootOrNil()
-        return WS:FindFirstChild("Items") or WS
+    local function setCollide(model, on, snapshot)
+        local parts = getAllParts(model)
+        if on and snapshot then
+            for part,can in pairs(snapshot) do
+                if part and part.Parent then part.CanCollide = can end
+            end
+            return
+        end
+        local snap = {}
+        for _,p in ipairs(parts) do snap[p]=p.CanCollide; p.CanCollide=false end
+        return snap
     end
-    local function uiStatus(msg)
-        if statusLabel then statusLabel:SetText(msg) end
-        print("[Troll] " .. tostring(msg))
+    local function zeroAssembly(model)
+        for _,p in ipairs(getAllParts(model)) do
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+        end
     end
 
-    -- Remotes
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
         return nil
     end
-    local REM = {
-        StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem"),
-        StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
-    }
-    local function startDrag(model)
-        if REM.StartDrag and model and model.Parent then
-            local ok,err = pcall(function() REM.StartDrag:FireServer(model) end)
-            if not ok then uiStatus("StartDrag failed: "..tostring(err)) end
-            return ok
-        end
-        return false
+    local function resolveRemotes()
+        return {
+            StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem"),
+            StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem"),
+        }
     end
-    local function stopDrag(model)
-        if REM.StopDrag and model and model.Parent then
-            pcall(function() REM.StopDrag:FireServer(model) end)
+    local function safeStartDrag(r, model)
+        if r and r.StartDrag and model and model.Parent then
+            pcall(function() r.StartDrag:FireServer(model) end)
             return true
         end
         return false
     end
-
-    -- Collision helpers
-    local function setNoCollide(m)
-        local snap = {}
-        for _,p in ipairs(allParts(m)) do
-            snap[p] = p.CanCollide
-            p.CanCollide = false
-            p.CanTouch   = false
+    local function safeStopDrag(r, model)
+        if r and r.StopDrag and model and model.Parent then
+            pcall(function() r.StopDrag:FireServer(model) end)
+            return true
         end
-        return snap
+        return false
     end
-    local function restoreCollide(m, snap)
-        for part,can in pairs(snap or {}) do
-            if part and part.Parent then
-                part.CanCollide = can
-                part.CanTouch   = true
-            end
-        end
-    end
-    local function zeroAssembly(m)
-        for _,p in ipairs(allParts(m)) do
-            p.Anchored = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-            pcall(function() p:SetNetworkOwner(nil) end)
-            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-        end
+    local function finallyStopDrag(r, model)
+        task.delay(0.05, function() pcall(safeStopDrag, r, model) end)
+        task.delay(0.20, function() pcall(safeStopDrag, r, model) end)
     end
 
-    -- Selection UI
-    local function playerList()
-        local t = {}
-        for _,p in ipairs(Players:GetPlayers()) do if p ~= lp then t[#t+1] = p.Name end end
-        table.sort(t); return t
-    end
-    local function setSelected(choice)
-        local s = {}
-        if type(choice) == "table" then
-            for _,v in ipairs(choice) do if v and v~="" then s[v]=true end end
-        elseif choice and choice~="" then
-            s[choice] = true
-        end
-        selected = s
-        uiStatus(("Selected %d players"):format((function() local c=0 for _ in pairs(s) do c=c+1 end; return c end)()))
-    end
-    local drop = tab:Dropdown({
-        Title = "Select Players",
-        Values = playerList(),
-        Multi = true,
-        AllowNone = true,
-        Callback = setSelected
-    })
-    Players.PlayerAdded:Connect(function() if drop and drop.SetValues then drop:SetValues(playerList()) end end)
-    Players.PlayerRemoving:Connect(function() if drop and drop.SetValues then drop:SetValues(playerList()) end end)
-
-    -- Simple status label
-    statusLabel = tab:Label({ Title = "Idle" })
-    function statusLabel:SetText(t) self.Title = t end
-
-    -- Log discovery
-    local function collectLogs(center, radius, limit)
-        local root = itemsRootOrNil()
+    local function logsNearMe(maxCount)
+        local root = hrp(); if not root then return {} end
+        local center = root.Position
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
-        local parts = WS:GetPartBoundsInRadius(center, radius, params) or {}
-        local uniq, out = {}, {}
-        for _,p in ipairs(parts) do
-            local m = p:FindFirstAncestorOfClass("Model")
-            if m and not uniq[m] and m.Parent and m.Name == "Log" then
-                local mp = mainPart(m)
-                if mp and (mp.Position - center).Magnitude <= radius then
-                    uniq[m] = true
-                    out[#out+1] = m
-                    if limit and #out >= limit then break end
+        local parts = WS:GetPartBoundsInRadius(center, SEARCH_RADIUS, params) or {}
+        local items = {}
+        local uniq  = {}
+        for _,part in ipairs(parts) do
+            if part:IsA("BasePart") then
+                local m = part:FindFirstAncestorOfClass("Model")
+                if m and m.Name == "Log" and not uniq[m] then
+                    local mp = mainPart(m)
+                    if mp then
+                        uniq[m] = true
+                        items[#items+1] = {m=m, d=(mp.Position - center).Magnitude}
+                    end
+                end
+            end
+        end
+        table.sort(items, function(a,b) return a.d < b.d end)
+        local out = {}
+        for i=1, math.min(maxCount, #items) do out[#out+1] = items[i].m end
+        return out
+    end
+
+    local function selectedPlayersList(fromSet)
+        local out = {}
+        for userIdStr,_ in pairs(fromSet or {}) do
+            local uid = tonumber(userIdStr)
+            if uid then
+                for _,p in ipairs(Players:GetPlayers()) do
+                    if p.UserId == uid and p ~= lp then
+                        out[#out+1] = p
+                        break
+                    end
                 end
             end
         end
         return out
     end
 
-    local function targetsFromSelection()
-        local t = {}
-        for name,_ in pairs(selected) do
-            local p = Players:FindFirstChild(name)
-            if p and p.Character and hrp(p) then t[#t+1] = p end
+    local function playerChoices()
+        local vals = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p ~= lp then
+                vals[#vals+1] = ("%s#%d"):format(p.Name, p.UserId)
+            end
         end
-        return t
+        table.sort(vals)
+        return vals
+    end
+    local function parseSelection(choice)
+        local set = {}
+        if type(choice) == "table" then
+            for _,v in ipairs(choice) do
+                local uid = tonumber((tostring(v):match("#(%d+)$") or ""))
+                if uid then set[tostring(uid)] = true end
+            end
+        else
+            local uid = tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
+            if uid then set[tostring(uid)] = true end
+        end
+        return set
     end
 
-    -- Ring positions above a player
-    local function ringOffset(i)
-        local a = i * 2.39996323
-        local r = math.min(RING_MIN_R + (i-1)*RING_STEP_R, RING_MAX_R)
-        return Vector3.new(math.cos(a)*r, 0, math.sin(a)*r)
+    local running = false
+    local activeJobs = {}      -- model -> {stop=bool}
+    local assigned   = {}      -- model -> userId
+    local rcache     = resolveRemotes()
+
+    local function setPivot(model, cf)
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p = mainPart(model); if p then p.CFrame = cf end
+        end
     end
 
-    -- Server-visible “rain”: rely on server drag, then physics
-    local function rainOne(log, targetPlr, slotIndex)
-        if not (log and log.Parent) then return end
-        local root = hrp(targetPlr); if not root then return end
+    local function floatAroundTarget(model, targetPlayer, seed)
+        local st = os.clock()
+        local r  = math.random(FLOAT_RADIUS_MIN*100, FLOAT_RADIUS_MAX*100)/100
+        local h  = math.random(FLOAT_HEIGHT_MIN*100, FLOAT_HEIGHT_MAX*100)/100
+        local w  = math.random(ANGULAR_SPEED_MIN*100, ANGULAR_SPEED_MAX*100)/100
+        local phase = (seed or 0) % (2*math.pi)
+        local stop = false
+        activeJobs[model] = { stop = false }
+        local jobRef = activeJobs[model]
 
-        -- Start server drag so the server takes ownership and replication
-        local started = startDrag(log)
+        local started = safeStartDrag(rcache, model)
+        task.wait(DRAG_SETTLE)
+        local snap = setCollide(model, false)
+        zeroAssembly(model)
 
-        -- Soften contacts while traveling
-        local snap = setNoCollide(log)
-        zeroAssembly(log)
+        local lastSeen = os.clock()
 
-        -- Choose a spawn point above the target, offset on a ring
-        local head = targetPlr.Character and targetPlr.Character:FindFirstChild("Head")
-        local base = head and head.Position or root.Position
-        local y    = math.random(RAIN_MIN_Y*10, RAIN_MAX_Y*10) / 10
-        local idx  = slotIndex or 1
-        local offset = ringOffset(idx)
-        local topPos = base + Vector3.new(0, y, 0) + offset
-
-        -- Use only physics impulses. Avoid client CFrame teleports.
-        -- Small upward nudge to encourage replication even if ownership flips.
-        for _,p in ipairs(allParts(log)) do
-            p.AssemblyAngularVelocity = Vector3.new(0, DROP_SPIN_AV, 0)
+        while running and jobRef == activeJobs[model] do
+            local th = headPart(targetPlayer) or hrp(targetPlayer)
+            if not th then
+                if os.clock() - lastSeen > REASSIGN_IF_LOST_S then break end
+            else
+                lastSeen = os.clock()
+                local base = th.Position
+                local t = os.clock() - st
+                local ang = phase + w * t
+                local off = Vector3.new(math.cos(ang)*r, h + math.sin(t*0.6)*0.75, math.sin(ang)*r)
+                local pos = base + off
+                local look = (base - pos).Unit
+                setPivot(model, CFrame.new(pos, pos + look))
+                for _,p in ipairs(getAllParts(model)) do
+                    p.AssemblyLinearVelocity  = Vector3.new()
+                    p.AssemblyAngularVelocity = Vector3.new()
+                end
+            end
+            task.wait(TICK)
         end
 
-        -- If we have a main part, set its position once via velocity impulses:
-        local mp = mainPart(log)
-        if mp then
-            -- A tiny reposition via velocity toward topPos; do not set CFrame hard.
-            local pos = mp.Position
-            local toTop = topPos - pos
-            local horiz = Vector3.new(toTop.X, 0, toTop.Z)
-            -- Kick upward then let it fall
-            mp.AssemblyLinearVelocity = Vector3.new(horiz.X, math.max(35, toTop.Y), horiz.Z)
-        end
-
-        -- Restore collisions shortly before impact
-        task.delay(COLLIDE_RESTORE_S, function()
-            if log and log.Parent then restoreCollide(log, snap) end
-        end)
-
-        -- Stop dragging after drop window
-        task.delay(CLEAN_ATTRS_DELAY, function()
-            if started and log and log.Parent then stopDrag(log) end
-        end)
+        setCollide(model, true, snap)
+        if started then finallyStopDrag(rcache, model) end
+        activeJobs[model] = nil
     end
 
-    local activeJobs = {}
+    local function startFloat(logs, targets)
+        running = true
+        activeJobs = {}
+        assigned   = {}
+
+        local N = #targets
+        if N == 0 or #logs == 0 then return end
+
+        local per = math.floor(#logs / N)
+        local rem = #logs % N
+        local idx = 1
+        for i,mdl in ipairs(logs) do
+            local tgt = targets[idx]
+            assigned[mdl] = tgt.UserId
+            task.spawn(function()
+                floatAroundTarget(mdl, tgt, i*0.37)
+            end)
+            idx += 1
+            if idx > N then idx = 1 end
+        end
+    end
 
     local function stopAll()
         running = false
-        for _,job in ipairs(activeJobs) do
-            if job and job.log and job.log.Parent then
-                pcall(stopDrag, job.log)
-                -- safety restore
-                restoreCollide(job.log, job.snap or {})
+        for m,rec in pairs(activeJobs) do
+            if m and m.Parent then
+                pcall(function()
+                    for _,p in ipairs(getAllParts(m)) do
+                        p.Anchored = false
+                        p.AssemblyLinearVelocity  = Vector3.new()
+                        p.AssemblyAngularVelocity = Vector3.new()
+                        pcall(function() p:SetNetworkOwner(nil) end)
+                        pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                    end
+                end)
             end
+            activeJobs[m] = nil
         end
-        activeJobs = {}
-        uiStatus("Stopped")
     end
 
-    local function startRain()
-        if running then return end
-        local myRoot = hrp(); if not myRoot then uiStatus("No HRP"); return end
-        if not REM.StartDrag then uiStatus("StartDrag remote missing"); return end
+    local selectedPlayers = {}
 
-        local targets = targetsFromSelection()
-        if #targets == 0 then uiStatus("No targets selected"); return end
-
-        running = true
-
-        -- Pool logs
-        local maxNeed = MAX_PER_TARGET * #targets
-        local pool = collectLogs(myRoot.Position, DRAG_RADIUS, maxNeed)
-        uiStatus(("Found %d logs, %d target(s)"):format(#pool, #targets))
-        if #pool == 0 then running = false; return end
-
-        -- Divide fairly
-        local per = math.max(1, math.floor(#pool / #targets))
-        per = math.min(per, MAX_PER_TARGET)
-
-        -- Interleave per player
-        local cursor = 1
-        local slotIdx = {}
-        for _,pl in ipairs(targets) do slotIdx[pl] = 1 end
-
-        while running and cursor <= #pool do
-            for _,pl in ipairs(targets) do
-                for _=1,per do
-                    local log = pool[cursor]; if not log then break end
-                    local idx = slotIdx[pl] or 1
-                    slotIdx[pl] = idx + 1
-                    table.insert(activeJobs, {log=log})
-                    rainOne(log, pl, idx)
-                    cursor = cursor + 1
-                    task.wait(BETWEEN_DROPS_S)
-                    if cursor > #pool then break end
-                end
-                if cursor > #pool then break end
+    tab:Section({ Title = "Troll: Float Logs Around Players" })
+    local playerDD = tab:Dropdown({
+        Title = "Players",
+        Values = playerChoices(),
+        Multi = true,
+        AllowNone = true,
+        Callback = function(choice)
+            selectedPlayers = parseSelection(choice)
+        end
+    })
+    tab:Button({
+        Title = "Refresh Player List",
+        Callback = function()
+            local vals = playerChoices()
+            if playerDD and playerDD.SetValues then
+                playerDD:SetValues(vals)
             end
         end
+    })
 
-        task.delay(2.0, function()
-            running = false
-            activeJobs = {}
-            uiStatus("Rain complete")
-        end)
-    end
-
-    -- UI
-    tab:Section({ Title = "Controls" })
-    tab:Button({ Title = "Start Rain", Callback = startRain })
-    tab:Button({ Title = "Stop",       Callback = stopAll })
+    tab:Button({
+        Title = "Start",
+        Callback = function()
+            stopAll()
+            local targets = selectedPlayersList(selectedPlayers)
+            if #targets == 0 then return end
+            local logs = logsNearMe(MAX_LOGS)
+            if #logs == 0 then return end
+            startFloat(logs, targets)
+            task.delay(JOB_TIMEOUT_S, function() if running then stopAll() end end)
+        end
+    })
+    tab:Button({
+        Title = "Stop",
+        Callback = function()
+            stopAll()
+        end
+    })
 end
