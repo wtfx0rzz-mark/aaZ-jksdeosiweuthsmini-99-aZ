@@ -15,7 +15,7 @@ return function(C, R, UI)
 
     -- Search / selection
     local MAX_LOGS       = 50
-    local SEARCH_RADIUS  = 200
+    local SEARCH_RADIUS  = 150
 
     -- Motion: chaotic 3D swarm
     local TICK                 = 0.02
