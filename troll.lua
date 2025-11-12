@@ -12,16 +12,14 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
-    -- Delay before the FIRST player dropdown population (seconds)
     local INITIAL_POPULATE_DELAY = 2.0
 
-    -- Core scan + orbit tuning
     local TICK = 0.02
     local SEARCH_RADIUS = 200
     local CFG = {
-        DesiredLogs = 5,        -- slider 1..50 (default 5)
-        Speed       = 1.0,      -- slider 0.5..3.0
-        HeightRange = 5.0,      -- slider 1..10  (maps to [-0.4*span, +0.6*span])
+        DesiredLogs = 5,
+        Speed       = 1.0,
+        HeightRange = 5.0,
         CloudMinR   = 2.0,
         CloudMaxR   = 9.0,
 
@@ -30,7 +28,6 @@ return function(C, R, UI)
         AvoidLift   = 15,
         AvoidReeval = 0.2,
 
-        -- Predictive lead
         LeadBase    = 0.18,
         LeadGain    = 0.25,
         LeadMax     = 0.60,
@@ -39,19 +36,16 @@ return function(C, R, UI)
         FlipThresh  = -0.30,
         FlipPush    = 10.0,
 
-        -- Nudge settings (automatic)
         NudgeChancePerSec = 0.18,
         NudgeDuration     = 0.55,
         NudgeAhead        = 6.0,
         NudgeEyeY         = 2.0,
         NudgeSideJitter   = 1.2,
 
-        -- Hazard padding (applies only when inside hazard radius)
         HazardTopPad = 6.0,
         HazardRadPad = 2.0
     }
 
-    -- Chaotic motion tuning
     local BURST_CHANCE_PER_SEC = 0.15
     local BURST_DURATION       = 0.18
     local BURST_PUSH_BASE      = 6.5
@@ -68,7 +62,6 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
-    -- Utils
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
@@ -148,7 +141,6 @@ return function(C, R, UI)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
     end
 
-    -- Discovery
     local function logsNear(center, excludeSet, limit)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -173,7 +165,6 @@ return function(C, R, UI)
         return out
     end
 
-    -- Player listing
     local function playersList()
         local vals = {}
         for _,p in ipairs(Players:GetPlayers()) do
@@ -205,7 +196,6 @@ return function(C, R, UI)
         return out
     end
 
-    -- Random + height
     local function rngFor(seed) return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1)) end
     local function heightMinMax()
         local span = math.clamp(CFG.HeightRange, 1, 10)
@@ -214,7 +204,6 @@ return function(C, R, UI)
         return minY, maxY
     end
 
-    -- Hazards
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
     local function partCenter(m)
         if not m then return nil end
@@ -295,18 +284,18 @@ return function(C, R, UI)
         return false, nil
     end
 
-    -- Runtime state
     local running = false
-    local desired = CFG.DesiredLogs
+    local desiredPerTarget = CFG.DesiredLogs
     local active  = {}
     local activeList = {}
     local targets = {}
+    local activeByUid = {}
+    local countByUid = {}
     local reconcileConn, hbConn = nil, nil
     local lastDt = 1/60
     local scanAt = 0
     local scanCache = {}
 
-    -- Helpers
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
         local m = off.Magnitude
@@ -314,10 +303,18 @@ return function(C, R, UI)
         return off
     end
 
+    local function ensureUid(uid)
+        if not activeByUid[uid] then activeByUid[uid] = {} end
+        if not countByUid[uid] then countByUid[uid] = 0 end
+    end
+
     local function adopt(model, tgt, seed)
         if active[model] then return end
+        local uid = tgt.UserId
+        ensureUid(uid)
         active[model] = {
             target = tgt,
+            uid = uid,
             t0 = os.clock(),
             seed = seed,
             rng = rngFor((seed or 0) + os.clock()),
@@ -336,11 +333,12 @@ return function(C, R, UI)
             snap = nil,
             lastSeen = os.clock(),
             lastVel = Vector3.zero,
-            -- nudge state
             nudgeUntil = 0,
             nudgeSide  = 0
         }
         table.insert(activeList, model)
+        table.insert(activeByUid[uid], model)
+        countByUid[uid] += 1
         task.spawn(function()
             local st = active[model]; if not st then return end
             local started = safeStartDrag(model); st.started = started
@@ -354,7 +352,14 @@ return function(C, R, UI)
         local st = active[model]
         active[model] = nil
         for i=#activeList,1,-1 do if activeList[i]==model then table.remove(activeList,i) break end end
-        if st and st.snap then setCollide(model, true, st.snap) end
+        if st then
+            if st.snap then setCollide(model, true, st.snap) end
+            local uid = st.uid
+            if uid and activeByUid[uid] then
+                for i=#activeByUid[uid],1,-1 do if activeByUid[uid][i]==model then table.remove(activeByUid[uid],i) break end end
+                if countByUid[uid] and countByUid[uid] > 0 then countByUid[uid] -= 1 end
+            end
+        end
         finallyStopDrag(model)
         for _,p in ipairs(getParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
@@ -389,7 +394,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Predictive base and nudges
     local function predictiveBaseFor(st)
         local root = hrp(st.target)
         if not root then return nil, Vector3.new(0,0,-1) end
@@ -401,8 +405,6 @@ return function(C, R, UI)
         end
         local base = root.Position + vel * leadT
         local look = (speed > 1e-3) and (vel / speed) or (root.CFrame.LookVector)
-
-        -- Bias up only if actually inside hazard radius
         local inside, c = insideHazard(base)
         if inside and c then
             base = Vector3.new(base.X, math.max(base.Y, c.Y + CFG.HazardTopPad), base.Z)
@@ -440,7 +442,6 @@ return function(C, R, UI)
 
         local off = st.slot + Vector3.new(jx, jy, jz)
 
-        -- Direction flip dart
         local root = hrp(st.target)
         if root then
             local vel = root.AssemblyLinearVelocity
@@ -462,10 +463,8 @@ return function(C, R, UI)
         end
         st.flipPushDir = nil
 
-        -- Keep fully 3D
         off = clampOrbital(off)
 
-        -- Nudge sweep: across the view in front of the face; otherwise normal orbit
         local posCandidate
         if os.clock() < st.nudgeUntil and root then
             local eye = root.Position + Vector3.new(0, CFG.NudgeEyeY, 0)
@@ -477,10 +476,8 @@ return function(C, R, UI)
             posCandidate = base + off
         end
 
-        -- Hazards only when inside
         posCandidate = projectOutOfHazards(posCandidate)
 
-        -- Final leash
         local leashR = CFG.CloudMaxR + 6.0
         local vecFromBase = posCandidate - base
         local dist = vecFromBase.Magnitude
@@ -504,38 +501,50 @@ return function(C, R, UI)
         return true
     end
 
-    -- Reconcile adoption/shed
     local function reconcile()
         if not running then return end
         local myRoot = hrp(); if not myRoot then return end
         if os.clock() >= scanAt then
             local exclude = {}
             for m,_ in pairs(active) do exclude[m]=true end
-            scanCache = logsNear(myRoot.Position, exclude, 200)
-            scanAt = os.clock() + 0.8
+            scanCache = logsNear(myRoot.Position, exclude, 400)
+            scanAt = os.clock() + 0.5
         end
-        local want = math.clamp(desired, 1, 50)
-        local have = #activeList
-        local batch = 4
 
-        if have < want and lastDt <= (1/45) then
-            local toAdd = math.min(batch, want - have)
-            local idx = 1
-            while toAdd > 0 and idx <= #scanCache do
-                local mdl = scanCache[idx]; idx = idx + 1
-                if mdl and mdl.Parent and not active[mdl] then
-                    local tgt = targets[ ((#activeList) % math.max(1,#targets)) + 1 ]
-                    if tgt then
-                        adopt(mdl, tgt, (#activeList + 1) * 0.73)
-                        toAdd = toAdd - 1
+        local nTargets = #targets
+        if nTargets == 0 then return end
+
+        local wantPer = math.clamp(desiredPerTarget, 1, 50)
+        for _,tgt in ipairs(targets) do
+            ensureUid(tgt.UserId)
+        end
+
+        for _,tgt in ipairs(targets) do
+            local uid = tgt.UserId
+            local have = countByUid[uid] or 0
+            if have < wantPer then
+                local deficit = wantPer - have
+                local toAdd = math.clamp(deficit, 1, 12)
+                local idx = 1
+                while toAdd > 0 and idx <= #scanCache do
+                    local mdl = scanCache[idx]; idx += 1
+                    if mdl and mdl.Parent and not active[mdl] then
+                        adopt(mdl, tgt, (have + toAdd) * 0.73 + uid%97)
+                        toAdd -= 1
                     end
                 end
-            end
-        elseif have > want then
-            local toDrop = math.min(batch, have - want)
-            for i=have, math.max(1, have - toDrop + 1), -1 do
-                local mdl = activeList[i]
-                if mdl then shed(mdl) end
+            elseif have > wantPer then
+                local over = have - wantPer
+                local list = activeByUid[uid] or {}
+                local i = #list
+                while over > 0 and i >= 1 do
+                    local mdl = list[i]
+                    if mdl and active[mdl] then
+                        shed(mdl)
+                        over -= 1
+                    end
+                    i -= 1
+                end
             end
         end
     end
@@ -545,14 +554,13 @@ return function(C, R, UI)
         if reconcileConn then reconcileConn:Disconnect(); reconcileConn=nil end
         if hbConn then hbConn:Disconnect(); hbConn=nil end
         for i=#activeList,1,-1 do local mdl=activeList[i]; if mdl then shed(mdl) end end
-        active = {}; activeList = {}
+        active = {}; activeList = {}; activeByUid = {}; countByUid = {}
     end
 
-    -- UI
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
     local selectedSet = {}
-    local playerDD -- created ONCE after INITIAL_POPULATE_DELAY
+    local playerDD
 
     local function buildPlayerDropdownOnce()
         if playerDD then return end
@@ -566,16 +574,14 @@ return function(C, R, UI)
             end
         })
     end
-
-    -- Defer the first and only population to give joiners time to appear
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
     tab:Slider({
-        Title = "Logs",
+        Title = "Logs (per target)",
         Value = { Min = 1, Max = 50, Default = 5 },
         Callback = function(v)
             local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then desired = math.clamp(math.floor(n + 0.5), 1, 50) end
+            if n then desiredPerTarget = math.clamp(math.floor(n + 0.5), 1, 50) end
         end
     })
     tab:Slider({
@@ -600,10 +606,10 @@ return function(C, R, UI)
         Callback = function()
             stopAll()
             resolveRemotes()
-            -- Build dropdown now if user pressed Start before the delayed population
             if not playerDD then buildPlayerDropdownOnce() end
             targets = selectedPlayersList(selectedSet)
             if #targets == 0 then return end
+            for _,tgt in ipairs(targets) do ensureUid(tgt.UserId) end
             running = true
             hbConn = Run.Heartbeat:Connect(function(dt)
                 lastDt = dt
