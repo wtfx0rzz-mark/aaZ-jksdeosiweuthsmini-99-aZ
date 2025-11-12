@@ -1,4 +1,4 @@
--- troll.lua (chaos swarm + campfire/scrapper avoidance + live player list refresh)
+-- troll.lua (chaos swarm + avoidance, optimized to prevent freezes)
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
@@ -15,10 +15,10 @@ return function(C, R, UI)
 
     -- Search / selection
     local MAX_LOGS       = 50
-    local SEARCH_RADIUS  = 150
+    local SEARCH_RADIUS  = 200
 
     -- Motion: chaotic 3D swarm
-    local TICK                 = 0.02
+    local TICK                 = 0.03         -- relaxed tick
     local CLOUD_RADIUS_MIN     = 2.0
     local CLOUD_RADIUS_MAX     = 9.0
     local HEIGHT_BASE          = 0.5
@@ -41,7 +41,7 @@ return function(C, R, UI)
     local BURST_DURATION       = 0.18
     local BURST_PUSH           = 6.5
 
-    local DRAG_SETTLE          = 0.05
+    local DRAG_SETTLE          = 0.03
     local JOB_TIMEOUT_S        = 120
     local REASSIGN_IF_LOST_S   = 2.0
 
@@ -49,8 +49,12 @@ return function(C, R, UI)
     local CAMPFIRE_AVOID_RADIUS  = 35
     local SCRAPPER_AVOID_RADIUS  = 35
     local AVOID_LIFT             = 15
-    local AVOID_REEVAL_S         = 0.2
+    local AVOID_REEVAL_S         = 0.75      -- slower, global updater
 
+    -- Micro-tuning
+    local ZERO_VEL_EVERY_TICKS   = 4         -- zero velocities every N ticks, not every frame
+
+    -- ===== helpers =====
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
@@ -65,37 +69,6 @@ return function(C, R, UI)
         end
         return nil
     end
-    local function getAllParts(target)
-        local t = {}
-        if not target then return t end
-        if target:IsA("BasePart") then
-            t[1] = target
-        elseif target:IsA("Model") then
-            for _,d in ipairs(target:GetDescendants()) do
-                if d:IsA("BasePart") then t[#t+1] = d end
-            end
-        end
-        return t
-    end
-    local function setCollide(model, on, snapshot)
-        local parts = getAllParts(model)
-        if on and snapshot then
-            for part,can in pairs(snapshot) do
-                if part and part.Parent then part.CanCollide = can end
-            end
-            return
-        end
-        local snap = {}
-        for _,p in ipairs(parts) do snap[p]=p.CanCollide; p.CanCollide=false end
-        return snap
-    end
-    local function zeroAssembly(model)
-        for _,p in ipairs(getAllParts(model)) do
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-        end
-    end
-
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
@@ -152,87 +125,53 @@ return function(C, R, UI)
         return out
     end
 
-    local function playerChoices()
-        local vals = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then
-                vals[#vals+1] = ("%s#%d"):format(p.Name, p.UserId)
-            end
-        end
-        table.sort(vals)
-        return vals
-    end
-    local function parseSelection(choice)
-        local set = {}
-        if type(choice) == "table" then
-            for _,v in ipairs(choice) do
-                local uid = tonumber((tostring(v):match("#(%d+)$") or ""))
-                if uid then set[tostring(uid)] = true end
-            end
-        else
-            local uid = tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
-            if uid then set[tostring(uid)] = true end
-        end
-        return set
-    end
-    local function selectedPlayersList(fromSet)
-        local out = {}
-        for userIdStr,_ in pairs(fromSet or {}) do
-            local uid = tonumber(userIdStr)
-            if uid then
-                for _,p in ipairs(Players:GetPlayers()) do
-                    if p.UserId == uid and p ~= lp then
-                        out[#out+1] = p
-                        break
-                    end
-                end
-            end
-        end
-        return out
-    end
-
-    -- Campfire/Scrapper locating
-    local function nearestCenterByNames(names)
+    -- ==== avoidance cache: single lightweight updater ====
+    local Avoid = { fire=nil, scrap=nil, last=-1 }
+    local function findByNamesFast(names)
         local best, bestD = nil, math.huge
-        for _,inst in ipairs(WS:GetDescendants()) do
-            if inst:IsA("Model") or inst:IsA("BasePart") then
-                local n = (inst.Name or ""):lower()
-                for _,want in ipairs(names) do
-                    if n == want or n:find(want, 1, true) then
-                        local mp = mainPart(inst)
-                        if mp then
-                            local root = hrp()
-                            if root then
-                                local d = (mp.Position - root.Position).Magnitude
+        local root = hrp()
+        if not root then return nil end
+        local rootPos = root.Position
+        -- Search limited: only Models under Workspace.Map or workspace root
+        local function consider(container)
+            if not container then return end
+            for _,inst in ipairs(container:GetChildren()) do
+                if inst:IsA("Model") or inst:IsA("BasePart") then
+                    local n = (inst.Name or ""):lower()
+                    for _,want in ipairs(names) do
+                        if n == want or n:find(want, 1, true) then
+                            local mp = mainPart(inst)
+                            if mp then
+                                local d = (mp.Position - rootPos).Magnitude
                                 if d < bestD then bestD, best = d, mp.Position end
                             end
+                            break
                         end
-                        break
                     end
                 end
             end
         end
+        consider(WS:FindFirstChild("Map"))
+        consider(WS)
         return best
     end
-    local function campfirePos()
-        return nearestCenterByNames({ "mainfire","campfire","camp fire" })
+    local function avoidanceUpdater()
+        while true do
+            Avoid.fire  = findByNamesFast({ "mainfire","campfire","camp fire" })
+            Avoid.scrap = findByNamesFast({ "scrapper","scrap","scrapperstation","scrap station" })
+            Avoid.last  = os.clock()
+            task.wait(AVOID_REEVAL_S)
+        end
     end
-    local function scrapperPos()
-        return nearestCenterByNames({ "scrapper","scrap","scrapperstation","scrap station" })
-    end
+    task.spawn(avoidanceUpdater)
 
-    local function applyAvoidance(pos, now, cache)
-        if now - cache.last >= AVOID_REEVAL_S then
-            cache.last = now
-            cache.fire   = campfirePos()
-            cache.scrap  = scrapperPos()
-        end
+    local function applyAvoidance(pos)
         local lift = 0
-        if cache.fire then
-            if (pos - cache.fire).Magnitude <= CAMPFIRE_AVOID_RADIUS then lift = math.max(lift, AVOID_LIFT) end
+        if Avoid.fire and (pos - Avoid.fire).Magnitude <= CAMPFIRE_AVOID_RADIUS then
+            lift = math.max(lift, AVOID_LIFT)
         end
-        if cache.scrap then
-            if (pos - cache.scrap).Magnitude <= SCRAPPER_AVOID_RADIUS then lift = math.max(lift, AVOID_LIFT) end
+        if Avoid.scrap and (pos - Avoid.scrap).Magnitude <= SCRAPPER_AVOID_RADIUS then
+            lift = math.max(lift, AVOID_LIFT)
         end
         if lift > 0 then
             return pos + Vector3.new(0, lift, 0)
@@ -240,9 +179,27 @@ return function(C, R, UI)
         return pos
     end
 
+    -- ===== chaos engine =====
     local running = false
     local activeJobs = {}
     local rcache     = resolveRemotes()
+
+    -- per-model cached parts to avoid GetDescendants() each tick
+    local partsCache = setmetatable({}, { __mode = "k" })
+    local function cachedParts(m)
+        local list = partsCache[m]
+        if list then return list end
+        local t = {}
+        if m:IsA("Model") then
+            for _,d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then t[#t+1] = d end
+            end
+        elseif m:IsA("BasePart") then
+            t[1] = m
+        end
+        partsCache[m] = t
+        return t
+    end
 
     local function setPivot(model, cf)
         if model:IsA("Model") then
@@ -269,91 +226,93 @@ return function(C, R, UI)
     local function floatAroundTarget(model, targetPlayer, seed)
         local started = safeStartDrag(rcache, model)
         task.wait(DRAG_SETTLE)
-        local snap = setCollide(model, false)
-        zeroAssembly(model)
 
-        local state = {
-            rng         = rngFor((seed or 0) + os.clock()),
-            slot        = nil,
-            reslotAt    = 0,
-            burstUntil  = 0,
-            burstDir    = 1,
-            t0          = os.clock(),
-            lastSeen    = os.clock(),
-            phases = {
-                xz1 = math.random()*math.pi*2,
-                xz2 = math.random()*math.pi*2,
-                y1  = math.random()*math.pi*2,
-                y2  = math.random()*math.pi*2,
-            },
-            w = {
-                xz1 = math.random()*(W_XZ1_MAX-W_XZ1_MIN)+W_XZ1_MIN,
-                xz2 = math.random()*(W_XZ2_MAX-W_XZ2_MIN)+W_XZ2_MIN,
-                y1  = math.random()*(W_Y1_MAX -W_Y1_MIN )+W_Y1_MIN,
-                y2  = math.random()*(W_Y2_MAX -W_Y2_MIN )+W_Y2_MIN,
-            },
-            avoid = { last = -1, fire = nil, scrap = nil },
+        -- disable collision once, cache original values
+        local snapshot = {}
+        for _,p in ipairs(cachedParts(model)) do
+            snapshot[p] = p.CanCollide
+            p.CanCollide = false
+            p.AssemblyLinearVelocity  = Vector3.new()
+            p.AssemblyAngularVelocity = Vector3.new()
+            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+        end
+
+        local rnd = rngFor((seed or 0) + os.clock())
+        local phases = {
+            xz1 = rnd:NextNumber(0, math.pi*2),
+            xz2 = rnd:NextNumber(0, math.pi*2),
+            y1  = rnd:NextNumber(0, math.pi*2),
+            y2  = rnd:NextNumber(0, math.pi*2),
+        }
+        local w = {
+            xz1 = rnd:NextNumber(W_XZ1_MIN, W_XZ1_MAX),
+            xz2 = rnd:NextNumber(W_XZ2_MIN, W_XZ2_MAX),
+            y1  = rnd:NextNumber(W_Y1_MIN,  W_Y1_MAX ),
+            y2  = rnd:NextNumber(W_Y2_MIN,  W_Y2_MAX ),
         }
 
-        local function ensureSlot()
-            local now = os.clock()
-            if (not state.slot) or now >= state.reslotAt then
-                state.slot = pickCloudSlot(state.rng)
-                state.reslotAt = now + state.rng:NextNumber(RESLOT_EVERY_MIN, RESLOT_EVERY_MAX)
-            end
-        end
-
-        local function maybeBurst()
-            local now = os.clock()
-            if now < state.burstUntil then return end
-            if state.rng:NextNumber() < BURST_CHANCE_PER_SEC * TICK then
-                state.burstUntil = now + BURST_DURATION
-                state.burstDir   = (state.rng:NextNumber() < 0.5) and -1 or 1
-            end
-        end
+        local slot        = nil
+        local reslotAt    = 0
+        local burstUntil  = 0
+        local burstDir    = 1
+        local t0          = os.clock()
+        local lastSeen    = os.clock()
+        local tickCount   = 0
 
         activeJobs[model] = true
         while running and activeJobs[model] do
             local root = hrp(targetPlayer)
             if not root then
-                if os.clock() - state.lastSeen > REASSIGN_IF_LOST_S then break end
+                if os.clock() - lastSeen > REASSIGN_IF_LOST_S then break end
             else
-                state.lastSeen = os.clock()
-                ensureSlot()
-                maybeBurst()
+                lastSeen = os.clock()
+                local now = os.clock()
+                if (not slot) or now >= reslotAt then
+                    slot = pickCloudSlot(rnd)
+                    reslotAt = now + rnd:NextNumber(RESLOT_EVERY_MIN, RESLOT_EVERY_MAX)
+                end
+                if now >= burstUntil and rnd:NextNumber() < BURST_CHANCE_PER_SEC * TICK then
+                    burstUntil = now + BURST_DURATION
+                    burstDir   = (rnd:NextNumber() < 0.5) and -1 or 1
+                end
 
                 local base = root.Position
-                local t = os.clock() - state.t0
+                local t = now - t0
 
-                local jx = math.sin(t * state.w.xz1 + state.phases.xz1) * JIT_XZ1
-                         + math.cos(t * state.w.xz2 + state.phases.xz2) * JIT_XZ2
-                local jz = math.cos(t * state.w.xz1 * 0.8 + state.phases.xz1*0.7) * JIT_XZ1
-                         + math.sin(t * state.w.xz2 * 1.3 + state.phases.xz2*0.5) * JIT_XZ2
-                local jy = math.sin(t * state.w.y1  + state.phases.y1 ) * JIT_Y1
-                         + math.cos(t * state.w.y2  + state.phases.y2 ) * JIT_Y2
+                local jx = math.sin(t * w.xz1 + phases.xz1) * JIT_XZ1
+                         + math.cos(t * w.xz2 + phases.xz2) * JIT_XZ2
+                local jz = math.cos(t * w.xz1 * 0.8 + phases.xz1*0.7) * JIT_XZ1
+                         + math.sin(t * w.xz2 * 1.3 + phases.xz2*0.5) * JIT_XZ2
+                local jy = math.sin(t * w.y1  + phases.y1 ) * JIT_Y1
+                         + math.cos(t * w.y2  + phases.y2 ) * JIT_Y2
 
-                local off = state.slot + Vector3.new(jx, jy, jz)
-
-                if os.clock() < state.burstUntil then
+                local off = slot + Vector3.new(jx, jy, jz)
+                if now < burstUntil then
                     local dirToTarget = (base - (base + off)).Unit
-                    off = off + dirToTarget * (BURST_PUSH * state.burstDir)
+                    off = off + dirToTarget * (BURST_PUSH * burstDir)
                 end
 
                 local pos = base + off
-                pos = applyAvoidance(pos, os.clock(), state.avoid)
+                pos = applyAvoidance(pos)
 
                 local look = (base - pos).Unit
                 setPivot(model, CFrame.new(pos, pos + look))
 
-                for _,p in ipairs(getAllParts(model)) do
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
+                tickCount += 1
+                if tickCount % ZERO_VEL_EVERY_TICKS == 0 then
+                    for _,p in ipairs(cachedParts(model)) do
+                        p.AssemblyLinearVelocity  = Vector3.new()
+                        p.AssemblyAngularVelocity = Vector3.new()
+                    end
                 end
             end
             task.wait(TICK)
         end
 
-        setCollide(model, true, snap)
+        -- restore collision and stop drag
+        for part,can in pairs(snapshot) do
+            if part and part.Parent then part.CanCollide = can end
+        end
         if started then finallyStopDrag(rcache, model) end
         activeJobs[model] = nil
     end
@@ -377,15 +336,12 @@ return function(C, R, UI)
         running = false
         for m,_ in pairs(activeJobs) do
             if m and m.Parent then
-                pcall(function()
-                    for _,p in ipairs(getAllParts(m)) do
-                        p.Anchored = false
-                        p.AssemblyLinearVelocity  = Vector3.new()
-                        p.AssemblyAngularVelocity = Vector3.new()
-                        pcall(function() p:SetNetworkOwner(nil) end)
-                        pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-                    end
-                end)
+                for _,p in ipairs(cachedParts(m)) do
+                    p.Anchored = false
+                    p.AssemblyLinearVelocity  = Vector3.new()
+                    p.AssemblyAngularVelocity = Vector3.new()
+                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                end
             end
             activeJobs[m] = nil
         end
@@ -411,31 +367,41 @@ return function(C, R, UI)
         Multi = true,
         AllowNone = true,
         Callback = function(choice)
-            selectedPlayers = parseSelection(choice)
+            local set = {}
+            if type(choice) == "table" then
+                for _,v in ipairs(choice) do
+                    local uid = tonumber((tostring(v):match("#(%d+)$") or ""))
+                    if uid then set[tostring(uid)] = true end
+                end
+            else
+                local uid = tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
+                if uid then set[tostring(uid)] = true end
+            end
+            selectedPlayers = set
         end
     })
 
     local function refreshDropdown()
         local vals = buildValues()
-        if playerDD and playerDD.SetValues then
-            playerDD:SetValues(vals)
-        end
+        if playerDD and playerDD.SetValues then playerDD:SetValues(vals) end
     end
 
-    tab:Button({
-        Title = "Refresh Player List",
-        Callback = function()
-            refreshDropdown()
-        end
-    })
+    tab:Button({ Title = "Refresh Player List", Callback = refreshDropdown })
+    Players.PlayerAdded:Connect(function(p) if p ~= lp then refreshDropdown() end end)
+    Players.PlayerRemoving:Connect(function(p) if p ~= lp then refreshDropdown() end end)
 
-    -- auto-refresh on join/leave
-    Players.PlayerAdded:Connect(function(p)
-        if p ~= lp then refreshDropdown() end
-    end)
-    Players.PlayerRemoving:Connect(function(p)
-        if p ~= lp then refreshDropdown() end
-    end)
+    local function selectedPlayersList(fromSet)
+        local out = {}
+        for userIdStr,_ in pairs(fromSet or {}) do
+            local uid = tonumber(userIdStr)
+            if uid then
+                for _,p in ipairs(Players:GetPlayers()) do
+                    if p.UserId == uid and p ~= lp then out[#out+1] = p; break end
+                end
+            end
+        end
+        return out
+    end
 
     tab:Button({
         Title = "Start",
@@ -450,10 +416,5 @@ return function(C, R, UI)
         end
     })
 
-    tab:Button({
-        Title = "Stop",
-        Callback = function()
-            stopAll()
-        end
-    })
+    tab:Button({ Title = "Stop", Callback = stopAll })
 end
