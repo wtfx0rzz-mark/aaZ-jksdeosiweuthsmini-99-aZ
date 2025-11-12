@@ -36,15 +36,15 @@ return function(C, R, UI)
         FlipThresh  = -0.30,
         FlipPush    = 10.0,
 
-        -- Nudge settings (no UI; automatic)
-        NudgeChancePerSec = 0.18,  -- chance per log per second to start a sweep
-        NudgeDuration     = 0.55,  -- seconds the sweep lasts
-        NudgeAhead        = 6.0,   -- studs in front of face
-        NudgeEyeY         = 2.0,   -- eye height above HRP
-        NudgeSideJitter   = 1.2,   -- sideways jitter for variability
+        -- Nudge settings (automatic)
+        NudgeChancePerSec = 0.18,
+        NudgeDuration     = 0.55,
+        NudgeAhead        = 6.0,
+        NudgeEyeY         = 2.0,
+        NudgeSideJitter   = 1.2,
 
-        -- Hazard padding
-        HazardTopPad = 6.0,        -- lift only when inside hazard radius
+        -- Hazard padding (applies only when inside hazard radius)
+        HazardTopPad = 6.0,
         HazardRadPad = 2.0
     }
 
@@ -65,6 +65,7 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
+    -- Utils
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
@@ -144,6 +145,7 @@ return function(C, R, UI)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
     end
 
+    -- Discovery
     local function logsNear(center, excludeSet, limit)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -168,6 +170,7 @@ return function(C, R, UI)
         return out
     end
 
+    -- Player listing
     local function playersList()
         local vals = {}
         for _,p in ipairs(Players:GetPlayers()) do
@@ -199,6 +202,7 @@ return function(C, R, UI)
         return out
     end
 
+    -- Random + height
     local function rngFor(seed) return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1)) end
     local function heightMinMax()
         local span = math.clamp(CFG.HeightRange, 1, 10)
@@ -207,7 +211,7 @@ return function(C, R, UI)
         return minY, maxY
     end
 
-    -- Avoidance caches
+    -- Hazards
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
     local function partCenter(m)
         if not m then return nil end
@@ -250,7 +254,6 @@ return function(C, R, UI)
             scrapCache = findByNames({ "scrapper", "scrap", "scrapperstation" })
         end
     end
-
     local function hazardInfo()
         refreshAvoidTargets(os.clock())
         local list = {}
@@ -258,40 +261,33 @@ return function(C, R, UI)
         if scrapCache then table.insert(list, {center=partCenter(scrapCache), r=CFG.ScrapRadius}) end
         return list
     end
-
-    -- Only modify positions when actually inside hazard radius.
     local function projectOutOfHazards(pos)
         local hs = hazardInfo()
         if #hs == 0 then return pos end
         for _,h in ipairs(hs) do
-            local c = h.center
-            if c then
-                local rSafe = (h.r or 0) + CFG.HazardRadPad
-                local v = pos - c
-                local vr = Vector3.new(v.X, 0, v.Z)
-                local d = vr.Magnitude
-                if d < rSafe then
-                    if d > 1e-3 then
-                        local rim = c + vr.Unit * rSafe
-                        pos = Vector3.new(rim.X, math.max(pos.Y, c.Y + CFG.HazardTopPad), rim.Z) + Vector3.new(0, CFG.AvoidLift, 0)
-                    else
-                        pos = Vector3.new(c.X + rSafe, math.max(pos.Y, c.Y + CFG.HazardTopPad), c.Z) + Vector3.new(0, CFG.AvoidLift, 0)
-                    end
+            local c = h.center; if not c then continue end
+            local rSafe = (h.r or 0) + CFG.HazardRadPad
+            local v = pos - c
+            local vr = Vector3.new(v.X, 0, v.Z)
+            local d = vr.Magnitude
+            if d < rSafe then
+                if d > 1e-3 then
+                    local rim = c + vr.Unit * rSafe
+                    pos = Vector3.new(rim.X, math.max(pos.Y, c.Y + CFG.HazardTopPad), rim.Z) + Vector3.new(0, CFG.AvoidLift, 0)
+                else
+                    pos = Vector3.new(c.X + rSafe, math.max(pos.Y, c.Y + CFG.HazardTopPad), c.Z) + Vector3.new(0, CFG.AvoidLift, 0)
                 end
             end
         end
         return pos
     end
-
     local function insideHazard(base)
         local hs = hazardInfo()
         for _,h in ipairs(hs) do
-            local c = h.center
-            if c then
-                local r = (h.r or 0)
-                local vr = Vector3.new(base.X-c.X, 0, base.Z-c.Z)
-                if vr.Magnitude <= r then return true, c end
-            end
+            local c = h.center; if not c then continue end
+            local r = (h.r or 0)
+            local vr = Vector3.new(base.X-c.X, 0, base.Z-c.Z)
+            if vr.Magnitude <= r then return true, c end
         end
         return false, nil
     end
@@ -299,9 +295,9 @@ return function(C, R, UI)
     -- Runtime state
     local running = false
     local desired = CFG.DesiredLogs
-    local active  = {}          -- {model -> st}
-    local activeList = {}       -- [models]
-    local targets = {}          -- Players selected
+    local active  = {}
+    local activeList = {}
+    local targets = {}
     local reconcileConn, hbConn = nil, nil
     local lastDt = 1/60
     local scanAt = 0
@@ -390,7 +386,7 @@ return function(C, R, UI)
         end
     end
 
-    -- Predictive base for target
+    -- Predictive base and nudges
     local function predictiveBaseFor(st)
         local root = hrp(st.target)
         if not root then return nil, Vector3.new(0,0,-1) end
@@ -402,22 +398,17 @@ return function(C, R, UI)
         end
         local base = root.Position + vel * leadT
         local look = (speed > 1e-3) and (vel / speed) or (root.CFrame.LookVector)
-
-        -- If base lands inside a hazard, bias up
         local inside, c = insideHazard(base)
         if inside and c then
             base = Vector3.new(base.X, math.max(base.Y, c.Y + CFG.HazardTopPad), base.Z)
         end
         return base, look
     end
-
-    -- Maybe start a nudge sweep
     local function maybeStartNudge(st, dt)
         if os.clock() < st.nudgeUntil then return end
         local chance = CFG.NudgeChancePerSec * CFG.Speed
         if st.rng:NextNumber() < chance * math.clamp(dt, 0.01, 0.1) then
             st.nudgeUntil = os.clock() + CFG.NudgeDuration
-            -- Randomly nudge from left or right side
             st.nudgeSide = (st.rng:NextNumber() < 0.5) and -1 or 1
         end
     end
@@ -460,17 +451,16 @@ return function(C, R, UI)
             end
             st.lastVel = vel
         end
-
         if os.clock() < st.burstUntil then
             local dir = st.flipPushDir or (-off).Unit
             off = off + dir * (CFG.FlipPush + BURST_PUSH_BASE) * CFG.Speed * st.burstDir
         end
         st.flipPushDir = nil
 
-        -- Prevent extreme excursions, keep true 3D
+        -- Keep fully 3D
         off = clampOrbital(off)
 
-        -- Nudge sweep: target a point in front of the face
+        -- Nudge sweep: across the view in front of the face; otherwise normal orbit
         local posCandidate
         if os.clock() < st.nudgeUntil and root then
             local eye = root.Position + Vector3.new(0, CFG.NudgeEyeY, 0)
@@ -482,7 +472,7 @@ return function(C, R, UI)
             posCandidate = base + off
         end
 
-        -- Hazard handling only if actually inside
+        -- Hazards only when inside
         posCandidate = projectOutOfHazards(posCandidate)
 
         -- Final leash
@@ -509,6 +499,7 @@ return function(C, R, UI)
         return true
     end
 
+    -- Reconcile adoption shed
     local function reconcile()
         if not running then return end
         local myRoot = hrp(); if not myRoot then return end
@@ -552,55 +543,70 @@ return function(C, R, UI)
         active = {}; activeList = {}
     end
 
-    -- UI + dropdown rebuild
-    local selectedSet = {}
+    -- UI
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
+    local selectedSet = {}
     local playerDD
-    local function buildPlayerDropdown()
-        if playerDD and playerDD.Destroy then pcall(function() playerDD:Destroy() end) end
-        local vals = playersList()
 
-        -- Rehydrate current selection names from IDs so we can re-apply after rebuild
-        local preselect = {}
+    local function currentSelectionNames()
+        local names = {}
         for _,p in ipairs(Players:GetPlayers()) do
             if p ~= lp and selectedSet[p.UserId] then
-                preselect[#preselect+1] = ("%s#%d"):format(p.Name, p.UserId)
+                names[#names+1] = ("%s#%d"):format(p.Name, p.UserId)
             end
         end
-
-        playerDD = tab:Dropdown({
-            Title = "Players",
-            Values = vals,
-            Multi = true,
-            AllowNone = true,
-            Default = preselect,
-            Callback = function(choice)
-                selectedSet = parseSelection(choice)
-            end
-        })
+        table.sort(names)
+        return names
     end
 
-    buildPlayerDropdown()
+    local function updatePlayerDropdownInPlace()
+        if not playerDD then return end
+        local vals = playersList()
+        local preselect = currentSelectionNames()
 
+        -- Try common setter names without reconstructing the widget
+        if playerDD.SetValues then
+            playerDD:SetValues(vals)
+        elseif playerDD.SetOptions then
+            playerDD:SetOptions(vals)
+        elseif playerDD.SetItems then
+            playerDD:SetItems(vals)
+        end
+
+        -- Re-apply selection if API exists
+        if playerDD.SetSelected then
+            playerDD:SetSelected(preselect)
+        elseif playerDD.SetValue then
+            -- Some UIs accept table for multi-select
+            pcall(function() playerDD:SetValue(preselect) end)
+        end
+    end
+
+    playerDD = tab:Dropdown({
+        Title = "Players",
+        Values = playersList(),
+        Multi = true,
+        AllowNone = true,
+        Default = currentSelectionNames(),
+        Callback = function(choice)
+            selectedSet = parseSelection(choice)
+        end
+    })
+
+    -- Live updates keep the dropdown in place
     local playerAddedConn = Players.PlayerAdded:Connect(function(p)
         if p ~= lp then
-            task.delay(0.2, buildPlayerDropdown)
+            task.delay(0.2, updatePlayerDropdownInPlace)
         end
     end)
     local playerRemovingConn = Players.PlayerRemoving:Connect(function(p)
         if p ~= lp then
-            task.delay(0.2, buildPlayerDropdown)
+            task.delay(0.2, updatePlayerDropdownInPlace)
         end
     end)
 
-    tab:Button({
-        Title = "Refresh Player List",
-        Callback = function()
-            buildPlayerDropdown()
-        end
-    })
-
+    -- Controls
     tab:Slider({
         Title = "Logs",
         Value = { Min = 1, Max = 50, Default = 5 },
@@ -631,7 +637,8 @@ return function(C, R, UI)
         Callback = function()
             stopAll()
             resolveRemotes()
-            -- selections already in selectedSet
+            -- Ensure the dropdown is current but do not rebuild it
+            updatePlayerDropdownInPlace()
             targets = selectedPlayersList(selectedSet)
             if #targets == 0 then return end
             running = true
