@@ -16,20 +16,20 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- Tunables
     ----------------------------------------------------------------
-    local MAX_LOGS               = 50
+    local MAX_LOGS               = 100
     local SEARCH_RADIUS          = 200
     local TICK                   = 0.02
 
     -- Chaotic/avoidance
     local CAMPFIRE_AVOID_RADIUS  = 35
     local SCRAPPER_AVOID_RADIUS  = 35
-    local AVOID_LIFT             = 8
+    local AVOID_LIFT             = 18
     local AVOID_REEVAL_S         = 0.2
 
     -- Bulldozer
-    local BULL_MAX_LOGS   = 120
-    local BULL_THICKNESS  = 3
-    local BULL_PUSH_STUDS = 10
+    local BULL_MAX_LOGS   = 180
+    local BULL_THICKNESS  = 4
+    local BULL_PUSH_STUDS = 20
     local BULL_GAP_STUDS  = 2.0
 
     -- Box trap
