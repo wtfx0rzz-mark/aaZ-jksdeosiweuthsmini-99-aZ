@@ -11,7 +11,7 @@ return function(C, R, UI)
     assert(tab, "Troll tab not found in UI")
 
     local DRAG_RADIUS       = 200
-    local MAX_LOGS_PER_USER = 20
+    local MAX_LOGS_PER_USER = 50
     local UPDATE_HZ         = 30
     local PART_MIN_SIZE     = 0.35
 
