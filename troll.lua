@@ -12,13 +12,13 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
-    -- Core scan + orbit tuning
     local TICK = 0.02
     local SEARCH_RADIUS = 200
+
     local CFG = {
-        DesiredLogs = 5,        -- slider 1..50 (default 5)
-        Speed       = 1.0,      -- slider 0.5..3.0
-        HeightRange = 5.0,      -- slider 1..10  (maps to [-0.4*span, +0.6*span])
+        DesiredLogs = 5,
+        Speed       = 1.0,
+        HeightRange = 5.0,
         CloudMinR   = 2.0,
         CloudMaxR   = 9.0,
 
@@ -27,17 +27,20 @@ return function(C, R, UI)
         AvoidLift   = 15,
         AvoidReeval = 0.2,
 
-        CameraLead  = 8.0,      -- distance forward from camera position for camera-log anchor
-        LeadBase    = 0.18,     -- base seconds of target lead
-        LeadGain    = 0.25,     -- extra lead per (speed/16)
-        LeadMax     = 0.60,     -- clamp
-        LeadStop    = 2.0,      -- below this speed, no lead
-        FlipDart    = 0.22,     -- seconds of dart push on direction flip
-        FlipThresh  = -0.30,    -- dot threshold to trigger flip dart
-        FlipPush    = 10.0      -- dart push magnitude
+        CameraLead  = 8.0,
+        LeadBase    = 0.18,
+        LeadGain    = 0.25,
+        LeadMax     = 0.60,
+        LeadStop    = 2.0,
+        FlipDart    = 0.22,
+        FlipThresh  = -0.30,
+        FlipPush    = 10.0,
+
+        HazardTopPad = 6.0,
+        HazardRadPad = 2.0,
+        HazardBiasUp = 8.0
     }
 
-    -- Chaotic motion tuning
     local BURST_CHANCE_PER_SEC = 0.15
     local BURST_DURATION       = 0.18
     local BURST_PUSH_BASE      = 6.5
@@ -113,6 +116,7 @@ return function(C, R, UI)
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
         return nil
     end
+
     local REM = { StartDrag=nil, StopDrag=nil }
     local function resolveRemotes()
         REM.StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem")
@@ -196,7 +200,6 @@ return function(C, R, UI)
         return minY, maxY
     end
 
-    -- Avoidance caches
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
     local function partCenter(m)
         if not m then return nil end
@@ -239,41 +242,71 @@ return function(C, R, UI)
             scrapCache = findByNames({ "scrapper", "scrap", "scrapperstation" })
         end
     end
-    local function avoidOffsetFor(pos)
+
+    local function hazardInfo()
         refreshAvoidTargets(os.clock())
-        local lift = 0
-        if campCache then
-            local pc = partCenter(campCache)
-            if pc and (pos - pc).Magnitude <= CFG.CampRadius then lift = math.max(lift, CFG.AvoidLift) end
-        end
-        if scrapCache then
-            local ps = partCenter(scrapCache)
-            if ps and (pos - ps).Magnitude <= CFG.ScrapRadius then lift = math.max(lift, CFG.AvoidLift) end
-        end
-        if lift > 0 then return Vector3.new(0, lift, 0) end
-        return Vector3.new()
+        local list = {}
+        if campCache then table.insert(list, {center=partCenter(campCache), r=CFG.CampRadius}) end
+        if scrapCache then table.insert(list, {center=partCenter(scrapCache), r=CFG.ScrapRadius}) end
+        return list
     end
 
-    -- Runtime state
+    local function projectOutOfHazards(pos)
+        local hs = hazardInfo()
+        if #hs == 0 then return pos end
+        for _,h in ipairs(hs) do
+            local c = h.center
+            if c then
+                local rSafe = (h.r or 0) + CFG.HazardRadPad
+                local v = pos - c
+                local vr = Vector3.new(v.X, 0, v.Z)
+                local d = vr.Magnitude
+                if d < rSafe then
+                    if d > 1e-3 then
+                        local rim = c + vr.Unit * rSafe
+                        pos = Vector3.new(rim.X, math.max(pos.Y, c.Y + CFG.HazardTopPad), rim.Z) + Vector3.new(0, CFG.AvoidLift, 0)
+                    else
+                        pos = Vector3.new(c.X + rSafe, math.max(pos.Y, c.Y + CFG.HazardTopPad), c.Z) + Vector3.new(0, CFG.AvoidLift, 0)
+                    end
+                else
+                    if pos.Y < c.Y + CFG.HazardTopPad then
+                        pos = Vector3.new(pos.X, c.Y + CFG.HazardTopPad, pos.Z)
+                    end
+                end
+            end
+        end
+        return pos
+    end
+
+    local function insideHazard(base)
+        local hs = hazardInfo()
+        for _,h in ipairs(hs) do
+            local c = h.center
+            if c then
+                local r = (h.r or 0)
+                local vr = Vector3.new(base.X-c.X, 0, base.Z-c.Z)
+                if vr.Magnitude <= r then return true, c end
+            end
+        end
+        return false, nil
+    end
+
     local running = false
     local desired = CFG.DesiredLogs
-    local active  = {}          -- {model -> st}
-    local activeList = {}       -- [models]
-    local targets = {}          -- Players selected
+    local active  = {}
+    local activeList = {}
+    local targets = {}
     local reconcileConn, hbConn = nil, nil
     local lastDt = 1/60
     local scanAt = 0
     local scanCache = {}
 
-    -- Camera-log flag
     local wantCameraLog = false
     local cameraLogModel = nil
 
-    -- Player dropdown handle and live update conns
     local playerDD
     local playerAddedConn, playerRemovingConn
 
-    -- Helpers
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
         local m = off.Magnitude
@@ -360,7 +393,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Predictive base position for a target Player or camera
     local function predictiveBaseFor(st)
         if st.isCamera then
             local cam = WS.CurrentCamera
@@ -369,34 +401,23 @@ return function(C, R, UI)
                 local look = cam.CFrame.LookVector
                 return pos + look * CFG.CameraLead, look
             end
-            -- Fallback to local player if camera missing
             local r = hrp(lp); if r then return r.Position, r.CFrame.LookVector end
             return nil, Vector3.new(0,0,-1)
         else
             local root = hrp(st.target)
             if not root then return nil, Vector3.new(0,0,-1) end
-
             local vel = root.AssemblyLinearVelocity
             local speed = vel.Magnitude
             local leadT = 0
             if speed > CFG.LeadStop then
                 leadT = math.clamp(CFG.LeadBase + CFG.LeadGain * (speed/16), 0, CFG.LeadMax)
             end
-
-            -- Flip dart: if velocity direction flips, add a brief impulse along new dir
-            local newDir = speed > 1e-3 and (vel / speed) or Vector3.zero
-            if st.lastVel.Magnitude > 1e-3 and newDir ~= Vector3.zero then
-                local dot = newDir:Dot(st.lastVel.Unit)
-                if dot < CFG.FlipThresh then
-                    st.burstUntil = os.clock() + CFG.FlipDart
-                    st.burstDir   = 1
-                    st.flipPushDir = newDir
-                end
-            end
-            st.lastVel = vel
-
             local base = root.Position + vel * leadT
-            local look = (speed > 1e-3) and newDir or (root.CFrame.LookVector)
+            local look = (speed > 1e-3) and (vel / speed) or (root.CFrame.LookVector)
+            local inside, c = insideHazard(base)
+            if inside then
+                base = Vector3.new(base.X, math.max(base.Y, c.Y + CFG.HazardTopPad) + CFG.HazardBiasUp, base.Z)
+            end
             return base, look
         end
     end
@@ -422,21 +443,17 @@ return function(C, R, UI)
 
         local off = st.slot + Vector3.new(jx, jy, jz)
 
-        -- Burst push
         if os.clock() < st.burstUntil then
             local dir = st.flipPushDir or (-off).Unit
             off = off + dir * (CFG.FlipPush + BURST_PUSH_BASE) * CFG.Speed * st.burstDir
         end
         st.flipPushDir = nil
 
-        -- Prevent extreme excursions
         off = clampOrbital(off)
 
-        -- Candidate position and avoidance
         local posCandidate = base + off
-        posCandidate = posCandidate + avoidOffsetFor(posCandidate)
+        posCandidate = projectOutOfHazards(posCandidate)
 
-        -- Final leash
         local leashR = CFG.CloudMaxR + 6.0
         local vecFromBase = posCandidate - base
         local dist = vecFromBase.Magnitude
@@ -473,9 +490,7 @@ return function(C, R, UI)
         local have = #activeList
         local batch = 4
 
-        -- Make sure we have exactly one camera log if requested
         if wantCameraLog and not cameraLogModel and #scanCache > 0 and #targets > 0 then
-            -- Adopt the first available as camera log
             for i=1,#scanCache do
                 local mdl = scanCache[i]
                 if mdl and mdl.Parent and not active[mdl] then
@@ -484,7 +499,6 @@ return function(C, R, UI)
                 end
             end
         elseif not wantCameraLog and cameraLogModel then
-            -- Release camera log if toggle off
             if cameraLogModel then shed(cameraLogModel) end
         end
 
@@ -494,7 +508,6 @@ return function(C, R, UI)
             while toAdd > 0 and idx <= #scanCache do
                 local mdl = scanCache[idx]; idx = idx + 1
                 if mdl and mdl.Parent and not active[mdl] then
-                    -- Skip if this would create a second camera log
                     local isCam = false
                     if wantCameraLog and not cameraLogModel then
                         isCam = true
@@ -524,7 +537,6 @@ return function(C, R, UI)
         cameraLogModel = nil
     end
 
-    -- UI
     local selectedSet = {}
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
@@ -536,7 +548,6 @@ return function(C, R, UI)
             elseif playerDD.SetOptions then
                 playerDD:SetOptions(vals)
             end
-            -- Force callback to re-read selectedSet if API supports programmatic get
             if playerDD.GetSelected then
                 local cur = playerDD:GetSelected()
                 selectedSet = parseSelection(cur)
@@ -552,25 +563,18 @@ return function(C, R, UI)
         Callback = function(choice) selectedSet = parseSelection(choice) end
     })
 
-    -- Live update players
     if playerAddedConn then playerAddedConn:Disconnect() end
     if playerRemovingConn then playerRemovingConn:Disconnect() end
     playerAddedConn = Players.PlayerAdded:Connect(function(p)
-        if p ~= lp then
-            task.delay(0.1, refreshDropdownValues)
-        end
+        if p ~= lp then task.delay(0.1, refreshDropdownValues) end
     end)
     playerRemovingConn = Players.PlayerRemoving:Connect(function(p)
-        if p ~= lp then
-            task.delay(0.1, refreshDropdownValues)
-        end
+        if p ~= lp then task.delay(0.1, refreshDropdownValues) end
     end)
 
     tab:Button({
         Title = "Refresh Player List",
-        Callback = function()
-            refreshDropdownValues()
-        end
+        Callback = function() refreshDropdownValues() end
     })
 
     tab:Slider({
@@ -603,7 +607,6 @@ return function(C, R, UI)
         Default = false,
         Callback = function(on)
             wantCameraLog = on and true or false
-            -- reconcile will adopt or shed the camera log on next tick
         end
     })
 
@@ -612,7 +615,6 @@ return function(C, R, UI)
         Callback = function()
             stopAll()
             resolveRemotes()
-            -- Ensure dropdown is current
             refreshDropdownValues()
             targets = selectedPlayersList(selectedSet)
             if #targets == 0 then return end
