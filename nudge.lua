@@ -14,7 +14,6 @@ return function(C, R, UI)
         local tab  = Tabs.Nudge or Tabs.Main or Tabs.Auto
         if not tab then return end
 
-        -- basic helpers
         local function hrp(p)
             p = p or lp
             local ch = p.Character or p.CharacterAdded:Wait()
@@ -82,10 +81,12 @@ return function(C, R, UI)
         end
 
         local REM = { StartDrag = nil, StopDrag = nil }
+
         local function resolveRemotes()
             REM.StartDrag = getRemote("RequestStartDraggingItem", "StartDraggingItem")
             REM.StopDrag  = getRemote("StopDraggingItem", "RequestStopDraggingItem")
         end
+
         resolveRemotes()
 
         local function safeStartDrag(model)
@@ -115,6 +116,20 @@ return function(C, R, UI)
             task.delay(0.20, function()
                 pcall(safeStopDrag, model)
             end)
+        end
+
+        local function pulseDragOnce(model)
+            if not (model and model.Parent) then return end
+            if REM.StartDrag then
+                pcall(function()
+                    REM.StartDrag:FireServer(model)
+                end)
+            end
+            if REM.StopDrag then
+                pcall(function()
+                    REM.StopDrag:FireServer(model)
+                end)
+            end
         end
 
         local function isCharacterModel(m)
@@ -152,7 +167,6 @@ return function(C, R, UI)
             return fallback
         end
 
-        -- config
         local Nudge = {
             Dist     = 50,
             Up       = 20,
@@ -165,21 +179,6 @@ return function(C, R, UI)
             MaxPerFrame = 16
         }
 
-        local CenterCfg = {
-            StopRadius       = 100,  -- stop once inside this radius
-            ItemSearchRadius = 450,
-            NPCSearchRadius  = 450,
-            ItemPushDist     = 40,   -- horiz speed toward campfire
-            ItemPushUp       = 8,    -- up-speed for items
-            NPCPushDist      = 35,   -- horiz speed toward campfire
-            NPCPushUp        = 12,   -- up-speed for NPCs
-            MaxItemsPerStep  = 40,
-            MaxNPCsPerStep   = 20
-        }
-
-        local centerItemsOn = false
-        local centerNPCsOn  = false
-
         local function preDrag(model)
             local started = safeStartDrag(model)
             if started then
@@ -188,17 +187,17 @@ return function(C, R, UI)
             return started
         end
 
-        -- outward shockwave item impulse (away from origin)
         local function impulseItem(model, fromPos)
             local mp = mainPart(model)
             if not mp then return end
+
+            pulseDragOnce(model)
 
             local pos  = mp.Position
             local away = horiz(pos - fromPos)
             local dist = away.Magnitude
             if dist < 1e-3 then return end
 
-            -- keep items from spawning directly inside us
             if dist < Nudge.SelfSafe then
                 local out = fromPos + away.Unit * (Nudge.SelfSafe + 0.5)
                 local snap0 = setCollide(model, false)
@@ -282,7 +281,6 @@ return function(C, R, UI)
             end)
         end
 
-        -- outward shockwave NPC impulse
         local function impulseNPC(mdl, fromPos)
             local r = charDistancePart(mdl)
             if not r then return end
@@ -318,11 +316,11 @@ return function(C, R, UI)
             for _, part in ipairs(parts) do
                 if part:IsA("BasePart") and not part.Anchored then
                     if myChar and part:IsDescendantOf(myChar) then
-                        -- skip self
                     else
                         local mdl = part:FindFirstAncestorOfClass("Model") or part
                         if not seen[mdl] then
                             seen[mdl] = true
+
                             if isCharacterModel(mdl) then
                                 if isNPCModel(mdl) then
                                     impulseNPC(mdl, origin)
@@ -335,199 +333,6 @@ return function(C, R, UI)
                 end
             end
         end
-
-        -- campfire resolution
-        local function fireCenterPart(fire)
-            return fire:FindFirstChild("Center")
-                or fire:FindFirstChild("InnerTouchZone")
-                or mainPart(fire)
-                or fire.PrimaryPart
-        end
-
-        local campCache
-        local function resolveCampfireModel()
-            if campCache and campCache.Parent then
-                return campCache
-            end
-            local map = WS:FindFirstChild("Map")
-            local cg  = map and map:FindFirstChild("Campground")
-            local mf  = cg and cg:FindFirstChild("MainFire")
-            if mf then
-                campCache = mf
-                return campCache
-            end
-            local best, bestDist
-            local root = hrp()
-            for _, d in ipairs(WS:GetDescendants()) do
-                if d:IsA("Model") then
-                    local n = (d.Name or ""):lower()
-                    if n == "mainfire" or n == "campfire" or n == "camp fire" then
-                        local mp = mainPart(d)
-                        if mp and root then
-                            local dist = (mp.Position - root.Position).Magnitude
-                            if not bestDist or dist < bestDist then
-                                bestDist, best = dist, d
-                            end
-                        else
-                            best = d
-                        end
-                    end
-                end
-            end
-            campCache = best
-            return campCache
-        end
-
-        local function campfireCenterPos()
-            local fire = resolveCampfireModel()
-            if not fire then return nil end
-            local c = fireCenterPart(fire)
-            if c and c:IsA("BasePart") then
-                return c.Position
-            end
-            local ok, cf = pcall(function() return fire:GetPivot() end)
-            return ok and cf.Position or nil
-        end
-
-        ----------------------------------------------------------------
-        -- CENTER-PULL IMPLEMENTATION (toward campfire)
-        ----------------------------------------------------------------
-
-        local function centerImpulseItem(model, centerPos)
-            local mp = mainPart(model)
-            if not mp or mp.Anchored then return end
-
-            local pos  = mp.Position
-            local dir3 = horiz(centerPos - pos)
-            local dist = dir3.Magnitude
-            if dist < 1e-3 then return end
-
-            local dir = dir3.Unit
-            local horizSpeed = CenterCfg.ItemPushDist
-            local upSpeed    = CenterCfg.ItemPushUp
-
-            task.spawn(function()
-                local started = preDrag(model)
-                local snap    = setCollide(model, false)
-
-                for _, p in ipairs(getParts(model)) do
-                    pcall(function()
-                        p:SetNetworkOwner(lp)
-                    end)
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
-                end
-
-                local mass = math.max(mp:GetMass(), 1)
-
-                pcall(function()
-                    mp:ApplyImpulse(
-                        dir * horizSpeed * mass +
-                        Vector3.new(0, upSpeed * mass, 0)
-                    )
-                end)
-
-                pcall(function()
-                    mp:ApplyAngularImpulse(Vector3.new(
-                        (math.random() - 0.5) * 80,
-                        (math.random() - 0.5) * 120,
-                        (math.random() - 0.5) * 80
-                    ) * mass)
-                end)
-
-                mp.AssemblyLinearVelocity =
-                    dir * horizSpeed + Vector3.new(0, upSpeed, 0)
-
-                task.delay(0.12, function()
-                    if started then
-                        pcall(safeStopDrag, model)
-                    end
-                end)
-
-                task.delay(0.4, function()
-                    if snap then
-                        setCollide(model, true, snap)
-                    end
-                end)
-
-                task.delay(0.8, function()
-                    for _, p in ipairs(getParts(model)) do
-                        pcall(function()
-                            p:SetNetworkOwner(nil)
-                        end)
-                        pcall(function()
-                            if p.SetNetworkOwnershipAuto then
-                                p:SetNetworkOwnershipAuto()
-                            end
-                        end)
-                    end
-                end)
-            end)
-        end
-
-        local function centerImpulseNPC(mdl, centerPos)
-            local r = charDistancePart(mdl)
-            if not r then return end
-            local pos  = r.Position
-            local dir3 = horiz(centerPos - pos)
-            local dist = dir3.Magnitude
-            if dist < 1e-3 then return end
-
-            local dir = dir3.Unit
-            local horizSpeed = CenterCfg.NPCPushDist
-            local upSpeed    = CenterCfg.NPCPushUp
-
-            pcall(function()
-                r.AssemblyLinearVelocity =
-                    dir * horizSpeed + Vector3.new(0, upSpeed, 0)
-            end)
-        end
-
-        local function centerStepItems(centerPos)
-            local itemsFolder = WS:FindFirstChild("Items")
-            if not itemsFolder then return end
-            local processed = 0
-
-            for _, m in ipairs(itemsFolder:GetChildren()) do
-                if processed >= CenterCfg.MaxItemsPerStep then break end
-                if m:IsA("Model") then
-                    local mp = mainPart(m)
-                    if mp and not mp.Anchored then
-                        local off  = horiz(mp.Position - centerPos)
-                        local dist = off.Magnitude
-                        if dist > CenterCfg.StopRadius and dist < CenterCfg.ItemSearchRadius then
-                            centerImpulseItem(m, centerPos)
-                            processed += 1
-                        end
-                    end
-                end
-            end
-        end
-
-        local function centerStepNPCs(centerPos)
-            local chars = WS:FindFirstChild("Characters")
-            if not chars then return end
-            local processed = 0
-
-            for _, m in ipairs(chars:GetChildren()) do
-                if processed >= CenterCfg.MaxNPCsPerStep then break end
-                if isNPCModel(m) then
-                    local r = charDistancePart(m)
-                    if r then
-                        local off  = horiz(r.Position - centerPos)
-                        local dist = off.Magnitude
-                        if dist > CenterCfg.StopRadius and dist < CenterCfg.NPCSearchRadius then
-                            centerImpulseNPC(m, centerPos)
-                            processed += 1
-                        end
-                    end
-                end
-            end
-        end
-
-        ----------------------------------------------------------------
-        -- EDGE BUTTON WIRING (Shockwave)
-        ----------------------------------------------------------------
 
         local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
         local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
@@ -561,52 +366,28 @@ return function(C, R, UI)
             list.Parent = stack
         end
 
-        local function makeEdgeBtn(name, label, order)
-            local b = stack:FindFirstChild(name)
-            if not b then
-                b = Instance.new("TextButton")
-                b.Name = name
-                b.Size = UDim2.new(1, 0, 0, 30)
-                b.Text = label
-                b.TextSize = 12
-                b.Font = Enum.Font.GothamBold
-                b.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-                b.TextColor3 = Color3.new(1, 1, 1)
-                b.BorderSizePixel = 0
-                b.Visible = false
-                b.LayoutOrder = order or 1
-                b.Parent = stack
-                local corner = Instance.new("UICorner")
-                corner.CornerRadius = UDim.new(0, 8)
-                corner.Parent = b
-            else
-                b.Text = label
-                b.LayoutOrder = order or b.LayoutOrder
-                b.Visible = false
-            end
-            return b
+        local shockBtn = stack:FindFirstChild("ShockwaveEdge")
+        if not shockBtn then
+            shockBtn = Instance.new("TextButton")
+            shockBtn.Name = "ShockwaveEdge"
+            shockBtn.Size = UDim2.new(1, 0, 0, 30)
+            shockBtn.Text = "Shockwave"
+            shockBtn.TextSize = 12
+            shockBtn.Font = Enum.Font.GothamBold
+            shockBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+            shockBtn.TextColor3 = Color3.new(1, 1, 1)
+            shockBtn.BorderSizePixel = 0
+            shockBtn.Visible = false
+            shockBtn.LayoutOrder = 50
+            shockBtn.Parent = stack
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = shockBtn
+        else
+            shockBtn.Text = "Shockwave"
+            shockBtn.LayoutOrder = shockBtn.LayoutOrder ~= 0 and shockBtn.LayoutOrder or 50
+            shockBtn.Visible = false
         end
-
-        local shockBtn      = makeEdgeBtn("ShockwaveEdge", "Shockwave", 20)
-        local showShockEdge = false
-        shockBtn.Visible    = showShockEdge
-
-        ----------------------------------------------------------------
-        -- UI: Shockwave + Auto Nudge
-        ----------------------------------------------------------------
-
-        tab:Section({ Title = "Shockwave Nudge" })
-
-        tab:Toggle({
-            Title = "Edge Button: Shockwave",
-            Value = false,
-            Callback = function(state)
-                showShockEdge = state and true or false
-                if shockBtn then
-                    shockBtn.Visible = showShockEdge
-                end
-            end
-        })
 
         shockBtn.MouseButton1Click:Connect(function()
             local r = hrp()
@@ -614,6 +395,24 @@ return function(C, R, UI)
                 nudgeShockwave(r.Position, Nudge.Radius)
             end
         end)
+
+        C.State = C.State or { Toggles = {} }
+        C.State.Toggles = C.State.Toggles or {}
+        local initialEdge = (C.State.Toggles.EdgeShockwave == true)
+
+        tab:Section({ Title = "Shockwave Nudge" })
+
+        tab:Toggle({
+            Title = "Edge Button: Shockwave",
+            Value = initialEdge,
+            Callback = function(v)
+                local on = (v == true)
+                C.State.Toggles.EdgeShockwave = on
+                if shockBtn then
+                    shockBtn.Visible = on
+                end
+            end
+        })
 
         tab:Slider({
             Title = "Nudge Distance",
@@ -656,80 +455,40 @@ return function(C, R, UI)
             end
         })
 
-        ----------------------------------------------------------------
-        -- UI: Center Pull
-        ----------------------------------------------------------------
+        local autoConn
+        local acc = 0
 
-        tab:Section({ Title = "Center Pull to Campfire" })
-
-        tab:Toggle({
-            Title = "Nudge Items Toward Campfire",
-            Value = false,
-            Callback = function(on)
-                centerItemsOn = (on == true)
-            end
-        })
-
-        tab:Toggle({
-            Title = "Nudge NPCs Toward Campfire",
-            Value = false,
-            Callback = function(on)
-                centerNPCsOn = (on == true)
-            end
-        })
-
-        tab:Slider({
-            Title = "Center Stop Radius",
-            Value = { Min = 50, Max = 200, Default = CenterCfg.StopRadius },
-            Callback = function(v)
-                local n = tonumber(type(v) == "table" and (v.Value or v.Current or v.Default) or v)
-                if n then
-                    CenterCfg.StopRadius = math.clamp(math.floor(n + 0.5), 20, 400)
-                end
-            end
-        })
-
-        ----------------------------------------------------------------
-        -- Heartbeat loop
-        ----------------------------------------------------------------
-
-        local hbConn
-        if hbConn then
-            hbConn:Disconnect()
-            hbConn = nil
+        if autoConn then
+            autoConn:Disconnect()
+            autoConn = nil
         end
 
-        hbConn = Run.Heartbeat:Connect(function()
-            local r = hrp()
-            if AutoNudge.Enabled and r then
-                nudgeShockwave(r.Position, Nudge.Radius)
-            end
+        autoConn = Run.Heartbeat:Connect(function(dt)
+            if not AutoNudge.Enabled then return end
+            acc += dt
+            if acc < 0.2 then return end
+            acc = 0
 
-            if centerItemsOn or centerNPCsOn then
-                local cpos = campfireCenterPos()
-                if cpos then
-                    if centerItemsOn then
-                        centerStepItems(cpos)
-                    end
-                    if centerNPCsOn then
-                        centerStepNPCs(cpos)
-                    end
-                end
-            end
+            local r = hrp()
+            if not r then return end
+            nudgeShockwave(r.Position, Nudge.Radius)
         end)
 
         Players.LocalPlayer.CharacterAdded:Connect(function()
-            task.defer(function()
-                local pg = lp:WaitForChild("PlayerGui")
-                local eg = pg:FindFirstChild("EdgeButtons")
-                if eg and edgeGui and edgeGui.Parent ~= pg then
-                    edgeGui.Parent = pg
-                end
-                if shockBtn then
-                    shockBtn.Visible = showShockEdge
-                end
-            end)
+            local pg = lp:WaitForChild("PlayerGui")
+            local eg = pg:FindFirstChild("EdgeButtons")
+            if eg and eg.Parent ~= pg then
+                eg.Parent = pg
+            end
+            local on = (C.State and C.State.Toggles and C.State.Toggles.EdgeShockwave == true) or false
+            if shockBtn then
+                shockBtn.Visible = on
+            end
         end)
+
+        if shockBtn then
+            shockBtn.Visible = initialEdge
+        end
     end
 
     local ok, err = pcall(run)
