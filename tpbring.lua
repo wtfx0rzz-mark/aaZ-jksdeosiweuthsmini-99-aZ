@@ -99,7 +99,6 @@ return function(C, R, UI)
 
     -- CORE CONFIG
     local DRAG_SPEED       = 220
-    local PICK_RADIUS      = 200         -- kept for compatibility; no longer used with Overlap
     local ORB_HEIGHT       = 10
     local MAX_CONCURRENT   = 40
     local START_STAGGER    = 0.01
@@ -117,6 +116,7 @@ return function(C, R, UI)
     local STAGE_TIMEOUT_S  = 1.5
     local ORB_UNSTICK_RAD  = 2.0
     local ORB_UNSTICK_HZ   = 10
+    local STUCK_TTL        = 6.0
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -132,21 +132,58 @@ return function(C, R, UI)
     local inflight     = {}
     local releaseQueue = {}
     local releaseAcc   = 0.0
+    local activeCount  = 0
 
-    -- ITEM SETS
+    -- ITEM DEFINITIONS (mirrored from Bring module)
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
-    -- NOTE: Log removed from fuel set
-    local fuelItems = { "Coal","Fuel Canister","Oil Barrel" }
-    local scrapAlso = { Log = true }
+    local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel","Chair"}
+    local foodItems = {
+        "Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot",
+        "Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"
+    }
+    local medicalItems = {"Bandage","MedKit"}
+    local weaponsArmor = {
+        "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe","Hammer",
+        "Chainsaw","Crossbow","Katana","Kunai","Laser cannon","Laser sword","Morningstar","Riot shield","Spear","Tactical Shotgun","Wildfire",
+        "Sword","Ice Axe"
+    }
+    local ammoMisc = {
+        "Revolver Ammo","Rifle Ammo","Giant Sack","Good Sack","Mossy Coin","Cultist","Sapling",
+        "Basketball","Blueprint","Diamond","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"
+    }
+    local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Scorpion Shell","Polar Bear Pelt","Arctic Fox Pelt"}
 
-    local fuelSet = {}
+    local fuelSet, junkSet, cookSet, scrapAlso = {}, {}, {}, {}
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
-    local scrapSet = {}
-    for _,n in ipairs(junkItems) do scrapSet[n] = true end
-    for k,_ in pairs(scrapAlso) do scrapSet[k] = true end
+    for _,n in ipairs(junkItems) do junkSet[n] = true end
+    cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
+    scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
+
+    -- Mode-specific name sets
+    local fuelModeSet = { ["Coal"] = true, ["Fuel Canister"] = true, ["Oil Barrel"] = true } -- Log removed
+    local scrapModeSet = {}
+    for k,v in pairs(junkSet)   do if v then scrapModeSet[k] = true end end
+    for k,v in pairs(scrapAlso) do if v then scrapModeSet[k] = true end end
+
+    local allModeSet = {}
+    local function addListToSet(list, set)
+        for _,n in ipairs(list) do set[n] = true end
+    end
+    local function addSetToSet(src, dst)
+        for k,v in pairs(src) do if v then dst[k] = true end end
+    end
+    addSetToSet(junkSet, allModeSet)
+    addSetToSet(fuelSet, allModeSet)
+    addListToSet(foodItems, allModeSet)
+    addListToSet(medicalItems, allModeSet)
+    addListToSet(weaponsArmor, allModeSet)
+    addListToSet(ammoMisc, allModeSet)
+    addListToSet(pelts, allModeSet)
+
+    -- Item / model helpers (shared with Bring)
 
     local function isWallVariant(m)
         if not (m and m:IsA("Model")) then return false end
@@ -166,19 +203,17 @@ return function(C, R, UI)
     end
     local function hasIceBlockTag(inst)
         if not inst then return false end
-        -- descendants
         for _,d in ipairs(inst:GetDescendants()) do
             local n = (d.Name or ""):lower()
-            if n:find("iceblock", 1, true) or n:find("ice block", 1, true) then
+            if n:find("iceblock",1,true) or n:find("ice block",1,true) then
                 return true
             end
         end
-        -- ancestors
         local cur = inst.Parent
         for _ = 1, 10 do
             if not cur then break end
             local n = (cur.Name or ""):lower()
-            if n:find("iceblock", 1, true) or n:find("ice block", 1, true) then
+            if n:find("iceblock",1,true) or n:find("ice block",1,true) then
                 return true
             end
             cur = cur.Parent
@@ -190,6 +225,190 @@ return function(C, R, UI)
         return WS:FindFirstChild("Items")
     end
 
+    local function hasHumanoid(model)
+        if not (model and model:IsA("Model")) then return false end
+        return model:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+    local function isExcludedModel(m)
+        if not (m and m:IsA("Model")) then return false end
+        local n = (m.Name or ""):lower()
+        if n == "pelt trader" then return true end
+        if n:find("trader",1,true) or n:find("shopkeeper",1,true) then return true end
+        if isWallVariant(m) then return true end
+        if isUnderLogWall(m) then return true end
+        return false
+    end
+    local function isInsideTree(m)
+        local cur = m and m.Parent
+        while cur and cur ~= WS do
+            local nm = (cur.Name or ""):lower()
+            if nm:find("tree",1,true) then return true end
+            if cur == itemsRootOrNil() then break end
+            cur = cur.Parent
+        end
+        return false
+    end
+
+    local function nameMatches(selectedSet, m)
+        local itemsFolder = itemsRootOrNil()
+        if itemsFolder and not m:IsDescendantOf(itemsFolder) then
+            return false
+        end
+
+        if selectedSet["Apple"] then
+            if m.Name ~= "Apple" then return false end
+            if itemsFolder and m.Parent ~= itemsFolder then return false end
+            if isInsideTree(m) then return false end
+            return true
+        end
+
+        local nm = m and m.Name or ""
+        local l  = nm:lower()
+
+        if selectedSet[nm] then return true end
+
+        if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
+            return true
+        end
+
+        if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then
+            return true
+        end
+
+        if selectedSet["Sapling"] and nm == "Sapling" then
+            return true
+        end
+
+        if selectedSet["Alpha Wolf Pelt"] and l:find("alpha",1,true) and l:find("wolf",1,true) then
+            return true
+        end
+
+        if selectedSet["Bear Pelt"] and l:find("bear",1,true) and not l:find("polar",1,true) then
+            return true
+        end
+
+        if selectedSet["Wolf Pelt"] and nm == "Wolf Pelt" then
+            return true
+        end
+
+        if selectedSet["Bunny Foot"] and nm == "Bunny Foot" then
+            return true
+        end
+
+        if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then
+            return true
+        end
+
+        if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then
+            return true
+        end
+
+        if selectedSet["Spear"] and l:find("spear",1,true) and not hasHumanoid(m) then
+            return true
+        end
+
+        if selectedSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then
+            return true
+        end
+
+        if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then
+            return true
+        end
+
+        if selectedSet["Blueprint"] and l:find("blueprint",1,true) then
+            return true
+        end
+
+        if selectedSet["Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then
+            return true
+        end
+
+        if selectedSet["Cultist Gem"] and l:find("cultist",1,true) and l:find("gem",1,true) then
+            return true
+        end
+
+        if selectedSet["Forest Gem"] and (l:find("forest gem",1,true) or (l:find("forest",1,true) and l:find("fragment",1,true))) then
+            return true
+        end
+
+        if selectedSet["Tusk"] and l:find("tusk",1,true) then
+            return true
+        end
+
+        return false
+    end
+
+    local function topModelUnderItems(part, itemsFolder)
+        local cur = part
+        local lastModel = nil
+        while cur and cur ~= WS and cur ~= itemsFolder do
+            if cur:IsA("Model") then lastModel = cur end
+            cur = cur.Parent
+        end
+        if lastModel and lastModel.Parent == itemsFolder then
+            return lastModel
+        end
+        return lastModel
+    end
+
+    local function nearestSelectedModelFromPart(part, selectedSet)
+        if not part or not part:IsA("BasePart") then return nil end
+        local itemsFolder = itemsRootOrNil()
+        local m = topModelUnderItems(part, itemsFolder) or part:FindFirstAncestorOfClass("Model")
+        if m and nameMatches(selectedSet, m) then return m end
+        return nil
+    end
+
+    local function canPick(m, selectedSet, jobId)
+        if not (m and m.Parent and m:IsA("Model")) then return false end
+        local itemsFolder = itemsRootOrNil()
+        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
+        if isExcludedModel(m) or isUnderLogWall(m) or hasIceBlockTag(m) then return false end
+        local tIn = m:GetAttribute(INFLT_ATTR)
+        local jIn = m:GetAttribute(JOB_ATTR)
+        if tIn and jIn and tostring(jIn) ~= tostring(jobId) and os.clock() - tIn < STUCK_TTL then
+            return false
+        end
+        if not nameMatches(selectedSet, m) then
+            return false
+        end
+        return true
+    end
+
+    local function currentSelectedSet()
+        if CURRENT_MODE == "fuel" then
+            return fuelModeSet
+        elseif CURRENT_MODE == "scrap" then
+            return scrapModeSet
+        elseif CURRENT_MODE == "all" then
+            return allModeSet
+        end
+        return nil
+    end
+
+    local function getCandidatesForCurrent(jobId)
+        local selectedSet = currentSelectedSet()
+        if not selectedSet then return {} end
+        local itemsFolder = itemsRootOrNil()
+        if not itemsFolder then return {} end
+
+        local uniq, out = {}, {}
+        for _,d in ipairs(itemsFolder:GetDescendants()) do
+            local m = nil
+            if d:IsA("Model") then
+                if nameMatches(selectedSet, d) then m = d end
+            elseif d:IsA("BasePart") then
+                m = nearestSelectedModelFromPart(d, selectedSet)
+            end
+            if m and not uniq[m] and canPick(m, selectedSet, jobId) then
+                uniq[m] = true
+                out[#out+1] = m
+            end
+        end
+        return out
+    end
+
+    -- Orb management
     local function spawnOrbAt(pos, color)
         if orb then pcall(function() orb:Destroy() end) end
         local o = Instance.new("Part")
@@ -212,46 +431,6 @@ return function(C, R, UI)
         if orb then pcall(function() orb:Destroy() end) end
         orb = nil
         orbPosVec = nil
-    end
-
-    local function wantedForCurrent(m)
-        if not (m and m:IsA("Model") and m.Parent) then return false end
-        local itemsFolder = itemsRootOrNil()
-        if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
-        if isWallVariant(m) or isUnderLogWall(m) then return false end
-        if hasIceBlockTag(m) then return false end
-        local nm = m.Name or ""
-        if nm == "Chair" then return false end
-
-        if CURRENT_MODE == "fuel" then
-            return fuelSet[nm] == true
-        elseif CURRENT_MODE == "scrap" then
-            return scrapSet[nm] == true
-        elseif CURRENT_MODE == "all" then
-            -- All items except excluded types
-            return true
-        end
-        return false
-    end
-
-    local function nearbyCandidates(jobId)
-        local items = itemsRootOrNil()
-        if not items or not CURRENT_MODE then return {} end
-
-        local out = {}
-        for _,m in ipairs(items:GetChildren()) do
-            if m:IsA("Model") and wantedForCurrent(m) and not inflight[m] then
-                local done = m:GetAttribute(DONE_ATTR)
-                if done ~= CURRENT_RUN_ID then
-                    local tIn = m:GetAttribute(INFLT_ATTR)
-                    local jIn = m:GetAttribute(JOB_ATTR)
-                    if not (tIn and jIn and tostring(jIn) ~= jobId and os.clock() - tIn < 6.0) then
-                        out[#out+1] = m
-                    end
-                end
-            end
-        end
-        return out
     end
 
     local function hash01(s)
@@ -369,31 +548,6 @@ return function(C, R, UI)
         end)
     end
 
-    local activeCount = 0
-
-    local function wave()
-        if not CURRENT_MODE then return end
-        local jobId = tostring(os.clock())
-        local list = nearbyCandidates(jobId)
-        for i = 1, #list do
-            if not running then break end
-            while running and activeCount >= MAX_CONCURRENT do
-                Run.Heartbeat:Wait()
-            end
-            local m = list[i]
-            if m and m.Parent and not inflight[m] then
-                activeCount += 1
-                task.spawn(function()
-                    startConveyor(m, jobId)
-                    task.delay(8, function()
-                        activeCount = math.max(0, activeCount - 1)
-                    end)
-                end)
-                task.wait(START_STAGGER)
-            end
-        end
-    end
-
     local function flushStaleStaged()
         local now = os.clock()
         for m,info in pairs(inflight) do
@@ -437,6 +591,29 @@ return function(C, R, UI)
         end)
     end
 
+    local function wave()
+        if not CURRENT_MODE then return end
+        local jobId = tostring(os.clock())
+        local list = getCandidatesForCurrent(jobId)
+        for i = 1, #list do
+            if not running then break end
+            while running and activeCount >= MAX_CONCURRENT do
+                Run.Heartbeat:Wait()
+            end
+            local m = list[i]
+            if m and m.Parent and not inflight[m] then
+                activeCount += 1
+                task.spawn(function()
+                    startConveyor(m, jobId)
+                    task.delay(8, function()
+                        activeCount = math.max(0, activeCount - 1)
+                    end)
+                end)
+                task.wait(START_STAGGER)
+            end
+        end
+    end
+
     local function stopAll()
         running = false
         if hb then hb:Disconnect() hb = nil end
@@ -461,7 +638,7 @@ return function(C, R, UI)
         destroyOrb()
     end
 
-    -- DESTINATION HELPERS (unchanged for fuel/scrap)
+    -- DESTINATION HELPERS
     local function campfireOrbPos()
         local fire = WS:FindFirstChild("Map")
                      and WS.Map:FindFirstChild("Campground")
@@ -480,7 +657,6 @@ return function(C, R, UI)
         local cf = (mp and mp.CFrame) or scr:GetPivot()
         return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
     end
-    -- New destination: NoticeBoard (for "all items")
     local function noticeOrbPos()
         local board = WS:FindFirstChild("Map")
                       and WS.Map:FindFirstChild("Campground")
@@ -557,7 +733,7 @@ return function(C, R, UI)
         end)
     end
 
-    -- TOGGLES (mutually exclusive modes)
+    -- TOGGLES
     tab:Toggle({
         Title = "Send Fuel to Campfire",
         Value = false,
@@ -611,9 +787,10 @@ return function(C, R, UI)
                 pos = noticeOrbPos()
             end
             if pos then
-                spawnOrbAt(pos, (CURRENT_MODE == "fuel" and Color3.fromRGB(255,200,50))
-                                 or (CURRENT_MODE == "scrap" and Color3.fromRGB(120,255,160))
-                                 or Color3.fromRGB(100,200,255))
+                local color = (CURRENT_MODE == "fuel" and Color3.fromRGB(255,200,50))
+                              or (CURRENT_MODE == "scrap" and Color3.fromRGB(120,255,160))
+                              or Color3.fromRGB(100,200,255)
+                spawnOrbAt(pos, color)
             end
         end
     end)
