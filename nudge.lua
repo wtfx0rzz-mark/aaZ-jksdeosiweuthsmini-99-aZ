@@ -140,21 +140,6 @@ return function(C, R, UI)
         return nil
     end
 
-    local function collectNPCsInRadius(origin, radius)
-        local out = {}
-        local chars = WS:FindFirstChild("Characters")
-        if not chars then return out end
-        for _, mdl in ipairs(chars:GetChildren()) do
-            if isNPCModel(mdl) then
-                local dpart = charDistancePart(mdl)
-                if dpart and (dpart.Position - origin).Magnitude <= radius then
-                    out[#out+1] = mdl
-                end
-            end
-        end
-        return out
-    end
-
     local function horiz(v)
         return Vector3.new(v.X, 0, v.Z)
     end
@@ -170,8 +155,8 @@ return function(C, R, UI)
     local Nudge = {
         Dist    = 50,
         Up      = 20,
-        Radius  = 15,   -- configurable radius for shockwave / auto
-        SelfSafe = 3.5, -- minimum gap from me before impulse
+        Radius  = 15,
+        SelfSafe = 3.5,
     }
 
     local AutoNudge = {
@@ -196,7 +181,6 @@ return function(C, R, UI)
         local dist = away.Magnitude
         if dist < 1e-3 then return end
 
-        -- keep items from spawning directly inside us
         if dist < Nudge.SelfSafe then
             local out = fromPos + away.Unit * (Nudge.SelfSafe + 0.5)
             local snap0 = setCollide(model, false)
@@ -315,7 +299,6 @@ return function(C, R, UI)
         for _, part in ipairs(parts) do
             if part:IsA("BasePart") and not part.Anchored then
                 if myChar and part:IsDescendantOf(myChar) then
-                    -- already excluded via OverlapParams, but double-guard
                 else
                     local mdl = part:FindFirstAncestorOfClass("Model") or part
                     if not seen[mdl] then
@@ -334,50 +317,77 @@ return function(C, R, UI)
         end
     end
 
-    local edgeBtnId = nil
-
-    local function ensureEdgeButton(on)
-        local Edge = UI and UI.EdgeButtons
-        if not Edge then return end
-
-        if on and not edgeBtnId then
-            -- Support either Edge:Add(...) or Edge:AddButton(...)
-            if Edge.Add then
-                edgeBtnId = Edge:Add({
-                    Title = "Shockwave",
-                    Callback = function()
-                        local r = hrp()
-                        if r then
-                            nudgeShockwave(r.Position, Nudge.Radius)
-                        end
-                    end
-                })
-            elseif Edge.AddButton then
-                edgeBtnId = Edge:AddButton({
-                    Title = "Shockwave",
-                    Callback = function()
-                        local r = hrp()
-                        if r then
-                            nudgeShockwave(r.Position, Nudge.Radius)
-                        end
-                    end
-                })
-            end
-        elseif (not on) and edgeBtnId then
-            if Edge.Remove then
-                pcall(function()
-                    Edge:Remove(edgeBtnId)
-                end)
-            end
-            edgeBtnId = nil
-        end
+    -- EdgeButtons GUI integration (same pattern as auto.lua)
+    local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
+    local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
+    if not edgeGui then
+        edgeGui = Instance.new("ScreenGui")
+        edgeGui.Name = "EdgeButtons"
+        edgeGui.ResetOnSpawn = false
+        pcall(function() edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling end)
+        edgeGui.Parent = playerGui
     end
 
-    -- Safely recover saved toggle state, if any
+    local stack = edgeGui:FindFirstChild("EdgeStack")
+    if not stack then
+        stack = Instance.new("Frame")
+        stack.Name = "EdgeStack"
+        stack.AnchorPoint = Vector2.new(1, 0)
+        stack.Position = UDim2.new(1, -6, 0, 6)
+        stack.Size = UDim2.new(0, 130, 1, -12)
+        stack.BackgroundTransparency = 1
+        stack.BorderSizePixel = 0
+        stack.Parent = edgeGui
+        local list = Instance.new("UIListLayout")
+        list.Name = "VList"
+        list.FillDirection = Enum.FillDirection.Vertical
+        list.SortOrder = Enum.SortOrder.LayoutOrder
+        list.Padding = UDim.new(0, 6)
+        list.HorizontalAlignment = Enum.HorizontalAlignment.Right
+        list.Parent = stack
+    end
+
+    local function makeEdgeBtn(name, label, order)
+        local b = stack:FindFirstChild(name)
+        if not b then
+            b = Instance.new("TextButton")
+            b.Name = name
+            b.Size = UDim2.new(1, 0, 0, 30)
+            b.Text = label
+            b.TextSize = 12
+            b.Font = Enum.Font.GothamBold
+            b.BackgroundColor3 = Color3.fromRGB(30,30,35)
+            b.TextColor3 = Color3.new(1,1,1)
+            b.BorderSizePixel = 0
+            b.Visible = false
+            b.LayoutOrder = order or 1
+            b.Parent = stack
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = b
+        else
+            b.Text = label
+            b.LayoutOrder = order or b.LayoutOrder
+            b.Visible = false
+        end
+        return b
+    end
+
+    -- use order 10+ so we don't collide with auto.lua's orders 1–6
+    local shockBtn = makeEdgeBtn("ShockwaveEdge", "Shockwave", 10)
+
+    shockBtn.MouseButton1Click:Connect(function()
+        local r = hrp()
+        if r then
+            nudgeShockwave(r.Position, Nudge.Radius)
+        end
+    end)
+
     local initialEdge = false
     if C and C.State and C.State.Toggles then
         initialEdge = (C.State.Toggles.EdgeShockwave == true)
     end
+    shockBtn.Visible = initialEdge
 
     tab:Section({ Title = "Shockwave Nudge" })
 
@@ -389,7 +399,9 @@ return function(C, R, UI)
             C.State = C.State or { Toggles = {} }
             C.State.Toggles = C.State.Toggles or {}
             C.State.Toggles.EdgeShockwave = on
-            ensureEdgeButton(on)
+            if shockBtn then
+                shockBtn.Visible = on
+            end
         end
     })
 
@@ -446,6 +458,4 @@ return function(C, R, UI)
         if not r then return end
         nudgeShockwave(r.Position, Nudge.Radius)
     end)
-
-    ensureEdgeButton(initialEdge)
 end
