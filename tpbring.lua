@@ -134,7 +134,9 @@ return function(C, R, UI)
     local releaseAcc   = 0.0
     local activeCount  = 0
 
-    -- ITEM DEFINITIONS (mirrored from Bring module)
+    ----------------------------------------------------------------
+    -- ITEM DEFINITIONS (from Bring module)
+    ----------------------------------------------------------------
     local junkItems = {
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
@@ -162,8 +164,8 @@ return function(C, R, UI)
     cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
     scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
 
-    -- Mode-specific name sets
-    local fuelModeSet = { ["Coal"] = true, ["Fuel Canister"] = true, ["Oil Barrel"] = true } -- Log removed
+    -- Mode-specific sets
+    local fuelModeSet = { ["Coal"] = true, ["Fuel Canister"] = true, ["Oil Barrel"] = true } -- no Log
     local scrapModeSet = {}
     for k,v in pairs(junkSet)   do if v then scrapModeSet[k] = true end end
     for k,v in pairs(scrapAlso) do if v then scrapModeSet[k] = true end end
@@ -183,7 +185,12 @@ return function(C, R, UI)
     addListToSet(ammoMisc, allModeSet)
     addListToSet(pelts, allModeSet)
 
-    -- Item / model helpers (shared with Bring)
+    ----------------------------------------------------------------
+    -- Shared item helpers (adapted from Bring)
+    ----------------------------------------------------------------
+    local function itemsRootOrNil()
+        return WS:FindFirstChild("Items")
+    end
 
     local function isWallVariant(m)
         if not (m and m:IsA("Model")) then return false end
@@ -220,11 +227,6 @@ return function(C, R, UI)
         end
         return false
     end
-
-    local function itemsRootOrNil()
-        return WS:FindFirstChild("Items")
-    end
-
     local function hasHumanoid(model)
         if not (model and model:IsA("Model")) then return false end
         return model:FindFirstChildOfClass("Humanoid") ~= nil
@@ -249,24 +251,30 @@ return function(C, R, UI)
         return false
     end
 
+    -- FIXED nameMatches: Apple special case only for Apple models,
+    -- instead of gating all other names when Apple is present.
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then
             return false
         end
 
-        if selectedSet["Apple"] then
-            if m.Name ~= "Apple" then return false end
+        local nm = m and m.Name or ""
+        local l  = nm:lower()
+
+        -- Special Apple logic (free apples only)
+        if nm == "Apple" and selectedSet["Apple"] then
             if itemsFolder and m.Parent ~= itemsFolder then return false end
             if isInsideTree(m) then return false end
             return true
         end
 
-        local nm = m and m.Name or ""
-        local l  = nm:lower()
+        -- Direct exact-name membership
+        if selectedSet[nm] then
+            return true
+        end
 
-        if selectedSet[nm] then return true end
-
+        -- Other special patterns copied from Bring
         if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
             return true
         end
@@ -408,7 +416,9 @@ return function(C, R, UI)
         return out
     end
 
-    -- Orb management
+    ----------------------------------------------------------------
+    -- Orb + conveyor logic
+    ----------------------------------------------------------------
     local function spawnOrbAt(pos, color)
         if orb then pcall(function() orb:Destroy() end) end
         local o = Instance.new("Part")
@@ -638,7 +648,9 @@ return function(C, R, UI)
         destroyOrb()
     end
 
+    ----------------------------------------------------------------
     -- DESTINATION HELPERS
+    ----------------------------------------------------------------
     local function campfireOrbPos()
         local fire = WS:FindFirstChild("Map")
                      and WS.Map:FindFirstChild("Campground")
@@ -658,10 +670,21 @@ return function(C, R, UI)
         return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
     end
     local function noticeOrbPos()
-        local board = WS:FindFirstChild("Map")
-                      and WS.Map:FindFirstChild("Campground")
-                      and WS.Map.Campground:FindFirstChild("NoticeBoard")
+        local map = WS:FindFirstChild("Map")
+        if not map then return nil end
+        local camp = map:FindFirstChild("Campground")
+        if not camp then return nil end
+        local board = camp:FindFirstChild("NoticeBoard")
+        if not board then
+            for _,d in ipairs(camp:GetDescendants()) do
+                if d:IsA("Model") and d.Name == "NoticeBoard" then
+                    board = d
+                    break
+                end
+            end
+        end
         if not board then return nil end
+
         local mp = mainPart(board)
         if not mp then
             local cf = board:GetPivot()
@@ -674,6 +697,9 @@ return function(C, R, UI)
         return pos + Vector3.new(0, ORB_HEIGHT + 1, 0)
     end
 
+    ----------------------------------------------------------------
+    -- MODE START/STOP
+    ----------------------------------------------------------------
     local function startMode(mode)
         if mode == nil then
             CURRENT_MODE = nil
@@ -733,7 +759,9 @@ return function(C, R, UI)
         end)
     end
 
-    -- TOGGLES
+    ----------------------------------------------------------------
+    -- UI TOGGLES
+    ----------------------------------------------------------------
     tab:Toggle({
         Title = "Send Fuel to Campfire",
         Value = false,
