@@ -58,7 +58,7 @@ return function(C, R, UI)
     local JIT_Y1,  JIT_Y2  = 0.9, 0.6
     local W_XZ1_MIN, W_XZ1_MAX = 1.2, 2.4
     local W_XZ2_MIN, W_XZ2_MAX = 2.0, 3.6
-    local W_Y1_MIN,  W_Y1_MAX  = 1.0, 2.0
+    privateW_Y1_MIN= 1.0 W_Y1_MAX= 2.0
     local W_Y2_MIN,  W_Y2_MAX  = 2.0, 4.0
 
     local REASSIGN_IF_LOST_S = 2.0
@@ -68,6 +68,7 @@ return function(C, R, UI)
         local ch = p.Character or p.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
+
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -77,6 +78,7 @@ return function(C, R, UI)
         end
         return nil
     end
+
     local function getParts(target)
         local t = {}
         if not target then return t end
@@ -89,6 +91,7 @@ return function(C, R, UI)
         end
         return t
     end
+
     local function setCollide(model, on, snap)
         local parts = getParts(model)
         if on and snap then
@@ -99,12 +102,14 @@ return function(C, R, UI)
         for _,p in ipairs(parts) do s[p]=p.CanCollide; p.CanCollide=false end
         return s
     end
+
     local function zeroAssembly(model)
         for _,p in ipairs(getParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
         end
     end
+
     local function getPivotPos(model)
         if model:IsA("Model") then
             local ok, cf = pcall(model.GetPivot, model)
@@ -114,9 +119,11 @@ return function(C, R, UI)
             local mp = mainPart(model); return mp and mp.Position or nil
         end
     end
+
     local function setPivot(model, cf)
         if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
     end
+
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
@@ -134,10 +141,12 @@ return function(C, R, UI)
         if REM.StartDrag and model and model.Parent then pcall(function() REM.StartDrag:FireServer(model) end); return true end
         return false
     end
+
     local function safeStopDrag(model)
         if REM.StopDrag and model and model.Parent then pcall(function() REM.StopDrag:FireServer(model) end); return true end
         return false
     end
+
     local function finallyStopDrag(model)
         task.delay(0.05, function() pcall(safeStopDrag, model) end)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
@@ -177,6 +186,7 @@ return function(C, R, UI)
         table.sort(vals)
         return vals
     end
+
     local function parseSelection(choice)
         local set = {}
         if type(choice) == "table" then
@@ -190,6 +200,7 @@ return function(C, R, UI)
         end
         return set
     end
+
     local function selectedPlayersList(set)
         local out = {}
         for _,p in ipairs(Players:GetPlayers()) do
@@ -199,6 +210,7 @@ return function(C, R, UI)
     end
 
     local function rngFor(seed) return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1)) end
+
     local function heightMinMax()
         local span = math.clamp(CFG.HeightRange, 1, 10)
         local minY = -0.4 * span
@@ -207,6 +219,7 @@ return function(C, R, UI)
     end
 
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
+
     local function partCenter(m)
         if not m then return nil end
         local mp = mainPart(m)
@@ -214,6 +227,7 @@ return function(C, R, UI)
         local ok, cf = pcall(function() return m:GetPivot() end)
         return ok and cf.Position or nil
     end
+
     local function findByNames(names)
         local best, bestDist = nil, math.huge
         for _,d in ipairs(WS:GetDescendants()) do
@@ -235,6 +249,7 @@ return function(C, R, UI)
         end
         return best
     end
+
     local function refreshAvoidTargets(now)
         if now - lastAvoidAt < CFG.AvoidReeval then return end
         lastAvoidAt = now
@@ -248,6 +263,7 @@ return function(C, R, UI)
             scrapCache = findByNames({ "scrapper", "scrap", "scrapperstation" })
         end
     end
+
     local function hazardInfo()
         refreshAvoidTargets(os.clock())
         local list = {}
@@ -255,6 +271,7 @@ return function(C, R, UI)
         if scrapCache then table.insert(list, {center=partCenter(scrapCache), r=CFG.ScrapRadius}) end
         return list
     end
+
     local function projectOutOfHazards(pos)
         local hs = hazardInfo()
         if #hs == 0 then return pos end
@@ -275,6 +292,7 @@ return function(C, R, UI)
         end
         return pos
     end
+
     local function insideHazard(base)
         local hs = hazardInfo()
         for _,h in ipairs(hs) do
@@ -350,6 +368,7 @@ return function(C, R, UI)
             zeroAssembly(model)
         end)
     end
+
     local function shed(model)
         local st = active[model]
         active[model] = nil
@@ -386,6 +405,7 @@ return function(C, R, UI)
             st.reslotAt = now + reslotK
         end
     end
+
     local function maybeBurst(st)
         local now = os.clock()
         if now < st.burstUntil then return end
@@ -413,6 +433,7 @@ return function(C, R, UI)
         end
         return base, look
     end
+
     local function maybeStartNudge(st, dt)
         if os.clock() < st.nudgeUntil then return end
         local chance = CFG.NudgeChancePerSec * CFG.Speed
@@ -459,6 +480,7 @@ return function(C, R, UI)
             end
             st.lastVel = vel
         end
+
         if os.clock() < st.burstUntil then
             local dir = st.flipPushDir or (-off).Unit
             off = off + dir * (CFG.FlipPush + BURST_PUSH_BASE) * CFG.Speed * st.burstDir
@@ -494,6 +516,7 @@ return function(C, R, UI)
         else
             lookVec = lookVec.Unit
         end
+
         setPivot(model, CFrame.new(posCandidate, posCandidate + lookVec))
 
         for _,p in ipairs(getParts(model)) do
@@ -585,6 +608,7 @@ return function(C, R, UI)
             if n then desiredPerTarget = math.clamp(math.floor(n + 0.5), 1, 50) end
         end
     })
+
     tab:Slider({
         Title = "Speed",
         Value = { Min = 0.5, Max = 3.0, Default = 1.0 },
@@ -593,6 +617,7 @@ return function(C, R, UI)
             if n then CFG.Speed = math.clamp(n, 0.5, 3.0) end
         end
     })
+
     tab:Slider({
         Title = "Height Range",
         Value = { Min = 1.0, Max = 10.0, Default = 5.0 },
@@ -629,9 +654,12 @@ return function(C, R, UI)
             end)
         end
     })
+
     tab:Button({ Title = "Stop", Callback = function() stopAll() end })
 
-    -- ================== Shockwave Nudge (Edge button only) ==================
+    ------------------------------------------------------------------------------------
+    -- EXISTING SHOCKWAVE SECTION (YOUR ORIGINAL)
+    ------------------------------------------------------------------------------------
 
     local function itemsRoot() return WS:FindFirstChild("Items") end
     local function isCharacterModel(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
@@ -642,6 +670,7 @@ return function(C, R, UI)
         if n:find("horse", 1, true) then return false end
         return true
     end
+
     local function charHRP(m)
         if not (m and m:IsA("Model")) then return nil end
         local h = m:FindFirstChild("HumanoidRootPart")
@@ -650,10 +679,12 @@ return function(C, R, UI)
         if pp and pp:IsA("BasePart") then return pp end
         return nil
     end
+
     local function isItemModel(model)
         local root = itemsRoot()
         return root and model and model:IsDescendantOf(root) and (not isCharacterModel(model)) or false
     end
+
     local NU_MAX_PARTS = 120
     local function isStaticOrHuge(model)
         if not (model and model.Parent) then return true end
@@ -796,6 +827,7 @@ return function(C, R, UI)
             ensureEdgeButton(on)
         end
     })
+
     tab:Slider({
         Title = "Nudge Distance",
         Value = { Min = 10, Max = 200, Default = Nudge.Dist },
@@ -804,6 +836,7 @@ return function(C, R, UI)
             if n then Nudge.Dist = math.clamp(math.floor(n+0.5), 10, 200) end
         end
     })
+
     tab:Slider({
         Title = "Nudge Height",
         Value = { Min = 5, Max = 120, Default = Nudge.Up },
@@ -812,6 +845,7 @@ return function(C, R, UI)
             if n then Nudge.Up = math.clamp(math.floor(n+0.5), 5, 120) end
         end
     })
+
     tab:Slider({
         Title = "Nudge Radius",
         Value = { Min = 5, Max = 80, Default = Nudge.Radius },
@@ -820,6 +854,7 @@ return function(C, R, UI)
             if n then Nudge.Radius = math.clamp(math.floor(n+0.5), 5, 80) end
         end
     })
+
     tab:Toggle({
         Title = "Auto Nudge (within Radius)",
         Value = AutoNudge.Enabled,
@@ -837,4 +872,127 @@ return function(C, R, UI)
     end)
 
     ensureEdgeButton(C.State and C.State.Toggles and C.State.Toggles.EdgeShockwave)
+
+    ------------------------------------------------------------------------------------
+    -- NOW ADD **NEW** PLAYER-KNOCKBACK SHOCKWAVE (YOUR REQUEST)
+    ------------------------------------------------------------------------------------
+
+    tab:Section({ Title = "Knockback Shockwave" })
+
+    local KBS = {
+        Enabled = false,
+        AffectNPCs = true,
+        AffectItems = true,
+        Radius = 40,
+        Height = 20,
+        Power = 55,
+        Auto = false,
+    }
+
+    local kbButtonId = nil
+
+    local function kbApply(model, fromPos)
+        local mp = mainPart(model)
+        if not mp then return end
+        local away = (mp.Position - fromPos)
+        if away.Magnitude < 1e-3 then return end
+        local dir = away.Unit
+        local vel = dir * KBS.Power + Vector3.new(0, KBS.Height, 0)
+        pcall(function() mp.AssemblyLinearVelocity = vel end)
+    end
+
+    local function kbWave()
+        local root = hrp()
+        if not root then return end
+        local origin = root.Position
+
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+
+        local parts = WS:GetPartBoundsInRadius(origin, KBS.Radius, params) or {}
+        local seen = {}
+
+        for _,p in ipairs(parts) do
+            if not p:IsA("BasePart") then continue end
+            local mdl = p:FindFirstAncestorOfClass("Model") or p
+            if seen[mdl] then continue end
+            seen[mdl] = true
+
+            local isChar = mdl:FindFirstChildOfClass("Humanoid") ~= nil
+            local isNPC = isChar and (not Players:GetPlayerFromCharacter(mdl))
+            local isItem = isItemModel(mdl)
+
+            if isNPC and KBS.AffectNPCs then
+                kbApply(mdl, origin)
+            elseif isItem and KBS.AffectItems then
+                kbApply(mdl, origin)
+            end
+        end
+    end
+
+    -- UI
+    tab:Toggle({
+        Title = "Edge Button: Knockback",
+        Default = KBS.Enabled,
+        Callback = function(on)
+            KBS.Enabled = on
+            if on and not kbButtonId then
+                kbButtonId = UI.EdgeButtons:Add({
+                    Title = "KB",
+                    Callback = kbWave
+                })
+            elseif not on and kbButtonId then
+                UI.EdgeButtons:Remove(kbButtonId)
+                kbButtonId = nil
+            end
+        end
+    })
+
+    tab:Toggle({
+        Title = "Affect NPCs",
+        Default = KBS.AffectNPCs,
+        Callback = function(v) KBS.AffectNPCs = v end
+    })
+
+    tab:Toggle({
+        Title = "Affect Items",
+        Default = KBS.AffectItems,
+        Callback = function(v) KBS.AffectItems = v end
+    })
+
+    tab:Slider({
+        Title = "Shockwave Radius",
+        Value = {Min=10, Max=200, Default=KBS.Radius},
+        Callback = function(v)
+            KBS.Radius = tonumber(v.Value or v) or KBS.Radius
+        end
+    })
+
+    tab:Slider({
+        Title = "Knockback Power",
+        Value = {Min=5, Max=200, Default=KBS.Power},
+        Callback = function(v)
+            KBS.Power = tonumber(v.Value or v) or KBS.Power
+        end
+    })
+
+    tab:Slider({
+        Title = "Lift Height",
+        Value = {Min=1, Max=150, Default=KBS.Height},
+        Callback = function(v)
+            KBS.Height = tonumber(v.Value or v) or KBS.Height
+        end
+    })
+
+    tab:Toggle({
+        Title = "Auto Knockback",
+        Default = KBS.Auto,
+        Callback = function(v) KBS.Auto = v end
+    })
+
+    Run.Heartbeat:Connect(function()
+        if KBS.Auto then kbWave() end
+    end)
+
 end
