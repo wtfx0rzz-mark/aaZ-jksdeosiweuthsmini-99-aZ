@@ -62,11 +62,18 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
+    -- Player Nudge config
+    local PLAYER_NUDGE_RANGE    = 10   -- how close the target has to be to an item
+    local PLAYER_NUDGE_UP       = 20   -- studs up
+    local PLAYER_NUDGE_AWAY     = 15   -- studs away
+    local PLAYER_NUDGE_COOLDOWN = 0.6  -- seconds per item between nudges
+
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
+
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -76,6 +83,13 @@ return function(C, R, UI)
         end
         return nil
     end
+
+    local function isCharacterModel(m)
+        return m
+            and m:IsA("Model")
+            and m:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+
     local function getParts(target)
         local t = {}
         if not target then return t end
@@ -88,22 +102,32 @@ return function(C, R, UI)
         end
         return t
     end
+
     local function setCollide(model, on, snap)
         local parts = getParts(model)
         if on and snap then
-            for part,can in pairs(snap) do if part and part.Parent then part.CanCollide = can end end
+            for part,can in pairs(snap) do
+                if part and part.Parent then
+                    part.CanCollide = can
+                end
+            end
             return
         end
         local s = {}
-        for _,p in ipairs(parts) do s[p]=p.CanCollide; p.CanCollide=false end
+        for _,p in ipairs(parts) do
+            s[p] = p.CanCollide
+            p.CanCollide = false
+        end
         return s
     end
+
     local function zeroAssembly(model)
         for _,p in ipairs(getParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
         end
     end
+
     local function getPivotPos(model)
         if model:IsA("Model") then
             local ok, cf = pcall(model.GetPivot, model)
@@ -113,29 +137,50 @@ return function(C, R, UI)
             local mp = mainPart(model); return mp and mp.Position or nil
         end
     end
+
     local function setPivot(model, cf)
-        if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p = mainPart(model)
+            if p then p.CFrame = cf end
+        end
     end
+
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
-        for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
+        for _,n in ipairs({...}) do
+            local x = re:FindFirstChild(n)
+            if x then return x end
+        end
         return nil
     end
+
     local REM = { StartDrag=nil, StopDrag=nil }
+
     local function resolveRemotes()
         REM.StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem")
         REM.StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem")
     end
+
     resolveRemotes()
 
     local function safeStartDrag(model)
-        if REM.StartDrag and model and model.Parent then pcall(function() REM.StartDrag:FireServer(model) end); return true end
+        if REM.StartDrag and model and model.Parent then
+            pcall(function() REM.StartDrag:FireServer(model) end)
+            return true
+        end
         return false
     end
+
     local function safeStopDrag(model)
-        if REM.StopDrag and model and model.Parent then pcall(function() REM.StopDrag:FireServer(model) end); return true end
+        if REM.StopDrag and model and model.Parent then
+            pcall(function() REM.StopDrag:FireServer(model) end)
+            return true
+        end
         return false
     end
+
     local function finallyStopDrag(model)
         task.delay(0.05, function() pcall(safeStopDrag, model) end)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
@@ -145,6 +190,7 @@ return function(C, R, UI)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
+
         local parts = WS:GetPartBoundsInRadius(center, SEARCH_RADIUS, params) or {}
         local items, uniq = {}, {}
         for _,part in ipairs(parts) do
@@ -161,7 +207,9 @@ return function(C, R, UI)
         end
         table.sort(items, function(a,b) return a.d < b.d end)
         local out = {}
-        for i=1, math.min(limit or #items, #items) do out[#out+1] = items[i].m end
+        for i=1, math.min(limit or #items, #items) do
+            out[#out+1] = items[i].m
+        end
         return out
     end
 
@@ -175,28 +223,35 @@ return function(C, R, UI)
         table.sort(vals)
         return vals
     end
+
     local function parseSelection(choice)
         local set = {}
         if type(choice) == "table" then
             for _,v in ipairs(choice) do
-                local uid=tonumber((tostring(v):match("#(%d+)$") or ""))
-                if uid then set[uid]=true end
+                local uid = tonumber((tostring(v):match("#(%d+)$") or ""))
+                if uid then set[uid] = true end
             end
         else
-            local uid=tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
-            if uid then set[uid]=true end
+            local uid = tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
+            if uid then set[uid] = true end
         end
         return set
     end
+
     local function selectedPlayersList(set)
         local out = {}
         for _,p in ipairs(Players:GetPlayers()) do
-            if set[p.UserId] and p~=lp then out[#out+1]=p end
+            if set[p.UserId] and p ~= lp then
+                out[#out+1] = p
+            end
         end
         return out
     end
 
-    local function rngFor(seed) return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1)) end
+    local function rngFor(seed)
+        return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1))
+    end
+
     local function heightMinMax()
         local span = math.clamp(CFG.HeightRange, 1, 10)
         local minY = -0.4 * span
@@ -205,6 +260,7 @@ return function(C, R, UI)
     end
 
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
+
     local function partCenter(m)
         if not m then return nil end
         local mp = mainPart(m)
@@ -212,6 +268,7 @@ return function(C, R, UI)
         local ok, cf = pcall(function() return m:GetPivot() end)
         return ok and cf.Position or nil
     end
+
     local function findByNames(names)
         local best, bestDist = nil, math.huge
         for _,d in ipairs(WS:GetDescendants()) do
@@ -224,7 +281,9 @@ return function(C, R, UI)
                             local root = hrp()
                             if root then
                                 local dist = (p - root.Position).Magnitude
-                                if dist < bestDist then bestDist, best = dist, d end
+                                if dist < bestDist then
+                                    bestDist, best = dist, d
+                                end
                             end
                         end
                     end
@@ -233,6 +292,7 @@ return function(C, R, UI)
         end
         return best
     end
+
     local function refreshAvoidTargets(now)
         if now - lastAvoidAt < CFG.AvoidReeval then return end
         lastAvoidAt = now
@@ -246,6 +306,7 @@ return function(C, R, UI)
             scrapCache = findByNames({ "scrapper", "scrap", "scrapperstation" })
         end
     end
+
     local function hazardInfo()
         refreshAvoidTargets(os.clock())
         local list = {}
@@ -253,6 +314,7 @@ return function(C, R, UI)
         if scrapCache then table.insert(list, {center=partCenter(scrapCache), r=CFG.ScrapRadius}) end
         return list
     end
+
     local function projectOutOfHazards(pos)
         local hs = hazardInfo()
         if #hs == 0 then return pos end
@@ -273,6 +335,7 @@ return function(C, R, UI)
         end
         return pos
     end
+
     local function insideHazard(base)
         local hs = hazardInfo()
         for _,h in ipairs(hs) do
@@ -295,6 +358,11 @@ return function(C, R, UI)
     local lastDt = 1/60
     local scanAt = 0
     local scanCache = {}
+
+    -- Player Nudge runtime state
+    local playerNudgeEnabled = false
+    local playerNudgeConn    = nil
+    local lastNudgeItemAt    = {}
 
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
@@ -322,17 +390,22 @@ return function(C, R, UI)
             reslotAt = 0,
             burstUntil = 0,
             burstDir = 1,
-            phases = { xz1=math.random()*math.pi*2, xz2=math.random()*math.pi*2, y1=math.random()*math.pi*2, y2=math.random()*math.pi*2 },
+            phases = {
+                xz1 = math.random()*math.pi*2,
+                xz2 = math.random()*math.pi*2,
+                y1  = math.random()*math.pi*2,
+                y2  = math.random()*math.pi*2
+            },
             w = {
                 xz1 = math.random()*(W_XZ1_MAX-W_XZ1_MIN)+W_XZ1_MIN,
                 xz2 = math.random()*(W_XZ2_MAX-W_XZ2_MIN)+W_XZ2_MIN,
                 y1  = math.random()*(W_Y1_MAX -W_Y1_MIN )+W_Y1_MIN,
                 y2  = math.random()*(W_Y2_MAX -W_Y2_MIN )+W_Y2_MIN,
             },
-            started = false,
-            snap = nil,
-            lastSeen = os.clock(),
-            lastVel = Vector3.zero,
+            started    = false,
+            snap       = nil,
+            lastSeen   = os.clock(),
+            lastVel    = Vector3.zero,
             nudgeUntil = 0,
             nudgeSide  = 0
         }
@@ -344,20 +417,35 @@ return function(C, R, UI)
             local started = safeStartDrag(model); st.started = started
             task.wait(0.05)
             st.snap = setCollide(model, false)
-            for _,p in ipairs(getParts(model)) do pcall(function() p:SetNetworkOwner(lp) end) end
+            for _,p in ipairs(getParts(model)) do
+                pcall(function() p:SetNetworkOwner(lp) end)
+            end
             zeroAssembly(model)
         end)
     end
+
     local function shed(model)
         local st = active[model]
         active[model] = nil
-        for i=#activeList,1,-1 do if activeList[i]==model then table.remove(activeList,i) break end end
+        for i=#activeList,1,-1 do
+            if activeList[i] == model then
+                table.remove(activeList, i)
+                break
+            end
+        end
         if st then
             if st.snap then setCollide(model, true, st.snap) end
             local uid = st.uid
             if uid and activeByUid[uid] then
-                for i=#activeByUid[uid],1,-1 do if activeByUid[uid][i]==model then table.remove(activeByUid[uid],i) break end end
-                if countByUid[uid] and countByUid[uid] > 0 then countByUid[uid] -= 1 end
+                for i=#activeByUid[uid],1,-1 do
+                    if activeByUid[uid][i] == model then
+                        table.remove(activeByUid[uid], i)
+                        break
+                    end
+                end
+                if countByUid[uid] and countByUid[uid] > 0 then
+                    countByUid[uid] -= 1
+                end
             end
         end
         finallyStopDrag(model)
@@ -365,7 +453,11 @@ return function(C, R, UI)
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
             pcall(function() p:SetNetworkOwner(nil) end)
-            pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+            pcall(function()
+                if p.SetNetworkOwnershipAuto then
+                    p:SetNetworkOwnershipAuto()
+                end
+            end)
         end
     end
 
@@ -384,6 +476,7 @@ return function(C, R, UI)
             st.reslotAt = now + reslotK
         end
     end
+
     local function maybeBurst(st)
         local now = os.clock()
         if now < st.burstUntil then return end
@@ -401,7 +494,11 @@ return function(C, R, UI)
         local speed = vel.Magnitude
         local leadT = 0
         if speed > CFG.LeadStop then
-            leadT = math.clamp(CFG.LeadBase + CFG.LeadGain * (speed/16), 0, CFG.LeadMax)
+            leadT = math.clamp(
+                CFG.LeadBase + CFG.LeadGain * (speed/16),
+                0,
+                CFG.LeadMax
+            )
         end
         local base = root.Position + vel * leadT
         local look = (speed > 1e-3) and (vel / speed) or (root.CFrame.LookVector)
@@ -411,19 +508,22 @@ return function(C, R, UI)
         end
         return base, look
     end
+
     local function maybeStartNudge(st, dt)
         if os.clock() < st.nudgeUntil then return end
         local chance = CFG.NudgeChancePerSec * CFG.Speed
         if st.rng:NextNumber() < chance * math.clamp(dt, 0.01, 0.1) then
             st.nudgeUntil = os.clock() + CFG.NudgeDuration
-            st.nudgeSide = (st.rng:NextNumber() < 0.5) and -1 or 1
+            st.nudgeSide  = (st.rng:NextNumber() < 0.5) and -1 or 1
         end
     end
 
     local function floatStep(model, st, dt)
         local base, baseLook = predictiveBaseFor(st)
         if not base then
-            if os.clock() - st.lastSeen > REASSIGN_IF_LOST_S then return false end
+            if os.clock() - st.lastSeen > REASSIGN_IF_LOST_S then
+                return false
+            end
             return true
         end
         st.lastSeen = os.clock()
@@ -448,7 +548,9 @@ return function(C, R, UI)
             local speed = vel.Magnitude
             local newDir = speed > 1e-3 and (vel / speed) or Vector3.zero
             if st.lastVel.Magnitude > 1e-3 and newDir ~= Vector3.zero then
-                local dot = newDir:Dot(st.lastVel.Magnitude > 1e-3 and st.lastVel.Unit or newDir)
+                local dot = newDir:Dot(
+                    st.lastVel.Magnitude > 1e-3 and st.lastVel.Unit or newDir
+                )
                 if dot < CFG.FlipThresh then
                     st.burstUntil = os.clock() + CFG.FlipDart
                     st.burstDir   = 1
@@ -457,6 +559,7 @@ return function(C, R, UI)
             end
             st.lastVel = vel
         end
+
         if os.clock() < st.burstUntil then
             local dir = st.flipPushDir or (-off).Unit
             off = off + dir * (CFG.FlipPush + BURST_PUSH_BASE) * CFG.Speed * st.burstDir
@@ -506,7 +609,7 @@ return function(C, R, UI)
         local myRoot = hrp(); if not myRoot then return end
         if os.clock() >= scanAt then
             local exclude = {}
-            for m,_ in pairs(active) do exclude[m]=true end
+            for m,_ in pairs(active) do exclude[m] = true end
             scanCache = logsNear(myRoot.Position, exclude, 400)
             scanAt = os.clock() + 0.5
         end
@@ -520,7 +623,7 @@ return function(C, R, UI)
         end
 
         for _,tgt in ipairs(targets) do
-            local uid = tgt.UserId
+            local uid  = tgt.UserId
             local have = countByUid[uid] or 0
             if have < wantPer then
                 local deficit = wantPer - have
@@ -553,15 +656,21 @@ return function(C, R, UI)
         running = false
         if reconcileConn then reconcileConn:Disconnect(); reconcileConn=nil end
         if hbConn then hbConn:Disconnect(); hbConn=nil end
-        for i=#activeList,1,-1 do local mdl=activeList[i]; if mdl then shed(mdl) end end
-        active = {}; activeList = {}; activeByUid = {}; countByUid = {}
+        for i=#activeList,1,-1 do
+            local mdl = activeList[i]
+            if mdl then shed(mdl) end
+        end
+        active      = {}
+        activeList  = {}
+        activeByUid = {}
+        countByUid  = {}
     end
 
-    tab:Section({ Title = "Troll: Chaotic Log Smog" })
-
+    -- Dropdown state (used both by Chaotic Log Smog and Player Nudge)
     local selectedSet = {}
     local playerDD
 
+    -- Build the Players dropdown (now placed at the top by building it first)
     local function buildPlayerDropdownOnce()
         if playerDD then return end
         playerDD = tab:Dropdown({
@@ -574,30 +683,45 @@ return function(C, R, UI)
             end
         })
     end
+
+    -- Build immediately so it appears at the top
+    buildPlayerDropdownOnce()
+    -- Keep the delayed call (no-op once built) to preserve earlier behavior
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
+
+    -- Main chaotic smog section
+    tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
     tab:Slider({
         Title = "Logs (per target)",
         Value = { Min = 1, Max = 50, Default = 5 },
         Callback = function(v)
             local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then desiredPerTarget = math.clamp(math.floor(n + 0.5), 1, 50) end
+            if n then
+                desiredPerTarget = math.clamp(math.floor(n + 0.5), 1, 50)
+            end
         end
     })
+
     tab:Slider({
         Title = "Speed",
         Value = { Min = 0.5, Max = 3.0, Default = 1.0 },
         Callback = function(v)
             local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then CFG.Speed = math.clamp(n, 0.5, 3.0) end
+            if n then
+                CFG.Speed = math.clamp(n, 0.5, 3.0)
+            end
         end
     })
+
     tab:Slider({
         Title = "Height Range",
         Value = { Min = 1.0, Max = 10.0, Default = 5.0 },
         Callback = function(v)
             local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then CFG.HeightRange = math.clamp(n, 1.0, 10.0) end
+            if n then
+                CFG.HeightRange = math.clamp(n, 1.0, 10.0)
+            end
         end
     })
 
@@ -629,5 +753,86 @@ return function(C, R, UI)
         end
     })
 
-    tab:Button({ Title = "Stop", Callback = function() stopAll() end })
+    tab:Button({
+        Title = "Stop",
+        Callback = function()
+            stopAll()
+        end
+    })
+
+    -- Player Nudge logic: uses selected players; nudges nearby items (not NPCs, not you)
+    local function doPlayerNudgeStep(dt)
+        if not playerNudgeEnabled then return end
+
+        local now = os.clock()
+        local pTargets = selectedPlayersList(selectedSet)
+        if #pTargets == 0 then return end
+
+        for _, tgt in ipairs(pTargets) do
+            local root = hrp(tgt)
+            if root then
+                local origin = root.Position
+
+                local filterList = { lp.Character }
+                if tgt.Character then
+                    table.insert(filterList, tgt.Character)
+                end
+
+                local params = OverlapParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.FilterDescendantsInstances = filterList
+
+                local parts = WS:GetPartBoundsInRadius(origin, PLAYER_NUDGE_RANGE, params) or {}
+                for _, part in ipairs(parts) do
+                    if part:IsA("BasePart") and not part.Anchored then
+                        local mdl = part:FindFirstAncestorOfClass("Model") or part
+                        if mdl and not isCharacterModel(mdl) then
+                            -- Don't fight with the chaotic smog logs
+                            if not active[mdl] then
+                                local last = lastNudgeItemAt[mdl] or 0
+                                if now - last >= PLAYER_NUDGE_COOLDOWN then
+                                    lastNudgeItemAt[mdl] = now
+                                    local mp = mainPart(mdl)
+                                    if mp then
+                                        local toItem = mp.Position - origin
+                                        local horiz = Vector3.new(toItem.X, 0, toItem.Z)
+                                        if horiz.Magnitude < 1e-3 then
+                                            local look = root.CFrame.LookVector
+                                            horiz = Vector3.new(look.X, 0, look.Z)
+                                        end
+                                        local dir = horiz.Magnitude > 1e-3 and horiz.Unit or Vector3.new(0, 0, 1)
+                                        local vel = dir * PLAYER_NUDGE_AWAY + Vector3.new(0, PLAYER_NUDGE_UP, 0)
+                                        mp.AssemblyLinearVelocity = vel
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Player Nudge UI (bottom section)
+    tab:Section({ Title = "Player Nudge" })
+
+    tab:Toggle({
+        Title = "Enable Player Nudge",
+        Value = false,
+        Callback = function(on)
+            playerNudgeEnabled = (on == true)
+            if playerNudgeEnabled then
+                if not playerNudgeConn then
+                    playerNudgeConn = Run.Heartbeat:Connect(function(dt)
+                        doPlayerNudgeStep(dt)
+                    end)
+                end
+            else
+                if playerNudgeConn then
+                    playerNudgeConn:Disconnect()
+                    playerNudgeConn = nil
+                end
+            end
+        end
+    })
 end
