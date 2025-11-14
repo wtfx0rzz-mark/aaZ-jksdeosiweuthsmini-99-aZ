@@ -63,10 +63,10 @@ return function(C, R, UI)
     local REASSIGN_IF_LOST_S = 2.0
 
     -- Player Nudge config
-    local PLAYER_NUDGE_RANGE    = 10   -- how close the target has to be to an item
+    local PLAYER_NUDGE_RANGE    = 300   -- how close the target has to be to an item
     local PLAYER_NUDGE_UP       = 20   -- studs up
-    local PLAYER_NUDGE_AWAY     = 15   -- studs away
-    local PLAYER_NUDGE_COOLDOWN = 0.6  -- seconds per item between nudges
+    local PLAYER_NUDGE_AWAY     = 50   -- studs away
+    local PLAYER_NUDGE_COOLDOWN = 0.1  -- seconds per item between nudges
 
     local function hrp(p)
         p = p or lp
