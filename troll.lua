@@ -13,6 +13,7 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     if not tab then return end
 
+    -- ---------- small utils ----------
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
@@ -56,6 +57,7 @@ return function(C, R, UI)
         end
     end
 
+    -- ---------- remotes (drag like your Bring module) ----------
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
@@ -87,6 +89,9 @@ return function(C, R, UI)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
     end
 
+    -- ---------- model classification ----------
+    local function itemsRoot() return WS:FindFirstChild("Items") end
+
     local function isCharacterModel(m)
         return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
     end
@@ -105,20 +110,38 @@ return function(C, R, UI)
         if pp and pp:IsA("BasePart") then return pp end
         return nil
     end
-    local function collectNPCsInRadius(origin, radius)
-        local out = {}
-        local chars = WS:FindFirstChild("Characters")
-        if not chars then return out end
-        for _, mdl in ipairs(chars:GetChildren()) do
-            if isNPCModel(mdl) then
-                local dpart = charDistancePart(mdl)
-                if dpart and (dpart.Position - origin).Magnitude <= radius then
-                    out[#out+1] = mdl
-                end
-            end
+
+    -- Skip static/ground/map/huge assemblies so we never nuke collisions on them
+    local NU_MAX_PARTS = 120
+    local function isStaticOrHuge(model)
+        if not (model and model.Parent) then return true end
+        if model == WS.Terrain then return true end
+        if WS:FindFirstChild("Map") and model:IsDescendantOf(WS.Map) then return true end
+        local count, anyAnchored = 0, false
+        for _,p in ipairs(getParts(model)) do
+            count += 1
+            if p.Anchored then anyAnchored = true end
+            if count > NU_MAX_PARTS then return true end
         end
-        return out
+        if anyAnchored then return true end
+        return false
     end
+    local function isItemModel(model)
+        local root = itemsRoot()
+        return root and model and model:IsDescendantOf(root) and (not isCharacterModel(model)) or false
+    end
+
+    -- ---------- distances / shockwave tuning ----------
+    local Nudge = {
+        Dist = 50,  -- horizontal strength
+        Up   = 20,  -- vertical pop
+        Radius = 15,
+        SelfSafe = 3.5,  -- keep a small void around me so I don't self-blast
+    }
+
+    local AutoNudge = {
+        Enabled = false
+    }
 
     local function horiz(v) return Vector3.new(v.X, 0, v.Z) end
     local function unitOr(v, fallback)
@@ -127,41 +150,35 @@ return function(C, R, UI)
         return fallback
     end
 
-    local Nudge = {
-        Dist = 50,
-        Up   = 20,
-        Radius = 15,     -- configurable radius for shockwave/auto
-        SelfSafe = 3.5,  -- minimum gap from me before impulse
-    }
-
-    local AutoNudge = {
-        Enabled = false,
-        MaxPerFrame = 16
-    }
-
     local function preDrag(model)
         local started = safeStartDrag(model)
         if started then task.wait(0.02) end
         return started
     end
 
+    -- ---------- impulses ----------
     local function impulseItem(model, fromPos)
+        -- SAFETY: only ever nudge loose items; never map/terrain/anchored/huge
+        if not isItemModel(model) then return end
+        if isStaticOrHuge(model) then return end
+
         local mp = mainPart(model); if not mp then return end
         local pos = mp.Position
         local away = horiz(pos - fromPos)
-        local dist = away.Magnitude
-        if dist < 1e-3 then return end
-        if dist < Nudge.SelfSafe then
-            local out = fromPos + away.Unit * (Nudge.SelfSafe + 0.5)
+        if away.Magnitude < 1e-3 then return end
+
+        -- keep gap around me to avoid self-hit sensation
+        if away.Magnitude < Nudge.SelfSafe then
+            local out = fromPos + away.Unit * (Nudge.SelfSafe + 0.75)
             local snap0 = setCollide(model, false)
             zeroAssembly(model)
-            if model:IsA("Model") then model:PivotTo(CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z))) else mp.CFrame = CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z)) end
+            if model:IsA("Model") then model:PivotTo(CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z)))
+            else mp.CFrame = CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z)) end
             setCollide(model, true, snap0)
-            pos = (mainPart(model) or mp).Position
+            pos  = (mainPart(model) or mp).Position
             away = horiz(pos - fromPos)
-            dist = away.Magnitude
-            if dist < 1e-3 then away = Vector3.new(0,0,1) end
         end
+
         local dir = unitOr(away, Vector3.new(0,0,1))
         local horizSpeed = math.clamp(Nudge.Dist, 10, 160) * 4.0
         local upSpeed    = math.clamp(Nudge.Up,   5,  80) * 7.0
@@ -174,7 +191,9 @@ return function(C, R, UI)
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
             end
-            local mass = math.max(mp:GetMass(), 1)
+
+            local mass = 1
+            pcall(function() mass = math.max(mp:GetMass(), 1) end)
             pcall(function()
                 mp:ApplyImpulse(dir * horizSpeed * mass + Vector3.new(0, upSpeed * mass, 0))
             end)
@@ -186,6 +205,7 @@ return function(C, R, UI)
                 ) * mass)
             end)
             mp.AssemblyLinearVelocity = dir * horizSpeed + Vector3.new(0, upSpeed, 0)
+
             task.delay(0.14, function() if started then pcall(safeStopDrag, model) end end)
             task.delay(0.45, function() if snap then setCollide(model, true, snap) end end)
             task.delay(0.9, function()
@@ -201,21 +221,26 @@ return function(C, R, UI)
         local r = charDistancePart(mdl); if not r then return end
         local pos = r.Position
         local away = horiz(pos - fromPos)
-        local dist = away.Magnitude
-        if dist < Nudge.SelfSafe then
-            away = unitOr(horiz((pos - fromPos)), Vector3.new(0,0,1))
-            pos = fromPos + away * (Nudge.SelfSafe + 0.5)
+        if away.Magnitude < 1e-3 then away = Vector3.new(0,0,1) end
+        if away.Magnitude < Nudge.SelfSafe then
+            away = unitOr(away, Vector3.new(0,0,1))
         end
         local dir = unitOr(away, Vector3.new(0,0,1))
         local vel = dir * (math.clamp(Nudge.Dist,10,160) * 2.0) + Vector3.new(0, math.clamp(Nudge.Up,5,80) * 3.0, 0)
         pcall(function() r.AssemblyLinearVelocity = vel end)
     end
 
+    -- ---------- shockwave ----------
     local function nudgeShockwave(origin, radius)
         local myChar = lp.Character
+        local excludes = { myChar }
+        if WS:FindFirstChild("Map") then table.insert(excludes, WS.Map) end
+        if WS:FindFirstChild("Characters") then table.insert(excludes, WS.Characters) end
+        table.insert(excludes, WS.Terrain)
+
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { myChar }
+        params.FilterDescendantsInstances = excludes
 
         local parts = WS:GetPartBoundsInRadius(origin, radius, params) or {}
         local seen = {}
@@ -228,10 +253,16 @@ return function(C, R, UI)
             if isCharacterModel(mdl) then
                 if isNPCModel(mdl) then impulseNPC(mdl, origin) end
             else
-                impulseItem(mdl, origin)
+                -- Only nudge loose items under Workspace.Items
+                if isItemModel(mdl) then
+                    impulseItem(mdl, origin)
+                end
             end
         end
     end
+
+    -- ---------- UI (edge button only) ----------
+    tab:Section({ Title = "Shockwave Nudge" })
 
     local edgeBtnId = nil
     local function ensureEdgeButton(on)
@@ -250,8 +281,6 @@ return function(C, R, UI)
             edgeBtnId = nil
         end
     end
-
-    tab:Section({ Title = "Shockwave Nudge" })
 
     tab:Toggle({
         Title = "Edge Button: Shockwave",
