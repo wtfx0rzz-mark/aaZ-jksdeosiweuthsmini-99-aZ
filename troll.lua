@@ -12,25 +12,56 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
-    local INITIAL_POPULATE_DELAY = 2.0
+    ----------------------------------------------------------------
+    -- TOP: Target selection
+    ----------------------------------------------------------------
+    local function playersList()
+        local vals = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p ~= lp then
+                vals[#vals+1] = ("%s#%d"):format(p.Name, p.UserId)
+            end
+        end
+        table.sort(vals)
+        return vals
+    end
+    local function parseSelection(choice)
+        local set = {}
+        if type(choice) == "table" then
+            for _,v in ipairs(choice) do
+                local uid = tonumber((tostring(v):match("#(%d+)$") or ""))
+                if uid then set[uid] = true end
+            end
+        else
+            local uid = tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
+            if uid then set[uid] = true end
+        end
+        return set
+    end
+    local function selectedPlayersList(set)
+        local out = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if set[p.UserId] and p ~= lp then out[#out+1] = p end
+        end
+        return out
+    end
+
+    tab:Section({ Title = "Targets" })
+    local selectedSet = {}
+    local playerDD = tab:Dropdown({
+        Title = "Players",
+        Values = playersList(),
+        Multi = true,
+        AllowNone = true,
+        Callback = function(choice) selectedSet = parseSelection(choice) end
+    })
+
+    ----------------------------------------------------------------
+    -- Shared helpers
+    ----------------------------------------------------------------
+    local INITIAL_POPULATE_DELAY = 0.0
     local TICK = 0.02
     local SEARCH_RADIUS = 200
-
-    local CFG = {
-        DesiredLogs = 5, Speed = 1.0, HeightRange = 5.0, CloudMinR = 2.0, CloudMaxR = 9.0,
-        CampRadius = 35, ScrapRadius = 35, AvoidLift = 15, AvoidReeval = 0.2,
-        LeadBase = 0.18, LeadGain = 0.25, LeadMax = 0.60, LeadStop = 2.0,
-        FlipDart = 0.22, FlipThresh = -0.30, FlipPush = 10.0,
-        NudgeChancePerSec = 0.18, NudgeDuration = 0.55, NudgeAhead = 6.0, NudgeEyeY = 2.0, NudgeSideJitter = 1.2,
-        HazardTopPad = 6.0, HazardRadPad = 2.0
-    }
-    local BURST_CHANCE_PER_SEC, BURST_DURATION, BURST_PUSH_BASE = 0.15, 0.18, 6.5
-    local RESLOT_MIN, RESLOT_MAX = 0.45, 1.20
-    local JIT_XZ1, JIT_XZ2, JIT_Y1, JIT_Y2 = 1.4, 0.9, 0.9, 0.6
-    local W_XZ1_MIN, W_XZ1_MAX, W_XZ2_MIN, W_XZ2_MAX = 1.2, 2.4, 2.0, 3.6
-    local W_Y1_MIN,  W_Y1_MAX  = 1.0, 2.0
-    local W_Y2_MIN,  W_Y2_MAX  = 2.0, 4.0
-    local REASSIGN_IF_LOST_S = 2.0
 
     local function hrp(p)
         p = p or lp
@@ -65,7 +96,7 @@ return function(C, R, UI)
             return
         end
         local s = {}
-        for _,p in ipairs(parts) do s[p]=p.CanCollide; p.CanCollide=false end
+        for _,p in ipairs(parts) do s[p] = p.CanCollide; p.CanCollide = false end
         return s
     end
     local function zeroAssembly(model)
@@ -109,67 +140,31 @@ return function(C, R, UI)
         task.delay(0.05, function() pcall(safeStopDrag, model) end)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
     end
-
-    local function logsNear(center, excludeSet, limit)
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { lp.Character }
-        local parts = WS:GetPartBoundsInRadius(center, SEARCH_RADIUS, params) or {}
-        local items, uniq = {}, {}
-        for _,part in ipairs(parts) do
-            if part:IsA("BasePart") then
-                local m = part:FindFirstAncestorOfClass("Model")
-                if m and m.Name == "Log" and not uniq[m] and not excludeSet[m] then
-                    local mp = mainPart(m)
-                    if mp then
-                        uniq[m] = true
-                        items[#items+1] = {m=m, d=(mp.Position - center).Magnitude}
-                    end
-                end
-            end
-        end
-        table.sort(items, function(a,b) return a.d < b.d end)
-        local out = {}
-        for i=1, math.min(limit or #items, #items) do out[#out+1] = items[i].m end
-        return out
-    end
-
-    local function playersList()
-        local vals = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then
-                vals[#vals+1]=("%s#%d"):format(p.Name, p.UserId)
-            end
-        end
-        table.sort(vals)
-        return vals
-    end
-    local function parseSelection(choice)
-        local set = {}
-        if type(choice) == "table" then
-            for _,v in ipairs(choice) do
-                local uid=tonumber((tostring(v):match("#(%d+)$") or ""))
-                if uid then set[uid]=true end
-            end
-        else
-            local uid=tonumber((tostring(choice or ""):match("#(%d+)$") or ""))
-            if uid then set[uid]=true end
-        end
-        return set
-    end
-    local function selectedPlayersList(set)
-        local out = {}
-        for _,p in ipairs(Players:GetPlayers()) do
-            if set[p.UserId] and p~=lp then out[#out+1]=p end
-        end
-        return out
-    end
     local function rngFor(seed) return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1)) end
+
+    ----------------------------------------------------------------
+    -- Hazard avoidance (campfire/scrapper)
+    ----------------------------------------------------------------
+    local CFG = {
+        DesiredLogs = 5, Speed = 1.0, HeightRange = 5.0, CloudMinR = 2.0, CloudMaxR = 9.0,
+        CampRadius = 35, ScrapRadius = 35, AvoidLift = 15, AvoidReeval = 0.2,
+        LeadBase = 0.18, LeadGain = 0.25, LeadMax = 0.60, LeadStop = 2.0,
+        FlipDart = 0.22, FlipThresh = -0.30, FlipPush = 10.0,
+        NudgeChancePerSec = 0.18, NudgeDuration = 0.55, NudgeAhead = 6.0, NudgeEyeY = 2.0, NudgeSideJitter = 1.2,
+        HazardTopPad = 6.0, HazardRadPad = 2.0
+    }
+    local BURST_CHANCE_PER_SEC, BURST_DURATION, BURST_PUSH_BASE = 0.15, 0.18, 6.5
+    local RESLOT_MIN, RESLOT_MAX = 0.45, 1.20
+    local JIT_XZ1, JIT_XZ2, JIT_Y1, JIT_Y2 = 1.4, 0.9, 0.9, 0.6
+    local W_XZ1_MIN, W_XZ1_MAX, W_XZ2_MIN, W_XZ2_MAX = 1.2, 2.4, 2.0, 3.6
+    local W_Y1_MIN,  W_Y1_MAX  = 1.0, 2.0
+    local W_Y2_MIN,  W_Y2_MAX  = 2.0, 4.0
+    local REASSIGN_IF_LOST_S = 2.0
+
     local function heightMinMax()
         local span = math.clamp(CFG.HeightRange, 1, 10)
         return -0.4*span, 0.6*span
     end
-
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
     local function partCenter(m)
         if not m then return nil end
@@ -251,34 +246,33 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- Player selection AT TOP
-    ----------------------------------------------------------------
-    tab:Section({ Title = "Targets" })
-    local selectedSet, playerDD = {}, nil
-    local function buildPlayerDropdownOnce()
-        if playerDD then return end
-        playerDD = tab:Dropdown({
-            Title = "Players",
-            Values = playersList(),
-            Multi = true,
-            AllowNone = true,
-            Callback = function(choice) selectedSet = parseSelection(choice) end
-        })
-    end
-    task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
-
-    ----------------------------------------------------------------
     -- Chaotic Log Smog
     ----------------------------------------------------------------
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
-    local running = false
-    local desiredPerTarget = CFG.DesiredLogs
-    local active, activeList, targets = {}, {}, {}
-    local activeByUid, countByUid = {}, {}
-    local reconcileConn, hbConn = nil, nil
-    local lastDt = 1/60
-    local scanAt, scanCache = 0, {}
+    local function logsNear(center, excludeSet, limit)
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+        local parts = WS:GetPartBoundsInRadius(center, SEARCH_RADIUS, params) or {}
+        local items, uniq = {}, {}
+        for _,part in ipairs(parts) do
+            if part:IsA("BasePart") then
+                local m = part:FindFirstAncestorOfClass("Model")
+                if m and m.Name == "Log" and not uniq[m] and not excludeSet[m] then
+                    local mp = mainPart(m)
+                    if mp then
+                        uniq[m] = true
+                        items[#items+1] = {m=m, d=(mp.Position - center).Magnitude}
+                    end
+                end
+            end
+        end
+        table.sort(items, function(a,b) return a.d < b.d end)
+        local out = {}
+        for i=1, math.min(limit or #items, #items) do out[#out+1] = items[i].m end
+        return out
+    end
 
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
@@ -286,6 +280,14 @@ return function(C, R, UI)
         if m > maxOff then return off.Unit * maxOff end
         return off
     end
+
+    local running = false
+    local desiredPerTarget = CFG.DesiredLogs
+    local active, activeList, targets = {}, {}, {}
+    local activeByUid, countByUid = {}, {}
+    local reconcileConn, hbConn = nil, nil
+    local scanAt, scanCache = 0, {}
+
     local function ensureUid(uid)
         if not activeByUid[uid] then activeByUid[uid] = {} end
         if not countByUid[uid] then countByUid[uid] = 0 end
@@ -339,13 +341,19 @@ return function(C, R, UI)
             pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
         end
     end
+
+    local function heightMinMaxPair()
+        local a,b = heightMinMax()
+        return a,b
+    end
+
     local function ensureSlot(st)
         local now = os.clock()
         if (not st.slot) or now >= st.reslotAt then
             local r  = st.rng:NextNumber(CFG.CloudMinR, CFG.CloudMaxR)
             local th = st.rng:NextNumber(0, math.pi*2)
             local ph = st.rng:NextNumber(-0.85, 0.85)
-            local ymin, ymax = heightMinMax()
+            local ymin, ymax = heightMinMaxPair()
             local y = st.rng:NextNumber(ymin, ymax)
             local x = r * math.cos(th) * math.cos(ph)
             local z = r * math.sin(th) * math.cos(ph)
@@ -409,7 +417,7 @@ return function(C, R, UI)
             if st.lastVel.Magnitude > 1e-3 and newDir ~= Vector3.zero then
                 local dot = newDir:Dot(st.lastVel.Magnitude > 1e-3 and st.lastVel.Unit or newDir)
                 if dot < CFG.FlipThresh then
-                    st.burstUntil = os.clock() + CFG.FlipDart
+                    st.burstUntil = os.clock() + BURST_DURATION
                     st.burstDir   = 1
                     st.flipPushDir = newDir
                 end
@@ -435,8 +443,9 @@ return function(C, R, UI)
         posCandidate = projectOutOfHazards(posCandidate)
         local leashR = CFG.CloudMaxR + 6.0
         local vecFromBase = posCandidate - base
-        local dist = vecFromBase.Magnitude
-        if dist > leashR then posCandidate = base + vecFromBase.Unit * leashR end
+        if vecFromBase.Magnitude > leashR then
+            posCandidate = base + vecFromBase.Unit * leashR
+        end
         local cur = getPivotPos(model) or posCandidate
         local lookVec = (base - cur)
         if lookVec.Magnitude < 1e-3 then lookVec = baseLook or Vector3.new(0,0,-1) else lookVec = lookVec.Unit end
@@ -447,12 +456,13 @@ return function(C, R, UI)
         end
         return true
     end
+
     local function reconcile()
         if not running then return end
         local myRoot = hrp(); if not myRoot then return end
         if os.clock() >= scanAt then
             local exclude = {}
-            for m,_ in pairs(active) do exclude[m]=true end
+            for m,_ in pairs(active) do exclude[m] = true end
             scanCache = logsNear(myRoot.Position, exclude, 400)
             scanAt = os.clock() + 0.5
         end
@@ -479,7 +489,10 @@ return function(C, R, UI)
                 local i = #list
                 while over > 0 and i >= 1 do
                     local mdl = list[i]
-                    if mdl and active[mdl] then shed(mdl) over -= 1 end
+                    if mdl and active[mdl] then
+                        shed(mdl)
+                        over -= 1
+                    end
                     i -= 1
                 end
             end
@@ -517,17 +530,16 @@ return function(C, R, UI)
             if n then CFG.HeightRange = math.clamp(n, 1.0, 10.0) end
         end
     })
+
     tab:Button({
         Title = "Start",
         Callback = function()
             stopAll(); resolveRemotes()
-            if not playerDD then buildPlayerDropdownOnce() end
             targets = selectedPlayersList(selectedSet)
             if #targets == 0 then return end
             for _,tgt in ipairs(targets) do ensureUid(tgt.UserId) end
             running = true
             hbConn = Run.Heartbeat:Connect(function(dt)
-                lastDt = dt
                 if not running then return end
                 for mdl,st in pairs(active) do
                     if mdl and mdl.Parent and st and st.target then
@@ -538,13 +550,13 @@ return function(C, R, UI)
                     end
                 end
             end)
-            reconcileConn = Run.Heartbeat:Connect(function() reconcile() end)
+            reconcileConn = Run.Heartbeat:Connect(reconcile)
         end
     })
     tab:Button({ Title = "Stop", Callback = function() stopAll() end })
 
     ----------------------------------------------------------------
-    -- Kick Shield (no-You, includes NPCs)
+    -- Kick Shield (no self, players you select + NPCs)
     ----------------------------------------------------------------
     tab:Section({ Title = "Troll: Kick Shield" })
 
@@ -555,24 +567,19 @@ return function(C, R, UI)
         OutSpeed = 220, UpSpeed = 140,
         ReleaseDelay = 0.15, RestoreDelay = 0.35, OwnerRelease = 1.0
     }
-    local kickRunning, kickConn, lastKickScanAt = false, nil, 0
-    local kickedAt = setmetatable({}, { __mode = "k" })
-
-    local function isCharacterModel(m)
-        return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
+    local function horiz(v) return Vector3.new(v.X, 0, v.Z) end
+    local function unitOrDefault(v, fb)
+        local m = v.Magnitude
+        if m > 1e-3 then return v / m end
+        return fb
     end
+    local function isCharacterModel(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
     local function isNPCModel(m)
         if not isCharacterModel(m) then return false end
         if Players:GetPlayerFromCharacter(m) then return false end
         local n = (m.Name or ""):lower()
         if n:find("horse", 1, true) then return false end
         return true
-    end
-    local function horiz(v) return Vector3.new(v.X, 0, v.Z) end
-    local function unitOrDefault(v, fb)
-        local m = v.Magnitude
-        if m > 1e-3 then return v / m end
-        return fb
     end
     local function modelStats(model)
         local parts = getParts(model)
@@ -599,8 +606,10 @@ return function(C, R, UI)
     local function kickModelAway(model, targetRoot)
         if not model or not targetRoot then return end
         local now = os.clock()
-        if kickedAt[model] and now - kickedAt[model] < K.Cooldown then return end
-        kickedAt[model] = now
+        local last = model:GetAttribute("__kickLast") or 0
+        if now - last < K.Cooldown then return end
+        model:SetAttribute("__kickLast", now)
+
         local targetVel = targetRoot.AssemblyLinearVelocity
         local forward = horiz(targetVel)
         if forward.Magnitude < 1.5 then forward = horiz(targetRoot.CFrame.LookVector) end
@@ -609,6 +618,7 @@ return function(C, R, UI)
             forward = horiz((mp.Position - targetRoot.Position))
         end
         forward = unitOrDefault(forward, Vector3.new(0,0,1))
+
         task.spawn(function()
             pcall(safeStartDrag, model)
             local snap = setCollide(model, false)
@@ -621,7 +631,9 @@ return function(C, R, UI)
             if mp then
                 local mass = math.max(mp:GetMass(), 1)
                 pcall(function() mp:ApplyImpulse(forward * K.OutSpeed * mass + Vector3.new(0, K.UpSpeed * mass, 0)) end)
-                pcall(function() mp:ApplyAngularImpulse(Vector3.new((math.random()-0.5)*150,(math.random()-0.5)*200,(math.random()-0.5)*150) * mass) end)
+                pcall(function() mp:ApplyAngularImpulse(Vector3.new(
+                    (math.random()-0.5)*150, (math.random()-0.5)*200, (math.random()-0.5)*150
+                ) * mass) end)
                 mp.AssemblyLinearVelocity = forward * K.OutSpeed + Vector3.new(0, K.UpSpeed, 0)
             end
             task.delay(K.ReleaseDelay, function() pcall(safeStopDrag, model) end)
@@ -634,12 +646,10 @@ return function(C, R, UI)
             end)
         end)
     end
-    local function buildTargets()
+    local function buildKickTargets()
         local out = {}
         for _,p in ipairs(selectedPlayersList(selectedSet)) do
-            if p ~= lp then
-                local r = hrp(p); if r then out[#out+1] = { root=r, char=p.Character } end
-            end
+            local r = hrp(p); if r then out[#out+1] = { root=r, char=p.Character } end
         end
         local charsFolder = WS:FindFirstChild("Characters")
         if charsFolder then
@@ -652,14 +662,17 @@ return function(C, R, UI)
         end
         return out
     end
+    local kickRunning, kickConn, lastKickScanAt = false, nil, 0
     local function scanAndKick()
         if not kickRunning then return end
         local now = os.clock()
         if now - lastKickScanAt < K.ScanInterval then return end
         lastKickScanAt = now
+
         local myRoot = hrp(); if not myRoot then return end
-        local targets2 = buildTargets()
+        local targets2 = buildKickTargets()
         if #targets2 == 0 then return end
+
         local kickedThisScan = 0
         for _,t in ipairs(targets2) do
             if kickedThisScan >= K.MaxPerScan then break end
@@ -676,6 +689,7 @@ return function(C, R, UI)
                 seen[model] = true
                 if shouldSkipModel(model, t.char) then continue end
                 local mp = mainPart(model); if not mp then continue end
+                -- No-self safety
                 if (mp.Position - myRoot.Position).Magnitude <= K.NoSelfRadius then continue end
                 kickModelAway(model, root)
                 kickedThisScan += 1
@@ -701,14 +715,18 @@ return function(C, R, UI)
     })
 
     ----------------------------------------------------------------
-    -- Edge Shockwave (edge button + sliders + affect players toggle)
+    -- Edge Shockwave (nudge all items/characters away from me)
     ----------------------------------------------------------------
     tab:Section({ Title = "Edge Shockwave" })
 
     local Shock = {
-        Radius=40, ItemMaxMass=250, ItemMaxParts=120,
-        UpSpeed=160, OutSpeed=240, Cooldown=0.8,
-        AffectPlayers=false
+        Radius = 40,
+        ItemMaxMass = 250,
+        ItemMaxParts = 120,
+        OutSpeed = 240,  -- horizontal flight strength (Distance slider)
+        UpSpeed  = 160,  -- vertical flight strength (Height slider)
+        Cooldown = 0.8,
+        AffectPlayers = false
     }
     local lastShockAtByModel = setmetatable({}, {__mode="k"})
     local shockEdgeHandle, shockFallbackGui = nil, nil
@@ -716,7 +734,9 @@ return function(C, R, UI)
     local function massCountAnchored(m)
         local total, cnt, anchored = 0, 0, false
         for _,p in ipairs(getParts(m)) do
-            cnt += 1; total += p:GetMass(); if p.Anchored then anchored = true end
+            cnt += 1
+            total += p:GetMass()
+            if p.Anchored then anchored = true end
             if cnt > Shock.ItemMaxParts then break end
         end
         return total, cnt, anchored
@@ -725,12 +745,16 @@ return function(C, R, UI)
 
     local function shockImpulseItem(m, origin)
         local now = os.clock()
-        if lastShockAtByModel[m] and now - lastShockAtByModel[m] < Shock.Cooldown then return end
+        local last = lastShockAtByModel[m] or 0
+        if now - last < Shock.Cooldown then return end
         lastShockAtByModel[m] = now
+
         local mp = mainPart(m); if not mp then return end
         local diff = mp.Position - origin
-        local dir = Vector3.new(diff.X, 0, diff.Z); local mag = dir.Magnitude
+        local dir = Vector3.new(diff.X, 0, diff.Z)
+        local mag = dir.Magnitude
         if mag < 1e-3 then dir = Vector3.new(0,0,1) else dir = dir / mag end
+
         task.spawn(function()
             pcall(safeStartDrag, m)
             local snap = setCollide(m, false)
@@ -739,11 +763,15 @@ return function(C, R, UI)
                 p.AssemblyLinearVelocity = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
             end
-            local mass = math.max((massCountAnchored(m)), 1)
-            if type(mass) == "table" then mass = math.max(mass[1],1) end
+            local mass, _, _ = massCountAnchored(m)
+            mass = math.max(mass, 1)
+
             pcall(function() mp:ApplyImpulse(dir * Shock.OutSpeed * mass + Vector3.new(0, Shock.UpSpeed * mass, 0)) end)
-            pcall(function() mp:ApplyAngularImpulse(Vector3.new((math.random()-0.5)*180,(math.random()-0.5)*220,(math.random()-0.5)*180) * mass) end)
+            pcall(function() mp:ApplyAngularImpulse(Vector3.new(
+                (math.random()-0.5)*180, (math.random()-0.5)*220, (math.random()-0.5)*180
+            ) * mass) end)
             mp.AssemblyLinearVelocity = dir * Shock.OutSpeed + Vector3.new(0, Shock.UpSpeed, 0)
+
             task.delay(0.15, function() pcall(safeStopDrag, m) end)
             task.delay(0.35, function() if snap then setCollide(m, true, snap) end end)
             task.delay(0.9, function()
@@ -756,14 +784,17 @@ return function(C, R, UI)
     end
 
     local function shockImpulseCharacter(m, origin)
-        local humCharPlayer = Players:GetPlayerFromCharacter(m)
-        if humCharPlayer == lp then return end
-        if humCharPlayer and not Shock.AffectPlayers then return end
+        local plr = Players:GetPlayerFromCharacter(m)
+        if plr == lp then return end
+        if plr and not Shock.AffectPlayers then return end
+
         local hr = m and m:FindFirstChild("HumanoidRootPart")
         if not (hr and hr:IsA("BasePart")) then return end
         local diff = hr.Position - origin
-        local dir = Vector3.new(diff.X, 0, diff.Z); local mag = dir.Magnitude
+        local dir = Vector3.new(diff.X, 0, diff.Z)
+        local mag = dir.Magnitude
         if mag < 1e-3 then dir = Vector3.new(0,0,1) else dir = dir / mag end
+
         pcall(function() hr.AssemblyLinearVelocity = dir * (Shock.OutSpeed * 0.5) + Vector3.new(0, Shock.UpSpeed * 0.4, 0) end)
         pcall(function() hr:ApplyImpulse(dir * 200 + Vector3.new(0, 120, 0)) end)
     end
@@ -774,6 +805,7 @@ return function(C, R, UI)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { lp.Character }
+
         local parts = WS:GetPartBoundsInRadius(origin, Shock.Radius, params) or {}
         local seen = {}
         for _,part in ipairs(parts) do
@@ -781,12 +813,14 @@ return function(C, R, UI)
             local mdl = part:FindFirstAncestorOfClass("Model") or part
             if seen[mdl] then continue end
             seen[mdl] = true
+
             if mdl:IsDescendantOf(lp.Character) then continue end
+
             if isCharModel(mdl) then
                 shockImpulseCharacter(mdl, origin)
             else
                 local mass, cnt, anchored = massCountAnchored(mdl)
-                if not anchored and cnt <= Shock.ItemMaxParts and mass <= Shock.ItemMaxMass then
+                if (not anchored) and cnt <= Shock.ItemMaxParts and mass <= Shock.ItemMaxMass then
                     shockImpulseItem(mdl, origin)
                 end
             end
@@ -822,7 +856,6 @@ return function(C, R, UI)
         Value = false,
         Callback = function(on) if on then ensureEdgeButton() else removeEdgeButton() end end
     })
-
     tab:Slider({
         Title = "Shockwave Distance",
         Value = { Min = 100, Max = 400, Default = 240 },
