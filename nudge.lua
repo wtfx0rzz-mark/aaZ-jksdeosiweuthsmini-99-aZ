@@ -7,9 +7,9 @@ return function(C, R, UI)
     local WS      = (C and C.Services and C.Services.WS)      or game:GetService("Workspace")
     local Run     = (C and C.Services and C.Services.Run)     or game:GetService("RunService")
 
-    local lp = Players.LocalPlayer
-    local Tabs = (UI and UI.Tabs) or {}
-    local tab  = Tabs.Nudge or Tabs.Troll or Tabs.Main or Tabs.Auto
+    local lp      = Players.LocalPlayer
+    local Tabs    = (UI and UI.Tabs) or {}
+    local tab     = Tabs.Nudge or Tabs.Troll or Tabs.Main or Tabs.Auto
     if not tab then return end
 
     C.State         = C.State or {}
@@ -17,17 +17,20 @@ return function(C, R, UI)
     C.State.Nudge   = C.State.Nudge   or {}
 
     local Nudge = {
-        Distance = C.State.Nudge.Distance or 50,
-        Height   = C.State.Nudge.Height   or 20,
-        Radius   = C.State.Nudge.Radius   or 15,
+        Distance        = C.State.Nudge.Distance        or 50,
+        Height          = C.State.Nudge.Height          or 20,
+        Radius          = C.State.Nudge.Radius          or 15,
         ApplyCharacters = (C.State.Nudge.ApplyCharacters ~= false),
         ApplyItems      = (C.State.Nudge.ApplyItems      ~= false),
     }
 
+    local AutoNudgeOn = C.State.Toggles.NudgeAuto or false
+    local showNudgeEdge = C.State.Toggles.NudgeButton or false
+
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
-        return ch:FindFirstChild("HumanoidRootPart")
+        return ch and ch:FindFirstChild("HumanoidRootPart")
     end
 
     local function mainPart(obj)
@@ -61,6 +64,10 @@ return function(C, R, UI)
         return WS:FindFirstChild("Items")
     end
 
+    local function hasHumanoid(model)
+        return model and model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+
     local function isWallVariant(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or ""):lower()
@@ -81,26 +88,18 @@ return function(C, R, UI)
         return false
     end
 
-    local function hasHumanoid(model)
-        if not (model and model:IsA("Model")) then return false end
-        return model:FindFirstChildOfClass("Humanoid") ~= nil
-    end
-
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return true end
         local n = (m.Name or ""):lower()
-
         if n == "pelt trader" then return true end
         if n:find("trader",1,true) or n:find("shopkeeper",1,true) then return true end
-
         if isWallVariant(m) then return true end
         if isUnderLogWall(m) then return true end
-
         return false
     end
 
     local function isCharacterModel(m)
-        return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
+        return hasHumanoid(m)
     end
 
     local function isItemModel(m)
@@ -137,7 +136,7 @@ return function(C, R, UI)
         local away = Vector3.new(pos.X - origin.X, 0, pos.Z - origin.Z)
         if away.Magnitude < 1e-3 then return end
 
-        local dir = unitOr(away, Vector3.new(0, 0, 1))
+        local dir   = unitOr(away, Vector3.new(0, 0, 1))
         local horiz = math.clamp(Nudge.Distance, 0, 300)
         local up    = math.clamp(Nudge.Height,   0, 300)
 
@@ -164,7 +163,7 @@ return function(C, R, UI)
         local away = Vector3.new(pos.X - origin.X, 0, pos.Z - origin.Z)
         if away.Magnitude < 1e-3 then return end
 
-        local dir = unitOr(away, Vector3.new(0, 0, 1))
+        local dir   = unitOr(away, Vector3.new(0, 0, 1))
         local horiz = math.clamp(Nudge.Distance, 0, 300)
         local up    = math.clamp(Nudge.Height,   0, 300)
 
@@ -213,44 +212,94 @@ return function(C, R, UI)
         end
     end
 
-    local edgeId
-    local function ensureEdgeButton(on)
-        local Edge = UI and UI.EdgeButtons
-        if not Edge then return end
-
-        if on and not edgeId then
-            edgeId = Edge:Add({
-                Title = "Nudge",
-                Callback = function()
-                    local r = hrp()
-                    if r then
-                        nudgeShockwave(r.Position, Nudge.Radius)
-                    end
-                end
-            })
-        elseif (not on) and edgeId then
+    local function ensureEdgeGui()
+        local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
+        local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
+        if not edgeGui then
+            edgeGui = Instance.new("ScreenGui")
+            edgeGui.Name = "EdgeButtons"
+            edgeGui.ResetOnSpawn = false
             pcall(function()
-                Edge:Remove(edgeId)
+                edgeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
             end)
-            edgeId = nil
+            edgeGui.Parent = playerGui
+        elseif edgeGui.Parent ~= playerGui then
+            edgeGui.Parent = playerGui
         end
+
+        local stack = edgeGui:FindFirstChild("EdgeStack")
+        if not stack then
+            stack = Instance.new("Frame")
+            stack.Name = "EdgeStack"
+            stack.AnchorPoint = Vector2.new(1, 0)
+            stack.Position = UDim2.new(1, -6, 0, 6)
+            stack.Size = UDim2.new(0, 130, 1, -12)
+            stack.BackgroundTransparency = 1
+            stack.BorderSizePixel = 0
+            stack.Parent = edgeGui
+
+            local list = Instance.new("UIListLayout")
+            list.Name = "VList"
+            list.FillDirection = Enum.FillDirection.Vertical
+            list.SortOrder = Enum.SortOrder.LayoutOrder
+            list.Padding = UDim.new(0, 6)
+            list.HorizontalAlignment = Enum.HorizontalAlignment.Right
+            list.Parent = stack
+        end
+
+        return edgeGui, stack
     end
 
+    local function makeEdgeBtn(stack, name, label, order)
+        local b = stack:FindFirstChild(name)
+        if not b then
+            b = Instance.new("TextButton")
+            b.Name = name
+            b.Size = UDim2.new(1, 0, 0, 30)
+            b.Text = label
+            b.TextSize = 12
+            b.Font = Enum.Font.GothamBold
+            b.BackgroundColor3 = Color3.fromRGB(30,30,35)
+            b.TextColor3 = Color3.new(1,1,1)
+            b.BorderSizePixel = 0
+            b.Visible = false
+            b.LayoutOrder = order or 1
+            b.Parent = stack
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = b
+        else
+            b.Text = label
+            b.LayoutOrder = order or b.LayoutOrder
+        end
+        return b
+    end
+
+    local edgeGui, edgeStack = ensureEdgeGui()
+    local nudgeBtn = makeEdgeBtn(edgeStack, "NudgeEdge", "Nudge", 50)
+    nudgeBtn.Visible = showNudgeEdge
+
+    nudgeBtn.MouseButton1Click:Connect(function()
+        local r = hrp()
+        if r then
+            nudgeShockwave(r.Position, Nudge.Radius)
+        end
+    end)
+
     local autoConn
+
     local function updateAutoNudge()
         if autoConn then
             autoConn:Disconnect()
             autoConn = nil
         end
 
-        if not C.State.Toggles.NudgeAuto then
+        if not AutoNudgeOn then
             return
         end
 
         autoConn = Run.Heartbeat:Connect(function()
-            if not C.State.Toggles.NudgeAuto then
-                return
-            end
+            if not AutoNudgeOn then return end
             local r = hrp()
             if not r then return end
             nudgeShockwave(r.Position, Nudge.Radius)
@@ -261,19 +310,23 @@ return function(C, R, UI)
 
     tab:Toggle({
         Title = "Nudge Button",
-        Value = C.State.Toggles.NudgeButton or false,
+        Value = showNudgeEdge,
         Callback = function(on)
             on = (on == true)
+            showNudgeEdge = on
             C.State.Toggles.NudgeButton = on
-            ensureEdgeButton(on)
+            local _, stack = ensureEdgeGui()
+            local btn = stack:FindFirstChild("NudgeEdge") or makeEdgeBtn(stack, "NudgeEdge", "Nudge", 50)
+            btn.Visible = on
         end
     })
 
     tab:Toggle({
         Title = "Auto Nudge",
-        Value = C.State.Toggles.NudgeAuto or false,
+        Value = AutoNudgeOn,
         Callback = function(on)
             on = (on == true)
+            AutoNudgeOn = on
             C.State.Toggles.NudgeAuto = on
             updateAutoNudge()
         end
@@ -335,6 +388,18 @@ return function(C, R, UI)
         end
     })
 
-    ensureEdgeButton(C.State.Toggles.NudgeButton)
     updateAutoNudge()
+
+    Players.LocalPlayer.CharacterAdded:Connect(function()
+        edgeGui, edgeStack = ensureEdgeGui()
+        nudgeBtn = edgeStack:FindFirstChild("NudgeEdge") or makeEdgeBtn(edgeStack, "NudgeEdge", "Nudge", 50)
+        nudgeBtn.Visible = showNudgeEdge
+        nudgeBtn.MouseButton1Click:Connect(function()
+            local r = hrp()
+            if r then
+                nudgeShockwave(r.Position, Nudge.Radius)
+            end
+        end)
+        updateAutoNudge()
+    end)
 end
