@@ -46,7 +46,7 @@ return function(C, R, UI)
     local PILE_RADIUS    = 1.25
     local LAYER_SIZE     = 20
     local LAYER_HEIGHT   = 0.35
-    local UNANCHOR_BATCH = 8
+    local UNANCHOR_BATCH = 10
     local UNANCHOR_STEP  = 0.04
     local NUDGE_DOWN     = 4
     local CULTIST_LIMIT  = math.huge
