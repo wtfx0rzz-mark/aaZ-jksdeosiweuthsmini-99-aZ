@@ -41,7 +41,9 @@ local Tabs = {
     Visuals   = Window:Tab({ Title = "Visuals",   Icon = "eye",   Desc = "Visuals" }),
     TPBring   = Window:Tab({ Title = "TPBring",   Icon = "backpack",   Desc = "TP Bring" }),
     Debug   = Window:Tab({ Title = "Debug",   Icon = "ant",   Desc = "Debug" }),
-    Troll   = Window:Tab({ Title = "Troll",   Icon = "ant",   Desc = "Troll" })
+    Troll   = Window:Tab({ Title = "Troll",   Icon = "ant",   Desc = "Troll" }),
+    Nudge   = Window:Tab({ Title = "Nudge",   Icon = "activity",   Desc = "Nudge" })
+
 }
 
 return {
