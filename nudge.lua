@@ -317,7 +317,211 @@ return function(C, R, UI)
         end
     end
 
-    -- EdgeButtons GUI integration (same pattern as auto.lua)
+    local Center = {
+        ItemsEnabled    = false,
+        NPCsEnabled     = false,
+        TargetRadius    = 100,
+        ItemMaxPerStep  = 40,
+        NpcMaxPerStep   = 16,
+        ItemAccel       = 25,
+        NpcAccel        = 40,
+        ItemMaxSpeed    = 160,
+        NpcMaxSpeed     = 120,
+        RescanInterval  = 3.0
+    }
+
+    local centerItems      = {}
+    local centerNPCs       = {}
+    local centerItemIdx    = 1
+    local centerNPCIdx     = 1
+    local rescanItemsAt    = 0
+    local rescanNPCsAt     = 0
+
+    local campModelCache = nil
+
+    local function fireCenterPart(fire)
+        return fire:FindFirstChild("Center")
+            or fire:FindFirstChild("InnerTouchZone")
+            or mainPart(fire)
+            or fire.PrimaryPart
+    end
+
+    local function resolveCampfireModel()
+        if campModelCache and campModelCache.Parent then
+            return campModelCache
+        end
+        local map = WS:FindFirstChild("Map")
+        local cg  = map and map:FindFirstChild("Campground")
+        local mf  = cg and cg:FindFirstChild("MainFire")
+        if mf then
+            campModelCache = mf
+            return mf
+        end
+        local best, bestDist = nil, math.huge
+        local root = hrp()
+        local rootPos = root and root.Position
+        for _, d in ipairs(WS:GetDescendants()) do
+            if d:IsA("Model") then
+                local n = (d.Name or ""):lower()
+                if n == "mainfire" or n == "campfire" or n == "camp fire" then
+                    local mp = mainPart(d)
+                    local p = mp and mp.Position or (pcall(d.GetPivot, d) and d:GetPivot().Position) or nil
+                    if p and rootPos then
+                        local dist = (p - rootPos).Magnitude
+                        if dist < bestDist then
+                            bestDist = dist
+                            best = d
+                        end
+                    elseif p and not best then
+                        best = d
+                    end
+                end
+            end
+        end
+        campModelCache = best
+        return best
+    end
+
+    local function campfireCenter()
+        local fire = resolveCampfireModel()
+        if not fire then return nil end
+        local center = fireCenterPart(fire)
+        if center and center:IsA("BasePart") then
+            return center.Position
+        end
+        local mp = mainPart(fire)
+        if mp then return mp.Position end
+        local ok, cf = pcall(fire.GetPivot, fire)
+        if ok and cf then
+            return cf.Position
+        end
+        return nil
+    end
+
+    local function rebuildCenterItems()
+        centerItems = {}
+        local items = WS:FindFirstChild("Items")
+        if not items then
+            centerItemIdx = 1
+            return
+        end
+        for _, m in ipairs(items:GetChildren()) do
+            if m:IsA("Model") then
+                centerItems[#centerItems+1] = m
+            end
+        end
+        centerItemIdx = 1
+    end
+
+    local function rebuildCenterNPCs()
+        centerNPCs = {}
+        local chars = WS:FindFirstChild("Characters")
+        if not chars then
+            centerNPCIdx = 1
+            return
+        end
+        for _, mdl in ipairs(chars:GetChildren()) do
+            if isNPCModel(mdl) then
+                centerNPCs[#centerNPCs+1] = mdl
+            end
+        end
+        centerNPCIdx = 1
+    end
+
+    local function stepCenterItems()
+        if not Center.ItemsEnabled then return end
+        local campPos = campfireCenter()
+        if not campPos then return end
+
+        local now = os.clock()
+        if now >= rescanItemsAt then
+            rebuildCenterItems()
+            rescanItemsAt = now + Center.RescanInterval
+        end
+
+        local count = #centerItems
+        if count == 0 then return end
+
+        local processed = 0
+        while processed < Center.ItemMaxPerStep and count > 0 do
+            if centerItemIdx > count then
+                centerItemIdx = 1
+            end
+            local m = centerItems[centerItemIdx]
+            centerItemIdx += 1
+            processed += 1
+
+            if m and m.Parent then
+                local mp = mainPart(m)
+                if mp and not mp.Anchored then
+                    local toCamp = campPos - mp.Position
+                    local horizVec = Vector3.new(toCamp.X, 0, toCamp.Z)
+                    local dist = horizVec.Magnitude
+                    if dist > Center.TargetRadius then
+                        local dir = horizVec.Unit
+                        local vel = mp.AssemblyLinearVelocity
+                        local hv = Vector3.new(vel.X, 0, vel.Z) + dir * Center.ItemAccel
+                        local hmag = hv.Magnitude
+                        if hmag > Center.ItemMaxSpeed then
+                            hv = hv.Unit * Center.ItemMaxSpeed
+                        end
+                        mp.AssemblyLinearVelocity = Vector3.new(hv.X, vel.Y, hv.Z)
+                    end
+                end
+            end
+
+            count = #centerItems
+            if count == 0 then break end
+        end
+    end
+
+    local function stepCenterNPCs()
+        if not Center.NPCsEnabled then return end
+        local campPos = campfireCenter()
+        if not campPos then return end
+
+        local now = os.clock()
+        if now >= rescanNPCsAt then
+            rebuildCenterNPCs()
+            rescanNPCsAt = now + Center.RescanInterval
+        end
+
+        local count = #centerNPCs
+        if count == 0 then return end
+
+        local processed = 0
+        while processed < Center.NpcMaxPerStep and count > 0 then
+            if centerNPCIdx > count then
+                centerNPCIdx = 1
+            end
+            local mdl = centerNPCs[centerNPCIdx]
+            centerNPCIdx += 1
+            processed += 1
+
+            if mdl and mdl.Parent and isNPCModel(mdl) then
+                local rootPart = charDistancePart(mdl)
+                if rootPart then
+                    local toCamp = campPos - rootPart.Position
+                    local horizVec = Vector3.new(toCamp.X, 0, toCamp.Z)
+                    local dist = horizVec.Magnitude
+                    if dist > Center.TargetRadius then
+                        local dir = horizVec.Unit
+                        local vel = rootPart.AssemblyLinearVelocity
+                        local hv = Vector3.new(vel.X, 0, vel.Z) + dir * Center.NpcAccel
+                        local hmag = hv.Magnitude
+                        if hmag > Center.NpcMaxSpeed then
+                            hv = hv.Unit * Center.NpcMaxSpeed
+                        end
+                        rootPart.AssemblyLinearVelocity = Vector3.new(hv.X, vel.Y, hv.Z)
+                    end
+                end
+            end
+
+            count = #centerNPCs
+            if count == 0 then break end
+        end
+    end
+
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -373,7 +577,6 @@ return function(C, R, UI)
         return b
     end
 
-    -- use order 10+ so we don't collide with auto.lua's orders 1–6
     local shockBtn = makeEdgeBtn("ShockwaveEdge", "Shockwave", 10)
 
     shockBtn.MouseButton1Click:Connect(function()
@@ -383,11 +586,16 @@ return function(C, R, UI)
         end
     end)
 
-    local initialEdge = false
-    if C and C.State and C.State.Toggles then
-        initialEdge = (C.State.Toggles.EdgeShockwave == true)
-    end
+    C.State = C.State or { Toggles = {} }
+    C.State.Toggles = C.State.Toggles or {}
+
+    local initialEdge       = (C.State.Toggles.EdgeShockwave == true)
+    local initialCenterItems = (C.State.Toggles.CenterItems == true)
+    local initialCenterNPCs  = (C.State.Toggles.CenterNPCs == true)
+
     shockBtn.Visible = initialEdge
+    Center.ItemsEnabled = initialCenterItems
+    Center.NPCsEnabled  = initialCenterNPCs
 
     tab:Section({ Title = "Shockwave Nudge" })
 
@@ -396,8 +604,6 @@ return function(C, R, UI)
         Value = initialEdge,
         Callback = function(v)
             local on = (v == true)
-            C.State = C.State or { Toggles = {} }
-            C.State.Toggles = C.State.Toggles or {}
             C.State.Toggles.EdgeShockwave = on
             if shockBtn then
                 shockBtn.Visible = on
@@ -446,6 +652,28 @@ return function(C, R, UI)
         end
     })
 
+    tab:Section({ Title = "Center Nudge (to Campfire)" })
+
+    tab:Toggle({
+        Title = "Nudge Items to Center",
+        Value = initialCenterItems,
+        Callback = function(on)
+            local v = (on == true)
+            Center.ItemsEnabled = v
+            C.State.Toggles.CenterItems = v
+        end
+    })
+
+    tab:Toggle({
+        Title = "Nudge NPCs to Center",
+        Value = initialCenterNPCs,
+        Callback = function(on)
+            local v = (on == true)
+            Center.NPCsEnabled = v
+            C.State.Toggles.CenterNPCs = v
+        end
+    })
+
     local autoConn
     if autoConn then
         autoConn:Disconnect()
@@ -453,9 +681,13 @@ return function(C, R, UI)
     end
 
     autoConn = Run.Heartbeat:Connect(function()
-        if not AutoNudge.Enabled then return end
-        local r = hrp()
-        if not r then return end
-        nudgeShockwave(r.Position, Nudge.Radius)
+        local root = hrp()
+        if AutoNudge.Enabled and root then
+            nudgeShockwave(root.Position, Nudge.Radius)
+        end
+        if Center.ItemsEnabled or Center.NPCsEnabled then
+            stepCenterItems()
+            stepCenterNPCs()
+        end
     end)
 end
