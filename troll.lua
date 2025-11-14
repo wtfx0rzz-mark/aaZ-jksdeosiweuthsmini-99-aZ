@@ -293,7 +293,6 @@ return function(C, R, UI)
     local countByUid = {}
     local reconcileConn, hbConn = nil, nil
     local lastDt = 1/60
-    private_scanAt = nil -- avoid upvalue rename
     local scanAt = 0
     local scanCache = {}
 
@@ -632,33 +631,29 @@ return function(C, R, UI)
 
     tab:Button({ Title = "Stop", Callback = function() stopAll() end })
 
-    ----------------------------------------------------------------
-    -- APPENDED: Kick Shield (do not modify existing code above)
-    ----------------------------------------------------------------
     tab:Section({ Title = "Troll: Kick Shield" })
 
-    -- Config for the kick behavior
     local KCFG = {
-        Radius         = 15.0,   -- trigger distance around target HRP
-        MinHorizDist   = 40.0,   -- desired horizontal travel (studs)
+        Radius         = 15.0,
+        MinHorizDist   = 40.0,
         MaxHorizDist   = 55.0,
-        MinUp          = 18.0,   -- desired upward travel (studs)
+        MinUp          = 18.0,
         MaxUp          = 24.0,
-        Cooldown       = 1.0,    -- per-item min seconds between kicks
-        ScanInterval   = 0.08,   -- seconds between scans
-        MaxPerScan     = 12,     -- limit number of items kicked per scan across all targets
-        MaxMass        = 200,    -- skip very heavy assemblies
-        MaxParts       = 80,     -- skip huge models
-        AllowAnchored  = false,  -- skip anchored items
-        ReleaseDelay   = 0.15,   -- after impulse, stop dragging
-        RestoreDelay   = 0.35,   -- after impulse, restore collisions
-        OwnerRelease   = 1.0     -- return ownership to server later
+        Cooldown       = 1.0,
+        ScanInterval   = 0.08,
+        MaxPerScan     = 12,
+        MaxMass        = 200,
+        MaxParts       = 80,
+        AllowAnchored  = false,
+        ReleaseDelay   = 0.15,
+        RestoreDelay   = 0.35,
+        OwnerRelease   = 1.0
     }
 
     local kickRunning = false
     local kickConn = nil
     local lastKickScanAt = 0
-    local kickedAt = setmetatable({}, { __mode = "k" }) -- weak keys to avoid leaks
+    local kickedAt = setmetatable({}, { __mode = "k" })
 
     local function horiz(v) return Vector3.new(v.X, 0, v.Z) end
     local function unitOrDefault(v, fallback)
@@ -701,22 +696,15 @@ return function(C, R, UI)
         local forward = horiz(targetVel)
         if forward.Magnitude < 1.5 then forward = horiz(targetRoot.CFrame.LookVector) end
         if forward.Magnitude < 1e-3 then
-            -- as a final fallback, push away from the player
             local mp = mainPart(model)
             if not mp then return end
             forward = horiz((mp.Position - targetRoot.Position))
         end
         forward = unitOrDefault(forward, Vector3.new(0,0,1))
 
-        local horizDist = math.random() * (KCFG.MaxHorizDist - KCFG.MinHorizDist) + KCFG.MinHorizDist
-        local upDist    = math.random() * (KCFG.MaxUp - KCFG.MinUp) + KCFG.MinUp
+        local horizSpeed = 220
+        local upSpeed    = 140
 
-        -- Convert desired displacement into a strong impulse/velocity
-        -- Choose speeds large enough to guarantee flight; tuned for replication.
-        local horizSpeed = 220  -- studs/s
-        local upSpeed    = 140  -- studs/s
-
-        -- Prepare model: start drag, disable collisions, claim ownership, zero velocities
         task.spawn(function()
             pcall(safeStartDrag, model)
             local snap = setCollide(model, false)
@@ -726,15 +714,12 @@ return function(C, R, UI)
                 p.AssemblyAngularVelocity = Vector3.new()
             end
 
-            -- Apply strong impulse/velocity at main part
             local mp = mainPart(model)
             if mp then
                 local mass = math.max(mp:GetMass(), 1)
-                -- Prefer impulses for more physical flight; fall back to velocity set.
                 pcall(function()
                     mp:ApplyImpulse(forward * horizSpeed * mass + Vector3.new(0, upSpeed * mass, 0))
                 end)
-                -- Add some spin
                 pcall(function()
                     mp:ApplyAngularImpulse(Vector3.new(
                         (math.random()-0.5)*150,
@@ -742,17 +727,11 @@ return function(C, R, UI)
                         (math.random()-0.5)*150
                     ) * mass)
                 end)
-                -- Safety: also set velocity to ensure takeoff even if impulse blocked
                 mp.AssemblyLinearVelocity = forward * horizSpeed + Vector3.new(0, upSpeed, 0)
             end
 
-            -- Release drag + restore collisions after brief delay so physics can carry it away
-            task.delay(KCFG.ReleaseDelay, function()
-                pcall(safeStopDrag, model)
-            end)
-            task.delay(KCFG.RestoreDelay, function()
-                if snap then setCollide(model, true, snap) end
-            end)
+            task.delay(KCFG.ReleaseDelay, function() pcall(safeStopDrag, model) end)
+            task.delay(KCFG.RestoreDelay, function() if snap then setCollide(model, true, snap) end end)
             task.delay(KCFG.OwnerRelease, function()
                 for _,p in ipairs(getParts(model)) do
                     pcall(function() p:SetNetworkOwner(nil) end)
@@ -782,7 +761,6 @@ return function(C, R, UI)
             params.FilterDescendantsInstances = { tgt.Character }
 
             local around = WS:GetPartBoundsInRadius(root.Position, KCFG.Radius, params) or {}
-            -- Iterate parts, map to models, dedupe
             local seen = {}
             for _,part in ipairs(around) do
                 if not part:IsA("BasePart") then continue end
@@ -811,6 +789,395 @@ return function(C, R, UI)
         Callback = function()
             kickRunning = false
             if kickConn then kickConn:Disconnect(); kickConn = nil end
+        end
+    })
+
+    tab:Section({ Title = "Troll: Kick Shield v2 (No-You + NPCs)" })
+
+    local K2CFG = {
+        Radius         = 15.0,
+        NoSelfRadius   = 17.0,
+        MinHorizDist   = 40.0,
+        MaxHorizDist   = 55.0,
+        MinUp          = 18.0,
+        MaxUp          = 24.0,
+        Cooldown       = 1.0,
+        ScanInterval   = 0.08,
+        MaxPerScan     = 12,
+        MaxMass        = 200,
+        MaxParts       = 80,
+        AllowAnchored  = false,
+        ReleaseDelay   = 0.15,
+        RestoreDelay   = 0.35,
+        OwnerRelease   = 1.0
+    }
+
+    local kick2Running = false
+    local kick2Conn = nil
+    local lastKick2ScanAt = 0
+    local kicked2At = setmetatable({}, { __mode = "k" })
+
+    local function isCharacterModel(m)
+        return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+
+    local function isNPCModel(m)
+        if not isCharacterModel(m) then return false end
+        local plr = Players:GetPlayerFromCharacter(m)
+        if plr then return false end
+        local n = (m.Name or ""):lower()
+        if n:find("horse", 1, true) then return false end
+        return true
+    end
+
+    local KS2_Toggle_NPCs = false
+
+    tab:Toggle({
+        Title = "Kick NPCs (v2)",
+        Value = KS2_Toggle_NPCs,
+        Callback = function(on) KS2_Toggle_NPCs = (on == true) end
+    })
+
+    local function modelStats2(model)
+        local parts = getParts(model)
+        local totalMass, count, anyAnchored = 0, 0, false
+        for _,p in ipairs(parts) do
+            count += 1
+            totalMass += p:GetMass()
+            if p.Anchored then anyAnchored = true end
+            if count > K2CFG.MaxParts then break end
+        end
+        return totalMass, count, anyAnchored
+    end
+
+    local function shouldSkipModel2(model, targetChar)
+        if not model or not model.Parent then return true end
+        if targetChar and model:IsDescendantOf(targetChar) then return true end
+        local lower = (model.Name or ""):lower()
+        if lower:find("camp") or lower:find("fire") or lower:find("scrap") then return true end
+        local mass, count, anyAnchored = modelStats2(model)
+        if mass > K2CFG.MaxMass then return true end
+        if count > K2CFG.MaxParts then return true end
+        if anyAnchored and not K2CFG.AllowAnchored then return true end
+        return false
+    end
+
+    local function kickModelAway2(model, targetRoot)
+        if not model or not targetRoot then return end
+        local now = os.clock()
+        if kicked2At[model] and now - kicked2At[model] < K2CFG.Cooldown then return end
+        kicked2At[model] = now
+
+        local targetVel = targetRoot.AssemblyLinearVelocity
+        local forward = Vector3.new(targetVel.X, 0, targetVel.Z)
+        if forward.Magnitude < 1.5 then forward = Vector3.new(targetRoot.CFrame.LookVector.X, 0, targetRoot.CFrame.LookVector.Z) end
+        if forward.Magnitude < 1e-3 then
+            local mp = mainPart(model)
+            if not mp then return end
+            local diff = mp.Position - targetRoot.Position
+            forward = Vector3.new(diff.X, 0, diff.Z)
+        end
+        local m = forward.Magnitude
+        if m > 1e-3 then forward = forward / m else forward = Vector3.new(0,0,1) end
+
+        local horizSpeed = 220
+        local upSpeed    = 140
+
+        task.spawn(function()
+            pcall(safeStartDrag, model)
+            local snap = setCollide(model, false)
+            for _,p in ipairs(getParts(model)) do
+                pcall(function() p:SetNetworkOwner(lp) end)
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            local mp = mainPart(model)
+            if mp then
+                local mass = math.max(mp:GetMass(), 1)
+                pcall(function()
+                    mp:ApplyImpulse(forward * horizSpeed * mass + Vector3.new(0, upSpeed * mass, 0))
+                end)
+                pcall(function()
+                    mp:ApplyAngularImpulse(Vector3.new(
+                        (math.random()-0.5)*150,
+                        (math.random()-0.5)*200,
+                        (math.random()-0.5)*150
+                    ) * mass)
+                end)
+                mp.AssemblyLinearVelocity = forward * horizSpeed + Vector3.new(0, upSpeed, 0)
+            end
+            task.delay(K2CFG.ReleaseDelay, function() pcall(safeStopDrag, model) end)
+            task.delay(K2CFG.RestoreDelay, function() if snap then setCollide(model, true, snap) end end)
+            task.delay(K2CFG.OwnerRelease, function()
+                for _,p in ipairs(getParts(model)) do
+                    pcall(function() p:SetNetworkOwner(nil) end)
+                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                end
+            end)
+        end)
+    end
+
+    local function buildTargetList_v2()
+        local out = {}
+        local sel = selectedPlayersList(selectedSet)
+        for _,p in ipairs(sel) do
+            if p ~= lp then
+                local r = hrp(p)
+                if r then out[#out+1] = { kind = "player", root = r, char = p.Character } end
+            end
+        end
+        if KS2_Toggle_NPCs then
+            local charsFolder = WS:FindFirstChild("Characters")
+            if charsFolder then
+                for _, mdl in ipairs(charsFolder:GetChildren()) do
+                    if isNPCModel(mdl) then
+                        local r = mdl:FindFirstChild("HumanoidRootPart")
+                        if r and r:IsA("BasePart") then
+                            out[#out+1] = { kind = "npc", root = r, char = mdl }
+                        end
+                    end
+                end
+            end
+        end
+        return out
+    end
+
+    local function scanAndKick_v2()
+        if not kick2Running then return end
+        local now = os.clock()
+        if now - lastKick2ScanAt < K2CFG.ScanInterval then return end
+        lastKick2ScanAt = now
+
+        local myRoot = hrp()
+        if not myRoot then return end
+
+        local targets2 = buildTargetList_v2()
+        if #targets2 == 0 then return end
+
+        local kickedThisScan = 0
+        for _,t in ipairs(targets2) do
+            if kickedThisScan >= K2CFG.MaxPerScan then break end
+            local root = t.root
+            local params = OverlapParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { t.char }
+
+            local parts = WS:GetPartBoundsInRadius(root.Position, K2CFG.Radius, params) or {}
+            local seen = {}
+            for _,part in ipairs(parts) do
+                if not part:IsA("BasePart") then continue end
+                local model = part:FindFirstAncestorOfClass("Model") or part
+                if seen[model] then continue end
+                seen[model] = true
+
+                if shouldSkipModel2(model, t.char) then continue end
+                local mp = mainPart(model); if not mp then continue end
+                local distToMe = (mp.Position - myRoot.Position).Magnitude
+                if distToMe <= K2CFG.NoSelfRadius then
+                    continue
+                end
+
+                kickModelAway2(model, root)
+                kickedThisScan += 1
+                if kickedThisScan >= K2CFG.MaxPerScan then break end
+            end
+        end
+    end
+
+    tab:Button({
+        Title = "Kick Shield v2: Start",
+        Callback = function()
+            if kick2Running then return end
+            kick2Running = true
+            if kick2Conn then kick2Conn:Disconnect() end
+            kick2Conn = Run.Heartbeat:Connect(scanAndKick_v2)
+        end
+    })
+
+    tab:Button({
+        Title = "Kick Shield v2: Stop",
+        Callback = function()
+            kick2Running = false
+            if kick2Conn then kick2Conn:Disconnect(); kick2Conn = nil end
+        end
+    })
+
+    tab:Section({ Title = "Edge Shockwave" })
+
+    local Shock = {
+        Radius = 40,
+        ItemMaxMass = 250,
+        ItemMaxParts = 120,
+        UpSpeed = 160,
+        OutSpeed = 240,
+        Cooldown = 0.8
+    }
+    local lastShockAtByModel = setmetatable({}, {__mode="k"})
+    local shockEdgeEnabled = false
+    local shockEdgeHandle = nil
+    local shockFallbackGui = nil
+
+    local function massCountAnchored(m)
+        local total, cnt, anchored = 0, 0, false
+        for _,p in ipairs(getParts(m)) do
+            cnt += 1
+            total += p:GetMass()
+            if p.Anchored then anchored = true end
+            if cnt > Shock.ItemMaxParts then break end
+        end
+        return total, cnt, anchored
+    end
+
+    local function isCharModel(m)
+        return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+
+    local function shockImpulseItem(m, origin)
+        local now = os.clock()
+        if lastShockAtByModel[m] and now - lastShockAtByModel[m] < Shock.Cooldown then return end
+        lastShockAtByModel[m] = now
+
+        local mp = mainPart(m); if not mp then return end
+        local diff = mp.Position - origin
+        local dir = Vector3.new(diff.X, 0, diff.Z)
+        local mag = dir.Magnitude
+        if mag < 1e-3 then dir = Vector3.new(0,0,1) else dir = dir / mag end
+
+        task.spawn(function()
+            pcall(safeStartDrag, m)
+            local snap = setCollide(m, false)
+            for _,p in ipairs(getParts(m)) do
+                pcall(function() p:SetNetworkOwner(lp) end)
+                p.AssemblyLinearVelocity = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+            local mass, _, _ = massCountAnchored(m)
+            mass = math.max(mass, 1)
+            pcall(function()
+                mp:ApplyImpulse(dir * Shock.OutSpeed * mass + Vector3.new(0, Shock.UpSpeed * mass, 0))
+            end)
+            pcall(function()
+                mp:ApplyAngularImpulse(Vector3.new(
+                    (math.random()-0.5)*180,
+                    (math.random()-0.5)*220,
+                    (math.random()-0.5)*180
+                ) * mass)
+            end)
+            mp.AssemblyLinearVelocity = dir * Shock.OutSpeed + Vector3.new(0, Shock.UpSpeed, 0)
+            task.delay(0.15, function() pcall(safeStopDrag, m) end)
+            task.delay(0.35, function() if snap then setCollide(m, true, snap) end end)
+            task.delay(0.9, function()
+                for _,p in ipairs(getParts(m)) do
+                    pcall(function() p:SetNetworkOwner(nil) end)
+                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                end
+            end)
+        end)
+    end
+
+    local function shockImpulseCharacter(m, origin)
+        local hr = m and m:FindFirstChild("HumanoidRootPart")
+        if not (hr and hr:IsA("BasePart")) then return end
+        if Players:GetPlayerFromCharacter(m) == lp then return end
+        local diff = hr.Position - origin
+        local dir = Vector3.new(diff.X, 0, diff.Z)
+        local mag = dir.Magnitude
+        if mag < 1e-3 then dir = Vector3.new(0,0,1) else dir = dir / mag end
+        pcall(function()
+            hr.AssemblyLinearVelocity = dir * (Shock.OutSpeed * 0.5) + Vector3.new(0, Shock.UpSpeed * 0.4, 0)
+        end)
+        pcall(function()
+            hr:ApplyImpulse(dir * 200 + Vector3.new(0, 120, 0))
+        end)
+    end
+
+    local function performShockwave()
+        local r = hrp()
+        if not r then return end
+        local origin = r.Position
+
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+
+        local parts = WS:GetPartBoundsInRadius(origin, Shock.Radius, params) or {}
+        local seen = {}
+
+        for _,part in ipairs(parts) do
+            if not part:IsA("BasePart") then continue end
+            local mdl = part:FindFirstAncestorOfClass("Model") or part
+            if seen[mdl] then continue end
+            seen[mdl] = true
+
+            if mdl:IsDescendantOf(lp.Character) then continue end
+
+            if isCharModel(mdl) then
+                local p2 = Players:GetPlayerFromCharacter(mdl)
+                if not p2 then
+                    shockImpulseCharacter(mdl, origin)
+                else
+                    shockImpulseCharacter(mdl, origin)
+                end
+            else
+                local mass, cnt, anchored = massCountAnchored(mdl)
+                if not anchored and cnt <= Shock.ItemMaxParts and mass <= Shock.ItemMaxMass then
+                    shockImpulseItem(mdl, origin)
+                end
+            end
+        end
+    end
+
+    local function ensureEdgeButton()
+        if shockEdgeHandle then return end
+        if UI and UI.AddEdgeButton then
+            shockEdgeHandle = UI:AddEdgeButton({
+                Title = "Shockwave",
+                Callback = performShockwave
+            })
+        elseif UI and UI.EdgeButtons and UI.EdgeButtons.Add then
+            shockEdgeHandle = UI.EdgeButtons:Add({ Title = "Shockwave", Callback = performShockwave })
+        else
+            local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui", 5)
+            if not pg then return end
+            local gui = Instance.new("ScreenGui")
+            gui.Name = "ShockwaveEdge"
+            gui.ResetOnSpawn = false
+            gui.Parent = pg
+            local btn = Instance.new("TextButton")
+            btn.Name = "ShockBtn"
+            btn.Size = UDim2.new(0, 120, 0, 36)
+            btn.Position = UDim2.new(1, -130, 0, 80)
+            btn.Text = "Shockwave"
+            btn.BackgroundColor3 = Color3.fromRGB(30,30,30)
+            btn.TextColor3 = Color3.fromRGB(255,255,255)
+            btn.Parent = gui
+            btn.MouseButton1Click:Connect(performShockwave)
+            shockFallbackGui = gui
+            shockEdgeHandle = true
+        end
+    end
+
+    local function removeEdgeButton()
+        shockEdgeHandle = nil
+        if UI and UI.RemoveEdgeButton and UI.RemoveEdgeButton then
+            pcall(function() UI:RemoveEdgeButton("Shockwave") end)
+        end
+        if shockFallbackGui then
+            pcall(function() shockFallbackGui:Destroy() end)
+            shockFallbackGui = nil
+        end
+    end
+
+    tab:Toggle({
+        Title = "Edge Button: Shockwave",
+        Value = false,
+        Callback = function(on)
+            shockEdgeEnabled = on == true
+            if shockEdgeEnabled then
+                ensureEdgeButton()
+            else
+                removeEdgeButton()
+            end
         end
     })
 end
