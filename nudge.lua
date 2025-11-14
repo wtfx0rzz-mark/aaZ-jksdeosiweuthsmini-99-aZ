@@ -45,20 +45,17 @@ return function(C, R, UI)
             return t
         end
 
+        -- Modified: never changes CanCollide at all; only snapshots if needed
         local function setCollide(model, on, snap)
             local parts = getParts(model)
+            -- We no longer restore or modify CanCollide; this is a no-op on "on"
             if on and snap then
-                for part, can in pairs(snap) do
-                    if part and part.Parent then
-                        part.CanCollide = can
-                    end
-                end
                 return
             end
+            -- On "off" we only take a snapshot of current state but do not change it
             local s = {}
             for _, p in ipairs(parts) do
                 s[p] = p.CanCollide
-                p.CanCollide = false
             end
             return s
         end
@@ -200,6 +197,7 @@ return function(C, R, UI)
 
             if dist < Nudge.SelfSafe then
                 local out = fromPos + away.Unit * (Nudge.SelfSafe + 0.5)
+                -- previously setCollide(model,false) and later true; now no collide changes
                 local snap0 = setCollide(model, false)
                 zeroAssembly(model)
                 if model:IsA("Model") then
@@ -224,6 +222,7 @@ return function(C, R, UI)
 
             task.spawn(function()
                 local started = preDrag(model)
+                -- previously disabled collide; now we just snapshot but never change it
                 local snap    = setCollide(model, false)
 
                 for _, p in ipairs(getParts(model)) do
@@ -260,6 +259,7 @@ return function(C, R, UI)
                     end
                 end)
 
+                -- previously restored collide after 0.45s; now no collide toggling
                 task.delay(0.45, function()
                     if snap then
                         setCollide(model, true, snap)
