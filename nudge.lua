@@ -1,4 +1,4 @@
--- troll.lua
+-- nudge.lua
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
@@ -9,8 +9,8 @@ return function(C, R, UI)
     local lp = Players.LocalPlayer
 
     local Tabs = (UI and UI.Tabs) or {}
-    local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
-    assert(tab, "Troll tab not found")
+    local tab  = Tabs.Nudge or Tabs.Main or Tabs.Auto
+    assert(tab, "Nudge tab not found")
 
     local INITIAL_POPULATE_DELAY = 2.0
 
