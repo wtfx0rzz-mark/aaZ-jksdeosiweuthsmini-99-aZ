@@ -15,6 +15,7 @@ return function(C, R, UI)
     local INITIAL_POPULATE_DELAY = 2.0
     local TICK = 0.02
     local SEARCH_RADIUS = 200
+
     local CFG = {
         DesiredLogs = 5, Speed = 1.0, HeightRange = 5.0, CloudMinR = 2.0, CloudMaxR = 9.0,
         CampRadius = 35, ScrapRadius = 35, AvoidLift = 15, AvoidReeval = 0.2,
@@ -48,7 +49,8 @@ return function(C, R, UI)
     local function getParts(target)
         local t = {}
         if not target then return t end
-        if target:IsA("BasePart") then t[1] = target
+        if target:IsA("BasePart") then
+            t[1] = target
         elseif target:IsA("Model") then
             for _,d in ipairs(target:GetDescendants()) do
                 if d:IsA("BasePart") then t[#t+1] = d end
@@ -135,7 +137,9 @@ return function(C, R, UI)
     local function playersList()
         local vals = {}
         for _,p in ipairs(Players:GetPlayers()) do
-            if p ~= lp then vals[#vals+1]=("%s#%d"):format(p.Name, p.UserId) end
+            if p ~= lp then
+                vals[#vals+1]=("%s#%d"):format(p.Name, p.UserId)
+            end
         end
         table.sort(vals)
         return vals
@@ -245,6 +249,28 @@ return function(C, R, UI)
         end
         return false, nil
     end
+
+    ----------------------------------------------------------------
+    -- Player selection AT TOP
+    ----------------------------------------------------------------
+    tab:Section({ Title = "Targets" })
+    local selectedSet, playerDD = {}, nil
+    local function buildPlayerDropdownOnce()
+        if playerDD then return end
+        playerDD = tab:Dropdown({
+            Title = "Players",
+            Values = playersList(),
+            Multi = true,
+            AllowNone = true,
+            Callback = function(choice) selectedSet = parseSelection(choice) end
+        })
+    end
+    task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
+
+    ----------------------------------------------------------------
+    -- Chaotic Log Smog
+    ----------------------------------------------------------------
+    tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
     local running = false
     local desiredPerTarget = CFG.DesiredLogs
@@ -437,8 +463,9 @@ return function(C, R, UI)
             local uid = tgt.UserId
             local have = countByUid[uid] or 0
             if have < wantPer then
-                local deficit, toAdd, idx = wantPer - have, nil, 1
-                toAdd = math.clamp(deficit, 1, 12)
+                local deficit = wantPer - have
+                local toAdd = math.clamp(deficit, 1, 12)
+                local idx = 1
                 while toAdd > 0 and idx <= #scanCache do
                     local mdl = scanCache[idx]; idx += 1
                     if mdl and mdl.Parent and not active[mdl] then
@@ -466,19 +493,6 @@ return function(C, R, UI)
         active = {}; activeList = {}; activeByUid = {}; countByUid = {}
     end
 
-    tab:Section({ Title = "Troll: Chaotic Log Smog" })
-    local selectedSet, playerDD = {}, nil
-    local function buildPlayerDropdownOnce()
-        if playerDD then return end
-        playerDD = tab:Dropdown({
-            Title = "Players",
-            Values = playersList(),
-            Multi = true,
-            AllowNone = true,
-            Callback = function(choice) selectedSet = parseSelection(choice) end
-        })
-    end
-    task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
     tab:Slider({
         Title = "Logs (per target)",
         Value = { Min = 1, Max = 50, Default = 5 },
@@ -529,6 +543,9 @@ return function(C, R, UI)
     })
     tab:Button({ Title = "Stop", Callback = function() stopAll() end })
 
+    ----------------------------------------------------------------
+    -- Kick Shield (no-You, includes NPCs)
+    ----------------------------------------------------------------
     tab:Section({ Title = "Troll: Kick Shield" })
 
     local K = {
@@ -683,9 +700,16 @@ return function(C, R, UI)
         end
     })
 
+    ----------------------------------------------------------------
+    -- Edge Shockwave (edge button + sliders + affect players toggle)
+    ----------------------------------------------------------------
     tab:Section({ Title = "Edge Shockwave" })
 
-    local Shock = { Radius=40, ItemMaxMass=250, ItemMaxParts=120, UpSpeed=160, OutSpeed=240, Cooldown=0.8 }
+    local Shock = {
+        Radius=40, ItemMaxMass=250, ItemMaxParts=120,
+        UpSpeed=160, OutSpeed=240, Cooldown=0.8,
+        AffectPlayers=false
+    }
     local lastShockAtByModel = setmetatable({}, {__mode="k"})
     local shockEdgeHandle, shockFallbackGui = nil, nil
 
@@ -698,6 +722,7 @@ return function(C, R, UI)
         return total, cnt, anchored
     end
     local function isCharModel(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
+
     local function shockImpulseItem(m, origin)
         local now = os.clock()
         if lastShockAtByModel[m] and now - lastShockAtByModel[m] < Shock.Cooldown then return end
@@ -729,16 +754,20 @@ return function(C, R, UI)
             end)
         end)
     end
+
     local function shockImpulseCharacter(m, origin)
+        local humCharPlayer = Players:GetPlayerFromCharacter(m)
+        if humCharPlayer == lp then return end
+        if humCharPlayer and not Shock.AffectPlayers then return end
         local hr = m and m:FindFirstChild("HumanoidRootPart")
         if not (hr and hr:IsA("BasePart")) then return end
-        if Players:GetPlayerFromCharacter(m) == lp then return end
         local diff = hr.Position - origin
         local dir = Vector3.new(diff.X, 0, diff.Z); local mag = dir.Magnitude
         if mag < 1e-3 then dir = Vector3.new(0,0,1) else dir = dir / mag end
         pcall(function() hr.AssemblyLinearVelocity = dir * (Shock.OutSpeed * 0.5) + Vector3.new(0, Shock.UpSpeed * 0.4, 0) end)
         pcall(function() hr:ApplyImpulse(dir * 200 + Vector3.new(0, 120, 0)) end)
     end
+
     local function performShockwave()
         local r = hrp(); if not r then return end
         local origin = r.Position
@@ -763,6 +792,7 @@ return function(C, R, UI)
             end
         end
     end
+
     local function ensureEdgeButton()
         if shockEdgeHandle then return end
         if UI and UI.AddEdgeButton then
@@ -786,9 +816,32 @@ return function(C, R, UI)
         if UI and UI.RemoveEdgeButton then pcall(function() UI:RemoveEdgeButton("Shockwave") end) end
         if shockFallbackGui then pcall(function() shockFallbackGui:Destroy() end); shockFallbackGui = nil end
     end
+
     tab:Toggle({
         Title = "Edge Button: Shockwave",
         Value = false,
         Callback = function(on) if on then ensureEdgeButton() else removeEdgeButton() end end
+    })
+
+    tab:Slider({
+        Title = "Shockwave Distance",
+        Value = { Min = 100, Max = 400, Default = 240 },
+        Callback = function(v)
+            local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
+            if n then Shock.OutSpeed = math.clamp(n, 100, 400) end
+        end
+    })
+    tab:Slider({
+        Title = "Shockwave Height",
+        Value = { Min = 80, Max = 300, Default = 160 },
+        Callback = function(v)
+            local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
+            if n then Shock.UpSpeed = math.clamp(n, 80, 300) end
+        end
+    })
+    tab:Toggle({
+        Title = "Shockwave: Affect Players",
+        Value = false,
+        Callback = function(on) Shock.AffectPlayers = (on == true) end
     })
 end
