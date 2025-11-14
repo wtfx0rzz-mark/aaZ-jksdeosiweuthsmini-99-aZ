@@ -2,7 +2,6 @@
 return function(C, R, UI)
     C  = C  or _G.C
     UI = UI or _G.UI
-
     local Players  = (C and C.Services and C.Services.Players)  or game:GetService("Players")
     local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
@@ -14,9 +13,9 @@ return function(C, R, UI)
     assert(tab, "Troll tab not found")
 
     local INITIAL_POPULATE_DELAY = 2.0
+
     local TICK = 0.02
     local SEARCH_RADIUS = 200
-
     local CFG = {
         DesiredLogs = 5,
         Speed       = 1.0,
@@ -58,7 +57,7 @@ return function(C, R, UI)
     local JIT_Y1,  JIT_Y2  = 0.9, 0.6
     local W_XZ1_MIN, W_XZ1_MAX = 1.2, 2.4
     local W_XZ2_MIN, W_XZ2_MAX = 2.0, 3.6
-    privateW_Y1_MIN= 1.0 W_Y1_MAX= 2.0
+    local W_Y1_MIN,  W_Y1_MAX  = 1.0, 2.0
     local W_Y2_MIN,  W_Y2_MAX  = 2.0, 4.0
 
     local REASSIGN_IF_LOST_S = 2.0
@@ -68,7 +67,6 @@ return function(C, R, UI)
         local ch = p.Character or p.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
-
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -78,7 +76,6 @@ return function(C, R, UI)
         end
         return nil
     end
-
     local function getParts(target)
         local t = {}
         if not target then return t end
@@ -91,7 +88,6 @@ return function(C, R, UI)
         end
         return t
     end
-
     local function setCollide(model, on, snap)
         local parts = getParts(model)
         if on and snap then
@@ -102,14 +98,12 @@ return function(C, R, UI)
         for _,p in ipairs(parts) do s[p]=p.CanCollide; p.CanCollide=false end
         return s
     end
-
     local function zeroAssembly(model)
         for _,p in ipairs(getParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
         end
     end
-
     local function getPivotPos(model)
         if model:IsA("Model") then
             local ok, cf = pcall(model.GetPivot, model)
@@ -119,17 +113,14 @@ return function(C, R, UI)
             local mp = mainPart(model); return mp and mp.Position or nil
         end
     end
-
     local function setPivot(model, cf)
         if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
     end
-
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
         return nil
     end
-
     local REM = { StartDrag=nil, StopDrag=nil }
     local function resolveRemotes()
         REM.StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem")
@@ -141,12 +132,10 @@ return function(C, R, UI)
         if REM.StartDrag and model and model.Parent then pcall(function() REM.StartDrag:FireServer(model) end); return true end
         return false
     end
-
     local function safeStopDrag(model)
         if REM.StopDrag and model and model.Parent then pcall(function() REM.StopDrag:FireServer(model) end); return true end
         return false
     end
-
     local function finallyStopDrag(model)
         task.delay(0.05, function() pcall(safeStopDrag, model) end)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
@@ -186,7 +175,6 @@ return function(C, R, UI)
         table.sort(vals)
         return vals
     end
-
     local function parseSelection(choice)
         local set = {}
         if type(choice) == "table" then
@@ -200,7 +188,6 @@ return function(C, R, UI)
         end
         return set
     end
-
     local function selectedPlayersList(set)
         local out = {}
         for _,p in ipairs(Players:GetPlayers()) do
@@ -210,7 +197,6 @@ return function(C, R, UI)
     end
 
     local function rngFor(seed) return Random.new(math.clamp(math.floor((seed or 0) * 100000) % 2^31, 1, 2^31-1)) end
-
     local function heightMinMax()
         local span = math.clamp(CFG.HeightRange, 1, 10)
         local minY = -0.4 * span
@@ -219,7 +205,6 @@ return function(C, R, UI)
     end
 
     local campCache, scrapCache, lastAvoidAt = nil, nil, 0
-
     local function partCenter(m)
         if not m then return nil end
         local mp = mainPart(m)
@@ -227,7 +212,6 @@ return function(C, R, UI)
         local ok, cf = pcall(function() return m:GetPivot() end)
         return ok and cf.Position or nil
     end
-
     local function findByNames(names)
         local best, bestDist = nil, math.huge
         for _,d in ipairs(WS:GetDescendants()) do
@@ -249,7 +233,6 @@ return function(C, R, UI)
         end
         return best
     end
-
     local function refreshAvoidTargets(now)
         if now - lastAvoidAt < CFG.AvoidReeval then return end
         lastAvoidAt = now
@@ -263,7 +246,6 @@ return function(C, R, UI)
             scrapCache = findByNames({ "scrapper", "scrap", "scrapperstation" })
         end
     end
-
     local function hazardInfo()
         refreshAvoidTargets(os.clock())
         local list = {}
@@ -271,7 +253,6 @@ return function(C, R, UI)
         if scrapCache then table.insert(list, {center=partCenter(scrapCache), r=CFG.ScrapRadius}) end
         return list
     end
-
     local function projectOutOfHazards(pos)
         local hs = hazardInfo()
         if #hs == 0 then return pos end
@@ -292,7 +273,6 @@ return function(C, R, UI)
         end
         return pos
     end
-
     local function insideHazard(base)
         local hs = hazardInfo()
         for _,h in ipairs(hs) do
@@ -368,7 +348,6 @@ return function(C, R, UI)
             zeroAssembly(model)
         end)
     end
-
     local function shed(model)
         local st = active[model]
         active[model] = nil
@@ -405,7 +384,6 @@ return function(C, R, UI)
             st.reslotAt = now + reslotK
         end
     end
-
     local function maybeBurst(st)
         local now = os.clock()
         if now < st.burstUntil then return end
@@ -433,7 +411,6 @@ return function(C, R, UI)
         end
         return base, look
     end
-
     local function maybeStartNudge(st, dt)
         if os.clock() < st.nudgeUntil then return end
         local chance = CFG.NudgeChancePerSec * CFG.Speed
@@ -480,7 +457,6 @@ return function(C, R, UI)
             end
             st.lastVel = vel
         end
-
         if os.clock() < st.burstUntil then
             local dir = st.flipPushDir or (-off).Unit
             off = off + dir * (CFG.FlipPush + BURST_PUSH_BASE) * CFG.Speed * st.burstDir
@@ -516,7 +492,6 @@ return function(C, R, UI)
         else
             lookVec = lookVec.Unit
         end
-
         setPivot(model, CFrame.new(posCandidate, posCandidate + lookVec))
 
         for _,p in ipairs(getParts(model)) do
@@ -582,9 +557,11 @@ return function(C, R, UI)
         active = {}; activeList = {}; activeByUid = {}; countByUid = {}
     end
 
-    tab:Section({ Title = "Players" })
+    tab:Section({ Title = "Troll: Chaotic Log Smog" })
+
     local selectedSet = {}
     local playerDD
+
     local function buildPlayerDropdownOnce()
         if playerDD then return end
         playerDD = tab:Dropdown({
@@ -599,7 +576,6 @@ return function(C, R, UI)
     end
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
-    tab:Section({ Title = "Chaotic Log Smog" })
     tab:Slider({
         Title = "Logs (per target)",
         Value = { Min = 1, Max = 50, Default = 5 },
@@ -608,7 +584,6 @@ return function(C, R, UI)
             if n then desiredPerTarget = math.clamp(math.floor(n + 0.5), 1, 50) end
         end
     })
-
     tab:Slider({
         Title = "Speed",
         Value = { Min = 0.5, Max = 3.0, Default = 1.0 },
@@ -617,7 +592,6 @@ return function(C, R, UI)
             if n then CFG.Speed = math.clamp(n, 0.5, 3.0) end
         end
     })
-
     tab:Slider({
         Title = "Height Range",
         Value = { Min = 1.0, Max = 10.0, Default = 5.0 },
@@ -656,343 +630,4 @@ return function(C, R, UI)
     })
 
     tab:Button({ Title = "Stop", Callback = function() stopAll() end })
-
-    ------------------------------------------------------------------------------------
-    -- EXISTING SHOCKWAVE SECTION (YOUR ORIGINAL)
-    ------------------------------------------------------------------------------------
-
-    local function itemsRoot() return WS:FindFirstChild("Items") end
-    local function isCharacterModel(m) return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil end
-    local function isNPCModel(m)
-        if not isCharacterModel(m) then return false end
-        if Players:GetPlayerFromCharacter(m) then return false end
-        local n = (m.Name or ""):lower()
-        if n:find("horse", 1, true) then return false end
-        return true
-    end
-
-    local function charHRP(m)
-        if not (m and m:IsA("Model")) then return nil end
-        local h = m:FindFirstChild("HumanoidRootPart")
-        if h and h:IsA("BasePart") then return h end
-        local pp = m.PrimaryPart
-        if pp and pp:IsA("BasePart") then return pp end
-        return nil
-    end
-
-    local function isItemModel(model)
-        local root = itemsRoot()
-        return root and model and model:IsDescendantOf(root) and (not isCharacterModel(model)) or false
-    end
-
-    local NU_MAX_PARTS = 120
-    local function isStaticOrHuge(model)
-        if not (model and model.Parent) then return true end
-        if model == WS.Terrain then return true end
-        if WS:FindFirstChild("Map") and model:IsDescendantOf(WS.Map) then return true end
-        local count, anyAnchored = 0, false
-        for _,p in ipairs(getParts(model)) do
-            count += 1
-            if p.Anchored then anyAnchored = true end
-            if count > NU_MAX_PARTS then return true end
-        end
-        if anyAnchored then return true end
-        return false
-    end
-
-    local Nudge = { Dist = 50, Up = 20, Radius = 15, SelfSafe = 3.5 }
-    local AutoNudge = { Enabled = false }
-
-    local function unitOr(v, fallback)
-        local m = v.Magnitude
-        if m > 1e-3 then return v / m end
-        return fallback
-    end
-
-    local function preDrag(model)
-        local started = safeStartDrag(model)
-        if started then task.wait(0.02) end
-        return started
-    end
-
-    local function impulseItem(model, fromPos)
-        if not isItemModel(model) then return end
-        if isStaticOrHuge(model) then return end
-        local mp = mainPart(model); if not mp then return end
-        local pos = mp.Position
-        local away = Vector3.new(pos.X - fromPos.X, 0, pos.Z - fromPos.Z)
-        if away.Magnitude < 1e-3 then return end
-        if away.Magnitude < Nudge.SelfSafe then
-            local out = fromPos + away.Unit * (Nudge.SelfSafe + 0.75)
-            local snap0 = setCollide(model, false)
-            zeroAssembly(model)
-            if model:IsA("Model") then model:PivotTo(CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z)))
-            else mp.CFrame = CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z)) end
-            setCollide(model, true, snap0)
-            pos  = (mainPart(model) or mp).Position
-            away = Vector3.new(pos.X - fromPos.X, 0, pos.Z - fromPos.Z)
-        end
-        local dir = unitOr(away, Vector3.new(0,0,1))
-        local horizSpeed = math.clamp(Nudge.Dist, 10, 200) * 4.0
-        local upSpeed    = math.clamp(Nudge.Up,   5,  120) * 7.0
-        task.spawn(function()
-            local started = preDrag(model)
-            local snap = setCollide(model, false)
-            for _,p in ipairs(getParts(model)) do
-                pcall(function() p:SetNetworkOwner(lp) end)
-                p.AssemblyLinearVelocity  = Vector3.new()
-                p.AssemblyAngularVelocity = Vector3.new()
-            end
-            local mass = 1
-            pcall(function() mass = math.max(mp:GetMass(), 1) end)
-            pcall(function() mp:ApplyImpulse(dir * horizSpeed * mass + Vector3.new(0, upSpeed * mass, 0)) end)
-            pcall(function()
-                mp:ApplyAngularImpulse(Vector3.new(
-                    (math.random()-0.5)*150,
-                    (math.random()-0.5)*200,
-                    (math.random()-0.5)*150
-                ) * mass)
-            end)
-            mp.AssemblyLinearVelocity = dir * horizSpeed + Vector3.new(0, upSpeed, 0)
-            task.delay(0.14, function() if started then pcall(safeStopDrag, model) end end)
-            task.delay(0.45, function() if snap then setCollide(model, true, snap) end end)
-            task.delay(0.9, function()
-                for _,p in ipairs(getParts(model)) do
-                    pcall(function() p:SetNetworkOwner(nil) end)
-                    pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
-                end
-            end)
-        end)
-    end
-
-    local function impulseNPC(mdl, fromPos)
-        local r = charHRP(mdl); if not r then return end
-        local pos = r.Position
-        local away = Vector3.new(pos.X - fromPos.X, 0, pos.Z - fromPos.Z)
-        local dir = unitOr(away, Vector3.new(0,0,1))
-        local vel = dir * (math.clamp(Nudge.Dist,10,200) * 2.0) + Vector3.new(0, math.clamp(Nudge.Up,5,120) * 3.0, 0)
-        pcall(function() r.AssemblyLinearVelocity = vel end)
-    end
-
-    local function nudgeShockwave(origin, radius)
-        local excludes = { lp.Character, WS.Terrain }
-        if WS:FindFirstChild("Map") then table.insert(excludes, WS.Map) end
-        if WS:FindFirstChild("Characters") then table.insert(excludes, WS.Characters) end
-
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = excludes
-
-        local parts = WS:GetPartBoundsInRadius(origin, radius, params) or {}
-        local seen = {}
-        for _, part in ipairs(parts) do
-            if not part:IsA("BasePart") then continue end
-            local mdl = part:FindFirstAncestorOfClass("Model") or part
-            if seen[mdl] then continue end
-            seen[mdl] = true
-            if isCharacterModel(mdl) then
-                if isNPCModel(mdl) then impulseNPC(mdl, origin) end
-            else
-                if isItemModel(mdl) then impulseItem(mdl, origin) end
-            end
-        end
-    end
-
-    tab:Section({ Title = "Shockwave Nudge" })
-    local edgeBtnId = nil
-    local function ensureEdgeButton(on)
-        local Edge = UI and UI.EdgeButtons
-        if not Edge then return end
-        if on and not edgeBtnId then
-            edgeBtnId = Edge:Add({
-                Title = "Shockwave",
-                Callback = function()
-                    local r = hrp()
-                    if r then nudgeShockwave(r.Position, Nudge.Radius) end
-                end
-            })
-        elseif (not on) and edgeBtnId then
-            pcall(function() Edge:Remove(edgeBtnId) end)
-            edgeBtnId = nil
-        end
-    end
-
-    tab:Toggle({
-        Title = "Edge Button: Shockwave",
-        Value = C.State and C.State.Toggles and C.State.Toggles.EdgeShockwave or false,
-        Callback = function(on)
-            C.State = C.State or { Toggles = {} }
-            C.State.Toggles = C.State.Toggles or {}
-            C.State.Toggles.EdgeShockwave = on and true or false
-            ensureEdgeButton(on)
-        end
-    })
-
-    tab:Slider({
-        Title = "Nudge Distance",
-        Value = { Min = 10, Max = 200, Default = Nudge.Dist },
-        Callback = function(v)
-            local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then Nudge.Dist = math.clamp(math.floor(n+0.5), 10, 200) end
-        end
-    })
-
-    tab:Slider({
-        Title = "Nudge Height",
-        Value = { Min = 5, Max = 120, Default = Nudge.Up },
-        Callback = function(v)
-            local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then Nudge.Up = math.clamp(math.floor(n+0.5), 5, 120) end
-        end
-    })
-
-    tab:Slider({
-        Title = "Nudge Radius",
-        Value = { Min = 5, Max = 80, Default = Nudge.Radius },
-        Callback = function(v)
-            local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then Nudge.Radius = math.clamp(math.floor(n+0.5), 5, 80) end
-        end
-    })
-
-    tab:Toggle({
-        Title = "Auto Nudge (within Radius)",
-        Value = AutoNudge.Enabled,
-        Callback = function(on)
-            AutoNudge.Enabled = (on == true)
-        end
-    })
-
-    local autoConn
-    if autoConn then autoConn:Disconnect() autoConn=nil end
-    autoConn = Run.Heartbeat:Connect(function()
-        if not AutoNudge.Enabled then return end
-        local r = hrp(); if not r then return end
-        nudgeShockwave(r.Position, Nudge.Radius)
-    end)
-
-    ensureEdgeButton(C.State and C.State.Toggles and C.State.Toggles.EdgeShockwave)
-
-    ------------------------------------------------------------------------------------
-    -- NOW ADD **NEW** PLAYER-KNOCKBACK SHOCKWAVE (YOUR REQUEST)
-    ------------------------------------------------------------------------------------
-
-    tab:Section({ Title = "Knockback Shockwave" })
-
-    local KBS = {
-        Enabled = false,
-        AffectNPCs = true,
-        AffectItems = true,
-        Radius = 40,
-        Height = 20,
-        Power = 55,
-        Auto = false,
-    }
-
-    local kbButtonId = nil
-
-    local function kbApply(model, fromPos)
-        local mp = mainPart(model)
-        if not mp then return end
-        local away = (mp.Position - fromPos)
-        if away.Magnitude < 1e-3 then return end
-        local dir = away.Unit
-        local vel = dir * KBS.Power + Vector3.new(0, KBS.Height, 0)
-        pcall(function() mp.AssemblyLinearVelocity = vel end)
-    end
-
-    local function kbWave()
-        local root = hrp()
-        if not root then return end
-        local origin = root.Position
-
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { lp.Character }
-
-        local parts = WS:GetPartBoundsInRadius(origin, KBS.Radius, params) or {}
-        local seen = {}
-
-        for _,p in ipairs(parts) do
-            if not p:IsA("BasePart") then continue end
-            local mdl = p:FindFirstAncestorOfClass("Model") or p
-            if seen[mdl] then continue end
-            seen[mdl] = true
-
-            local isChar = mdl:FindFirstChildOfClass("Humanoid") ~= nil
-            local isNPC = isChar and (not Players:GetPlayerFromCharacter(mdl))
-            local isItem = isItemModel(mdl)
-
-            if isNPC and KBS.AffectNPCs then
-                kbApply(mdl, origin)
-            elseif isItem and KBS.AffectItems then
-                kbApply(mdl, origin)
-            end
-        end
-    end
-
-    -- UI
-    tab:Toggle({
-        Title = "Edge Button: Knockback",
-        Default = KBS.Enabled,
-        Callback = function(on)
-            KBS.Enabled = on
-            if on and not kbButtonId then
-                kbButtonId = UI.EdgeButtons:Add({
-                    Title = "KB",
-                    Callback = kbWave
-                })
-            elseif not on and kbButtonId then
-                UI.EdgeButtons:Remove(kbButtonId)
-                kbButtonId = nil
-            end
-        end
-    })
-
-    tab:Toggle({
-        Title = "Affect NPCs",
-        Default = KBS.AffectNPCs,
-        Callback = function(v) KBS.AffectNPCs = v end
-    })
-
-    tab:Toggle({
-        Title = "Affect Items",
-        Default = KBS.AffectItems,
-        Callback = function(v) KBS.AffectItems = v end
-    })
-
-    tab:Slider({
-        Title = "Shockwave Radius",
-        Value = {Min=10, Max=200, Default=KBS.Radius},
-        Callback = function(v)
-            KBS.Radius = tonumber(v.Value or v) or KBS.Radius
-        end
-    })
-
-    tab:Slider({
-        Title = "Knockback Power",
-        Value = {Min=5, Max=200, Default=KBS.Power},
-        Callback = function(v)
-            KBS.Power = tonumber(v.Value or v) or KBS.Power
-        end
-    })
-
-    tab:Slider({
-        Title = "Lift Height",
-        Value = {Min=1, Max=150, Default=KBS.Height},
-        Callback = function(v)
-            KBS.Height = tonumber(v.Value or v) or KBS.Height
-        end
-    })
-
-    tab:Toggle({
-        Title = "Auto Knockback",
-        Default = KBS.Auto,
-        Callback = function(v) KBS.Auto = v end
-    })
-
-    Run.Heartbeat:Connect(function()
-        if KBS.Auto then kbWave() end
-    end)
-
 end
