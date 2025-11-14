@@ -51,7 +51,7 @@ return function(C, R, UI)
     local NUDGE_DOWN     = 4
     local CULTIST_LIMIT  = math.huge
 
-    local PLACE_BATCH    = 8
+    local PLACE_BATCH    = 10
     local PLACE_YIELD_FN = function() Run.Heartbeat:Wait() end
 
     local function getRemote(...)
