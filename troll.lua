@@ -7,8 +7,8 @@ return function(C, R, UI)
     local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
-
     local lp = Players.LocalPlayer
+
     local Tabs = (UI and UI.Tabs) or {}
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     if not tab then return end
@@ -49,22 +49,6 @@ return function(C, R, UI)
         for _,p in ipairs(parts) do s[p]=p.CanCollide; p.CanCollide=false end
         return s
     end
-    local function safeStartDrag(model)
-        local re = RS:FindFirstChild("RemoteEvents")
-        local ev = re and (re:FindFirstChild("RequestStartDraggingItem") or re:FindFirstChild("StartDraggingItem"))
-        if ev and model and model.Parent then pcall(function() ev:FireServer(model) end) return true end
-        return false
-    end
-    local function safeStopDrag(model)
-        local re = RS:FindFirstChild("RemoteEvents")
-        local ev = re and (re:FindFirstChild("RequestStopDraggingItem") or re:FindFirstChild("StopDraggingItem"))
-        if ev and model and model.Parent then pcall(function() ev:FireServer(model) end) return true end
-        return false
-    end
-    local function finallyStopDrag(model)
-        task.delay(0.05, function() pcall(safeStopDrag, model) end)
-        task.delay(0.20, function() pcall(safeStopDrag, model) end)
-    end
     local function zeroAssembly(model)
         for _,p in ipairs(getParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
@@ -72,8 +56,46 @@ return function(C, R, UI)
         end
     end
 
+    local function getRemote(...)
+        local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
+        for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
+        return nil
+    end
+    local REM = { StartDrag=nil, StopDrag=nil }
+    local function resolveRemotes()
+        REM.StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem")
+        REM.StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem")
+    end
+    resolveRemotes()
+
+    local function safeStartDrag(model)
+        if REM.StartDrag and model and model.Parent then
+            pcall(function() REM.StartDrag:FireServer(model) end)
+            return true
+        end
+        return false
+    end
+    local function safeStopDrag(model)
+        if REM.StopDrag and model and model.Parent then
+            pcall(function() REM.StopDrag:FireServer(model) end)
+            return true
+        end
+        return false
+    end
+    local function finallyStopDrag(model)
+        task.delay(0.05, function() pcall(safeStopDrag, model) end)
+        task.delay(0.20, function() pcall(safeStopDrag, model) end)
+    end
+
     local function isCharacterModel(m)
         return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
+    end
+    local function isNPCModel(m)
+        if not isCharacterModel(m) then return false end
+        if Players:GetPlayerFromCharacter(m) then return false end
+        local n = (m.Name or ""):lower()
+        if n:find("horse", 1, true) then return false end
+        return true
     end
     local function charDistancePart(m)
         if not (m and m:IsA("Model")) then return nil end
@@ -88,15 +110,12 @@ return function(C, R, UI)
         local chars = WS:FindFirstChild("Characters")
         if not chars then return out end
         for _, mdl in ipairs(chars:GetChildren()) do
-            repeat
-                if not isCharacterModel(mdl) then break end
-                if Players:GetPlayerFromCharacter(mdl) then break end
-                local n = (mdl.Name or ""):lower()
-                if n:find("horse", 1, true) then break end
-                local dpart = charDistancePart(mdl); if not dpart then break end
-                if (dpart.Position - origin).Magnitude > radius then break end
-                out[#out+1] = mdl
-            until true
+            if isNPCModel(mdl) then
+                local dpart = charDistancePart(mdl)
+                if dpart and (dpart.Position - origin).Magnitude <= radius then
+                    out[#out+1] = mdl
+                end
+            end
         end
         return out
     end
@@ -109,23 +128,46 @@ return function(C, R, UI)
     end
 
     local Nudge = {
-        Dist = 50,  -- horizontal flight target (studs)
-        Up   = 20,  -- upward flight target (studs)
+        Dist = 50,
+        Up   = 20,
+        Radius = 15,     -- configurable radius for shockwave/auto
+        SelfSafe = 3.5,  -- minimum gap from me before impulse
     }
 
     local AutoNudge = {
         Enabled = false,
-        Radius  = 15.0,
         MaxPerFrame = 16
     }
 
+    local function preDrag(model)
+        local started = safeStartDrag(model)
+        if started then task.wait(0.02) end
+        return started
+    end
+
     local function impulseItem(model, fromPos)
         local mp = mainPart(model); if not mp then return end
-        local dir = horiz(mp.Position - fromPos); dir = unitOr(dir, Vector3.new(0,0,1))
-        local horizSpeed = math.clamp(Nudge.Dist, 10, 120) * 4.0
-        local upSpeed    = math.clamp(Nudge.Up,   5,  60) * 7.0
+        local pos = mp.Position
+        local away = horiz(pos - fromPos)
+        local dist = away.Magnitude
+        if dist < 1e-3 then return end
+        if dist < Nudge.SelfSafe then
+            local out = fromPos + away.Unit * (Nudge.SelfSafe + 0.5)
+            local snap0 = setCollide(model, false)
+            zeroAssembly(model)
+            if model:IsA("Model") then model:PivotTo(CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z))) else mp.CFrame = CFrame.new(Vector3.new(out.X, pos.Y + 0.5, out.Z)) end
+            setCollide(model, true, snap0)
+            pos = (mainPart(model) or mp).Position
+            away = horiz(pos - fromPos)
+            dist = away.Magnitude
+            if dist < 1e-3 then away = Vector3.new(0,0,1) end
+        end
+        local dir = unitOr(away, Vector3.new(0,0,1))
+        local horizSpeed = math.clamp(Nudge.Dist, 10, 160) * 4.0
+        local upSpeed    = math.clamp(Nudge.Up,   5,  80) * 7.0
+
         task.spawn(function()
-            pcall(safeStartDrag, model)
+            local started = preDrag(model)
             local snap = setCollide(model, false)
             for _,p in ipairs(getParts(model)) do
                 pcall(function() p:SetNetworkOwner(lp) end)
@@ -144,8 +186,8 @@ return function(C, R, UI)
                 ) * mass)
             end)
             mp.AssemblyLinearVelocity = dir * horizSpeed + Vector3.new(0, upSpeed, 0)
-            task.delay(0.12, function() pcall(safeStopDrag, model) end)
-            task.delay(0.32, function() if snap then setCollide(model, true, snap) end end)
+            task.delay(0.14, function() if started then pcall(safeStopDrag, model) end end)
+            task.delay(0.45, function() if snap then setCollide(model, true, snap) end end)
             task.delay(0.9, function()
                 for _,p in ipairs(getParts(model)) do
                     pcall(function() p:SetNetworkOwner(nil) end)
@@ -157,61 +199,37 @@ return function(C, R, UI)
 
     local function impulseNPC(mdl, fromPos)
         local r = charDistancePart(mdl); if not r then return end
-        local dir = horiz(r.Position - fromPos); dir = unitOr(dir, Vector3.new(0,0,1))
-        local before = r.AssemblyLinearVelocity
-        pcall(function()
-            r.AssemblyLinearVelocity = dir * (math.clamp(Nudge.Dist,10,120) * 2.0) + Vector3.new(0, math.clamp(Nudge.Up,5,60) * 3.0, 0)
-        end)
-        task.delay(0.05, function()
-            if (r.AssemblyLinearVelocity - before).Magnitude < 1 then
-                -- server likely enforcing; nothing else to do for NPCs beyond Characters scope
-            end
-        end)
+        local pos = r.Position
+        local away = horiz(pos - fromPos)
+        local dist = away.Magnitude
+        if dist < Nudge.SelfSafe then
+            away = unitOr(horiz((pos - fromPos)), Vector3.new(0,0,1))
+            pos = fromPos + away * (Nudge.SelfSafe + 0.5)
+        end
+        local dir = unitOr(away, Vector3.new(0,0,1))
+        local vel = dir * (math.clamp(Nudge.Dist,10,160) * 2.0) + Vector3.new(0, math.clamp(Nudge.Up,5,80) * 3.0, 0)
+        pcall(function() r.AssemblyLinearVelocity = vel end)
     end
 
-    local function nudgeShockwave(origin, itemRadius, npcRadius, maxItems)
-        local myRoot = hrp(); if not myRoot then return end
-        origin = origin or myRoot.Position
-        itemRadius = itemRadius or 22
-        npcRadius  = npcRadius  or 22
-        maxItems   = maxItems   or 64
-
+    local function nudgeShockwave(origin, radius)
+        local myChar = lp.Character
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { lp.Character }
+        params.FilterDescendantsInstances = { myChar }
 
-        local parts = WS:GetPartBoundsInRadius(origin, itemRadius, params) or {}
+        local parts = WS:GetPartBoundsInRadius(origin, radius, params) or {}
         local seen = {}
-        local pushed = 0
         for _, part in ipairs(parts) do
-            if pushed >= maxItems then break end
-            if part:IsA("BasePart") then
-                local mdl = part:FindFirstAncestorOfClass("Model") or part
-                if not seen[mdl] then
-                    seen[mdl] = true
-                    if not isCharacterModel(mdl) then
-                        local p = mainPart(mdl)
-                        if p and (p.Position - origin).Magnitude <= itemRadius then
-                            local totalMass, count, anchored = 0, 0, false
-                            for _,pp in ipairs(getParts(mdl)) do
-                                count += 1
-                                totalMass += pp:GetMass()
-                                if pp.Anchored then anchored = true break end
-                                if count > 80 then break end
-                            end
-                            if not anchored and count <= 80 and totalMass <= 200 then
-                                impulseItem(mdl, origin)
-                                pushed += 1
-                            end
-                        end
-                    end
-                end
-            end
-        end
+            if not part:IsA("BasePart") then continue end
+            local mdl = part:FindFirstAncestorOfClass("Model") or part
+            if seen[mdl] then continue end
+            seen[mdl] = true
 
-        local npcs = collectNPCsInRadius(origin, npcRadius)
-        for _, m in ipairs(npcs) do
-            impulseNPC(m, origin)
+            if isCharacterModel(mdl) then
+                if isNPCModel(mdl) then impulseNPC(mdl, origin) end
+            else
+                impulseItem(mdl, origin)
+            end
         end
     end
 
@@ -224,7 +242,7 @@ return function(C, R, UI)
                 Title = "Shockwave",
                 Callback = function()
                     local r = hrp()
-                    if r then nudgeShockwave(r.Position) end
+                    if r then nudgeShockwave(r.Position, Nudge.Radius) end
                 end
             })
         elseif (not on) and edgeBtnId then
@@ -246,33 +264,33 @@ return function(C, R, UI)
         end
     })
 
-    tab:Button({
-        Title = "Shockwave Now",
-        Callback = function()
-            local r = hrp()
-            if r then nudgeShockwave(r.Position) end
-        end
-    })
-
     tab:Slider({
         Title = "Nudge Distance",
-        Value = { Min = 10, Max = 120, Default = Nudge.Dist },
+        Value = { Min = 10, Max = 160, Default = Nudge.Dist },
         Callback = function(v)
             local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then Nudge.Dist = math.clamp(math.floor(n+0.5), 10, 120) end
+            if n then Nudge.Dist = math.clamp(math.floor(n+0.5), 10, 160) end
         end
     })
     tab:Slider({
         Title = "Nudge Height",
-        Value = { Min = 5, Max = 60, Default = Nudge.Up },
+        Value = { Min = 5, Max = 80, Default = Nudge.Up },
         Callback = function(v)
             local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
-            if n then Nudge.Up = math.clamp(math.floor(n+0.5), 5, 60) end
+            if n then Nudge.Up = math.clamp(math.floor(n+0.5), 5, 80) end
+        end
+    })
+    tab:Slider({
+        Title = "Nudge Radius",
+        Value = { Min = 5, Max = 60, Default = Nudge.Radius },
+        Callback = function(v)
+            local n = tonumber(type(v)=="table" and (v.Value or v.Current or v.Default) or v)
+            if n then Nudge.Radius = math.clamp(math.floor(n+0.5), 5, 60) end
         end
     })
 
     tab:Toggle({
-        Title = "Auto Nudge (15 studs)",
+        Title = "Auto Nudge (within Radius)",
         Value = AutoNudge.Enabled,
         Callback = function(on)
             AutoNudge.Enabled = (on == true)
@@ -284,43 +302,7 @@ return function(C, R, UI)
     autoConn = Run.Heartbeat:Connect(function()
         if not AutoNudge.Enabled then return end
         local r = hrp(); if not r then return end
-        local origin = r.Position
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { lp.Character }
-        local parts = WS:GetPartBoundsInRadius(origin, AutoNudge.Radius, params) or {}
-        local seen = {}
-        local nudged = 0
-        for _, part in ipairs(parts) do
-            if nudged >= AutoNudge.MaxPerFrame then break end
-            if part:IsA("BasePart") then
-                local mdl = part:FindFirstAncestorOfClass("Model") or part
-                if not seen[mdl] then
-                    seen[mdl] = true
-                    if isCharacterModel(mdl) then
-                        if not Players:GetPlayerFromCharacter(mdl) then
-                            impulseNPC(mdl, origin)
-                            nudged += 1
-                        end
-                    else
-                        local p = mainPart(mdl)
-                        if p then
-                            local totalMass, count, anchored = 0, 0, false
-                            for _,pp in ipairs(getParts(mdl)) do
-                                count += 1
-                                totalMass += pp:GetMass()
-                                if pp.Anchored then anchored = true break end
-                                if count > 80 then break end
-                            end
-                            if not anchored and count <= 80 and totalMass <= 200 then
-                                impulseItem(mdl, origin)
-                                nudged += 1
-                            end
-                        end
-                    end
-                end
-            end
-        end
+        nudgeShockwave(r.Position, Nudge.Radius)
     end)
 
     ensureEdgeButton(C.State and C.State.Toggles and C.State.Toggles.EdgeShockwave)
