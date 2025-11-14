@@ -341,19 +341,34 @@ return function(C, R, UI)
         if not Edge then return end
 
         if on and not edgeBtnId then
-            edgeBtnId = Edge:Add({
-                Title = "Shockwave",
-                Callback = function()
-                    local r = hrp()
-                    if r then
-                        nudgeShockwave(r.Position, Nudge.Radius)
+            -- Support either Edge:Add(...) or Edge:AddButton(...)
+            if Edge.Add then
+                edgeBtnId = Edge:Add({
+                    Title = "Shockwave",
+                    Callback = function()
+                        local r = hrp()
+                        if r then
+                            nudgeShockwave(r.Position, Nudge.Radius)
+                        end
                     end
-                end
-            })
+                })
+            elseif Edge.AddButton then
+                edgeBtnId = Edge:AddButton({
+                    Title = "Shockwave",
+                    Callback = function()
+                        local r = hrp()
+                        if r then
+                            nudgeShockwave(r.Position, Nudge.Radius)
+                        end
+                    end
+                })
+            end
         elseif (not on) and edgeBtnId then
-            pcall(function()
-                Edge:Remove(edgeBtnId)
-            end)
+            if Edge.Remove then
+                pcall(function()
+                    Edge:Remove(edgeBtnId)
+                end)
+            end
             edgeBtnId = nil
         end
     end
@@ -369,10 +384,11 @@ return function(C, R, UI)
     tab:Toggle({
         Title = "Edge Button: Shockwave",
         Value = initialEdge,
-        Callback = function(on)
+        Callback = function(v)
+            local on = (v == true)
             C.State = C.State or { Toggles = {} }
             C.State.Toggles = C.State.Toggles or {}
-            C.State.Toggles.EdgeShockwave = on and true or false
+            C.State.Toggles.EdgeShockwave = on
             ensureEdgeButton(on)
         end
     })
