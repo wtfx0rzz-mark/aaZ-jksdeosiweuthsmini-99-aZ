@@ -20,7 +20,7 @@ return function(C, R, UI)
 
     local INITIAL_POPULATE_DELAY = 2.0
 
-    local TICK         = 0.02
+    local TICK          = 0.02
     local SEARCH_RADIUS = 200
 
     local CFG = {
@@ -862,6 +862,7 @@ return function(C, R, UI)
         local pTargets = selectedPlayersList(selectedSet)
         if #pTargets == 0 then return end
 
+        -- continuously look for items near selected players, including temporarily anchored ones
         for _, tgt in ipairs(pTargets) do
             local root = hrp(tgt)
             if root then
@@ -878,9 +879,9 @@ return function(C, R, UI)
 
                 local parts = WS:GetPartBoundsInRadius(origin, PLAYER_NUDGE_RANGE, params) or {}
                 for _, part in ipairs(parts) do
-                    if part:IsA("BasePart") and not part.Anchored then
+                    if part:IsA("BasePart") then
                         local mdl = part:FindFirstAncestorOfClass("Model") or part
-                        if mdl and not isCharacterModel(mdl) and not active[mdl] then
+                        if mdl and mdl.Parent and not isCharacterModel(mdl) and not active[mdl] then
                             quickNudgeModel(mdl, origin, root.CFrame)
                         end
                     end
@@ -888,6 +889,7 @@ return function(C, R, UI)
             end
         end
 
+        -- handle the "float away into the sky" behavior for nudged items
         local now = os.clock()
         for mdl, info in pairs(driftItems) do
             if not mdl or not mdl.Parent then
@@ -901,7 +903,8 @@ return function(C, R, UI)
                     local height = pos.Y - (info.originY or pos.Y)
                     local t = now - (info.start or now)
 
-                    if height >= 20 then
+                    -- LOWERED threshold: start drifting once we are ~10 studs above origin
+                    if height >= 10 then
                         local driftDir = info.dir + Vector3.new(0, 1.0, 0)
                         if driftDir.Magnitude < 1e-3 then
                             driftDir = Vector3.new(0, 1, 0)
@@ -1029,7 +1032,7 @@ return function(C, R, UI)
                                     end
                                 end
 
-                                -- NEW: wall detection and "up the wall" behavior
+                                -- Wall detection & bunny-hop up walls
                                 if horizSpeed > 0 then
                                     local rcParams = RaycastParams.new()
                                     rcParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -1039,12 +1042,10 @@ return function(C, R, UI)
                                     local rc = WS:Raycast(itemPos, dir * castDist, rcParams)
                                     if rc and rc.Instance then
                                         local n = rc.Normal
-                                        -- Project motion along wall plane
                                         local alongWall = dir - dir:Dot(n) * n
                                         if alongWall.Magnitude > 1e-3 then
                                             dir = alongWall.Unit
                                         end
-                                        -- Push harder upward to climb while hopping
                                         upSpeed = upSpeed + 25
                                     end
                                 end
