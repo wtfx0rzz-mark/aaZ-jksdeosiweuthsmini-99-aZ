@@ -14,6 +14,10 @@ return function(C, R, UI)
     local tab  = Tabs.Troll or Tabs.Main or Tabs.Auto
     assert(tab, "Troll tab not found")
 
+    ---------------------------------------------------------------------
+    -- CONFIG
+    ---------------------------------------------------------------------
+
     local INITIAL_POPULATE_DELAY = 2.0
 
     local TICK          = 0.02
@@ -65,13 +69,16 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
+    -- Player Nudge config
     local PLAYER_NUDGE_RANGE    = 300
     local PLAYER_NUDGE_UP       = 20
     local PLAYER_NUDGE_AWAY     = 50
     local PLAYER_NUDGE_COOLDOWN = 0.10
 
+    -- Sink Items config
     local SINK_Y_TARGET         = -500
 
+    -- Items Avoid Players config
     local AVOID_ITEMS_RANGE     = 200
     local AVOID_NEAR_DIST       = 15
     local AVOID_STOP_DIST       = 30
@@ -79,6 +86,15 @@ return function(C, R, UI)
     local HOP_INTERVAL          = 0.40
     local HOP_UP_VEL            = 35
     local HOP_EXTRA_SPEED       = 10
+
+    -- Player-nudge drift parameters
+    local DRIFT_HEIGHT      = 10      -- height above player Y to start sky-drift
+    local DRIFT_MAX_HEIGHT  = 400     -- max height before we sink item
+    local DRIFT_MAX_TIME    = 10      -- max drift time before sink
+
+    ---------------------------------------------------------------------
+    -- HELPERS
+    ---------------------------------------------------------------------
 
     local function hrp(p)
         p = p or lp
@@ -362,6 +378,10 @@ return function(C, R, UI)
     local function itemsRoot()
         return WS:FindFirstChild("Items") or WS:FindFirstChild("items")
     end
+
+    ---------------------------------------------------------------------
+    -- CHAOTIC LOG SMOG STATE
+    ---------------------------------------------------------------------
 
     local running = false
     local desiredPerTarget = CFG.DesiredLogs
@@ -770,6 +790,10 @@ return function(C, R, UI)
         countByUid  = {}
     end
 
+    ---------------------------------------------------------------------
+    -- DROPDOWN STATE (SHARED)
+    ---------------------------------------------------------------------
+
     local selectedSet = {}
     local playerDD
 
@@ -789,27 +813,15 @@ return function(C, R, UI)
     buildPlayerDropdownOnce()
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
-    ----------------------------------------------------------------
-    -- PLAYER NUDGE + SKY DRIFT (Workspace.Items only)
-    ----------------------------------------------------------------
+    ---------------------------------------------------------------------
+    -- PLAYER NUDGE (REUSE BUNNY-HOP STYLE + SKY DRIFT)
+    ---------------------------------------------------------------------
 
     local playerNudgeEnabled = false
     local playerNudgeConn    = nil
 
     local lastNudgeItemAt = {}
     local driftItems      = {}  -- mdl -> { originY, dirXZ, start }
-
-    local DRIFT_HEIGHT      = 10
-    local DRIFT_MAX_HEIGHT  = 400
-    local DRIFT_MAX_TIME    = 10
-
-    local function markForDrift(mdl, originY, dirXZ)
-        driftItems[mdl] = {
-            originY = originY,
-            dirXZ   = dirXZ,
-            start   = os.clock()
-        }
-    end
 
     local function doPlayerNudgeStep(dt)
         if not playerNudgeEnabled then return end
@@ -822,57 +834,74 @@ return function(C, R, UI)
 
         local now = os.clock()
 
-        for _,mdl in ipairs(rootFolder:GetChildren()) do
-            if mdl and mdl.Parent and not isCharacterModel(mdl) and not active[mdl] then
-                local mp = mainPart(mdl)
-                if mp then
-                    local itemPos = mp.Position
-                    local nearestRoot
-                    local nearestDist = math.huge
-                    for _,tgt in ipairs(pTargets) do
-                        local root = hrp(tgt)
-                        if root then
-                            local d = (itemPos - root.Position).Magnitude
-                            if d < nearestDist then
-                                nearestDist = d
-                                nearestRoot = root
-                            end
-                        end
-                    end
+        -- Stage 1: assign new "drifter" items, using a hop similar to bunny-hopping logic
+        for _, desc in ipairs(rootFolder:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                local mdl = desc:FindFirstAncestorOfClass("Model") or desc
+                if mdl and mdl.Parent and not isCharacterModel(mdl) and not active[mdl] then
+                    if not driftItems[mdl] then
+                        local mp = mainPart(mdl)
+                        if mp then
+                            local itemPos = mp.Position
 
-                    if nearestRoot and nearestDist <= PLAYER_NUDGE_RANGE then
-                        local last = lastNudgeItemAt[mdl] or 0
-                        if now - last >= PLAYER_NUDGE_COOLDOWN then
-                            lastNudgeItemAt[mdl] = now
+                            local nearestRoot
+                            local nearestCF
+                            local nearestDist = math.huge
 
-                            local origin = nearestRoot.Position
-                            local toItem = itemPos - origin
-                            local horiz  = Vector3.new(toItem.X, 0, toItem.Z)
-                            if horiz.Magnitude < 1e-3 then
-                                local look = nearestRoot.CFrame.LookVector
-                                horiz = Vector3.new(look.X, 0, look.Z)
-                            end
-                            local dirXZ = (horiz.Magnitude > 1e-3) and horiz.Unit or Vector3.new(0, 0, 1)
-
-                            markForDrift(mdl, origin.Y, dirXZ)
-
-                            task.spawn(function()
-                                safeStartDrag(mdl)
-                                task.wait(0.03)
-                                local mp2 = mainPart(mdl)
-                                if mp2 then
-                                    local v = dirXZ * PLAYER_NUDGE_AWAY + Vector3.new(0, PLAYER_NUDGE_UP, 0)
-                                    mp2.AssemblyLinearVelocity = v
+                            for _, tgt in ipairs(pTargets) do
+                                local root = hrp(tgt)
+                                if root then
+                                    local d = (itemPos - root.Position).Magnitude
+                                    if d < nearestDist and d <= PLAYER_NUDGE_RANGE then
+                                        nearestDist = d
+                                        nearestRoot = root
+                                        nearestCF   = root.CFrame
+                                    end
                                 end
-                                finallyStopDrag(mdl)
-                            end)
+                            end
+
+                            if nearestRoot then
+                                local last = lastNudgeItemAt[mdl] or 0
+                                if now - last >= PLAYER_NUDGE_COOLDOWN then
+                                    lastNudgeItemAt[mdl] = now
+
+                                    local origin = nearestRoot.Position
+                                    local toItem = itemPos - origin
+                                    local horiz  = Vector3.new(toItem.X, 0, toItem.Z)
+                                    if horiz.Magnitude < 1e-3 and nearestCF then
+                                        local look = nearestCF.LookVector
+                                        horiz = Vector3.new(look.X, 0, look.Z)
+                                    end
+                                    local dirXZ = (horiz.Magnitude > 1e-3) and horiz.Unit or Vector3.new(0, 0, 1)
+
+                                    driftItems[mdl] = {
+                                        originY = origin.Y,
+                                        dirXZ   = dirXZ,
+                                        start   = now
+                                    }
+
+                                    -- Initial hop away + up, via remote drag so everyone sees it
+                                    task.spawn(function()
+                                        safeStartDrag(mdl)
+                                        task.wait(0.03)
+                                        local mp2 = mainPart(mdl)
+                                        if mp2 then
+                                            local v = dirXZ * PLAYER_NUDGE_AWAY + Vector3.new(0, PLAYER_NUDGE_UP, 0)
+                                            mp2.AssemblyLinearVelocity = v
+                                        end
+                                        finallyStopDrag(mdl)
+                                    end)
+                                end
+                            end
                         end
                     end
                 end
             end
         end
 
-        for mdl,info in pairs(driftItems) do
+        -- Stage 2: drift existing drifters smoothly up into the sky
+        local now2 = os.clock()
+        for mdl, info in pairs(driftItems) do
             if not mdl or not mdl.Parent then
                 driftItems[mdl] = nil
             else
@@ -880,41 +909,41 @@ return function(C, R, UI)
                 if not mp then
                     driftItems[mdl] = nil
                 else
-                    local pos   = mp.Position
-                    local h     = pos.Y - (info.originY or pos.Y)
-                    local tAge  = now - (info.start or now)
+                    local pos  = mp.Position
+                    local baseY = info.originY or pos.Y
+                    local h    = pos.Y - baseY
+                    local age  = now2 - (info.start or now2)
 
-                    if h >= DRIFT_HEIGHT then
-                        local dir = (info.dirXZ + Vector3.new(0, 1.0, 0))
-                        if dir.Magnitude < 1e-3 then
-                            dir = Vector3.new(0, 1, 0)
-                        end
-                        dir = dir.Unit
-                        local speed = 40 + tAge * 15
+                    local dir = info.dirXZ + Vector3.new(0, 1.0, 0)
+                    if dir.Magnitude < 1e-3 then
+                        dir = Vector3.new(0, 1, 0)
+                    end
+                    dir = dir.Unit
 
-                        mp.AssemblyLinearVelocity = dir * speed
-
-                        if h > DRIFT_MAX_HEIGHT or tAge > DRIFT_MAX_TIME then
-                            mp.CFrame = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
-                            driftItems[mdl] = nil
-                        end
+                    local speed
+                    if h < DRIFT_HEIGHT then
+                        -- still close to the ground: push more gently upward+away
+                        speed = 35
                     else
-                        local dir = (info.dirXZ + Vector3.new(0, 1.0, 0))
-                        if dir.Magnitude < 1e-3 then
-                            dir = Vector3.new(0, 1, 0)
-                        end
-                        dir = dir.Unit
-                        local speed = 30
-                        mp.AssemblyLinearVelocity = dir * speed
+                        -- once it's up ~10 studs, let it drift faster into the sky
+                        speed = 45 + age * 15
+                    end
+
+                    mp.AssemblyLinearVelocity = dir * speed
+
+                    -- final cleanup: sink below map after high enough / long enough
+                    if h > DRIFT_MAX_HEIGHT or age > DRIFT_MAX_TIME then
+                        mp.CFrame = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
+                        driftItems[mdl] = nil
                     end
                 end
             end
         end
     end
 
-    ----------------------------------------------------------------
+    ---------------------------------------------------------------------
     -- SINK ITEMS (Workspace.Items)
-    ----------------------------------------------------------------
+    ---------------------------------------------------------------------
 
     local sinkItemsEnabled = false
     local sinkItemsConn    = nil
@@ -943,9 +972,9 @@ return function(C, R, UI)
         end
     end
 
-    ----------------------------------------------------------------
-    -- ITEMS AVOID PLAYERS (bunny-hop + wall climb)
-    ----------------------------------------------------------------
+    ---------------------------------------------------------------------
+    -- ITEMS AVOID PLAYERS (BUNNY HOP + WALL CLIMB)  -- UNCHANGED
+    ---------------------------------------------------------------------
 
     local itemsAvoidEnabled = false
     local itemsAvoidConn    = nil
@@ -1020,6 +1049,7 @@ return function(C, R, UI)
                                     end
                                 end
 
+                                -- Wall detection & bunny-hop up walls
                                 if horizSpeed > 0 then
                                     local rcParams = RaycastParams.new()
                                     rcParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -1061,9 +1091,9 @@ return function(C, R, UI)
         end
     end
 
-    ----------------------------------------------------------------
-    -- UI
-    ----------------------------------------------------------------
+    ---------------------------------------------------------------------
+    -- UI WIRING
+    ---------------------------------------------------------------------
 
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
@@ -1182,6 +1212,8 @@ return function(C, R, UI)
                     playerNudgeConn:Disconnect()
                     playerNudgeConn = nil
                 end
+                driftItems      = {}
+                lastNudgeItemAt = {}
             end
         end
     })
