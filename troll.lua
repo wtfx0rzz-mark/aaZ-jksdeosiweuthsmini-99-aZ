@@ -64,8 +64,8 @@ return function(C, R, UI)
 
     -- Player Nudge config
     local PLAYER_NUDGE_RANGE    = 300   -- radius around each selected player
-    local PLAYER_NUDGE_UP       = 20    -- studs up
-    local PLAYER_NUDGE_AWAY     = 50    -- studs away
+    local PLAYER_NUDGE_UP       = 20    -- base studs up
+    local PLAYER_NUDGE_AWAY     = 50    -- base studs away
     local PLAYER_NUDGE_COOLDOWN = 0.10  -- per-item cooldown in seconds
 
     -- Sink Items config
@@ -382,13 +382,11 @@ return function(C, R, UI)
     local playerNudgeEnabled = false
     local playerNudgeConn    = nil
     local lastNudgeItemAt    = {}
+    local driftItems         = {}  -- items currently in "drift to sky" mode
 
     -- Sink Items runtime state
-    local sinkItemsEnabled      = false
-    local sinkItemsConn         = nil
-    local sinkItemsChildConn    = nil
-    local sinkItemsDescConn     = nil
-    local sinkProcessed         = setmetatable({}, { __mode = "k" }) -- weak keys
+    local sinkItemsEnabled = false
+    local sinkItemsConn    = nil
 
     ------------------------------------------------------------------------
     -- Orbit helpers
@@ -491,6 +489,7 @@ return function(C, R, UI)
                 end
             end)
         end
+        driftItems[model] = nil
     end
 
     local function ensureSlot(st)
@@ -725,11 +724,11 @@ return function(C, R, UI)
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
     ------------------------------------------------------------------------
-    -- Player Nudge helper (fixed to work for stationary players/logs)
+    -- Player Nudge helper (stronger + drift into sky)
     ------------------------------------------------------------------------
     local function quickNudgeModel(mdl, origin, rootCf)
         if not mdl or not mdl.Parent then return end
-        if active[mdl] then return end  -- don't fight the log smog
+        if active[mdl] then return end  -- don't fight log smog
 
         local now = os.clock()
         local last = lastNudgeItemAt[mdl] or 0
@@ -746,10 +745,20 @@ return function(C, R, UI)
             horiz = Vector3.new(look.X, 0, look.Z)
         end
         local dir = horiz.Magnitude > 1e-3 and horiz.Unit or Vector3.new(0, 0, 1)
-        local vel = dir * PLAYER_NUDGE_AWAY + Vector3.new(0, PLAYER_NUDGE_UP, 0)
+
+        -- Stronger initial push
+        local initialAway = PLAYER_NUDGE_AWAY * 1.5
+        local initialUp   = PLAYER_NUDGE_UP * 1.4
+        local vel = dir * initialAway + Vector3.new(0, initialUp, 0)
+
+        -- Track for drift phase
+        driftItems[mdl] = {
+            originY = origin.Y,
+            dir     = dir,
+            start   = now
+        }
 
         task.spawn(function()
-            -- Force server to give us control, then push
             safeStartDrag(mdl)
             task.wait(0.03)
             local mp2 = mainPart(mdl)
@@ -766,6 +775,7 @@ return function(C, R, UI)
         local pTargets = selectedPlayersList(selectedSet)
         if #pTargets == 0 then return end
 
+        -- Main “kick away” phase near the player
         for _, tgt in ipairs(pTargets) do
             local root = hrp(tgt)
             if root then
@@ -791,51 +801,69 @@ return function(C, R, UI)
                 end
             end
         end
+
+        -- Drift phase: once items are ~20 studs above origin height, let them float away
+        local now = os.clock()
+        for mdl, info in pairs(driftItems) do
+            if not mdl or not mdl.Parent then
+                driftItems[mdl] = nil
+            else
+                local mp = mainPart(mdl)
+                if not mp then
+                    driftItems[mdl] = nil
+                else
+                    local pos = mp.Position
+                    local height = pos.Y - (info.originY or pos.Y)
+                    local t = now - (info.start or now)
+
+                    if height >= 20 then
+                        -- Drift direction: mostly up, slightly along original away direction
+                        local driftDir = info.dir + Vector3.new(0, 1.0, 0)
+                        if driftDir.Magnitude < 1e-3 then
+                            driftDir = Vector3.new(0, 1, 0)
+                        end
+                        driftDir = driftDir.Unit
+
+                        -- Speed slowly ramps so it feels like it's “catching a breeze”
+                        local speed = 40 + t * 15
+                        mp.AssemblyLinearVelocity = driftDir * speed
+
+                        -- After high enough / long enough, dispose it
+                        if height > 300 or t > 10 then
+                            mp.CFrame = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
+                            driftItems[mdl] = nil
+                        end
+                    end
+                end
+            end
+        end
     end
 
     ------------------------------------------------------------------------
-    -- Sink Items helpers (faster + event-based)
+    -- Sink Items (brutal sweep of Workspace.Items)
     ------------------------------------------------------------------------
-    local function sinkOne(obj)
-        if not sinkItemsEnabled then return end
-
-        local rootFolder = itemsRoot()
-        if not rootFolder or not obj or not obj.Parent then return end
-        if not obj:IsDescendantOf(rootFolder) then return end
-
-        local mdl
-        if obj:IsA("Model") then
-            mdl = obj
-        elseif obj:IsA("BasePart") then
-            mdl = obj:FindFirstAncestorOfClass("Model") or obj
-        else
-            return
-        end
-
-        if not mdl or sinkProcessed[mdl] then return end
-        sinkProcessed[mdl] = true
-
-        local mp = mainPart(mdl)
-        if not mp then return end
-
-        local pos = mp.Position
-        local targetCf = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
-
-        if mdl:IsA("Model") then
-            setPivot(mdl, targetCf)
-        else
-            mp.CFrame = targetCf
-        end
-    end
-
     local function doSinkItemsStep(dt)
         if not sinkItemsEnabled then return end
         local rootFolder = itemsRoot()
         if not rootFolder then return end
 
-        -- Fallback / periodic sweep: catches anything that slipped past event hooks
-        for _, child in ipairs(rootFolder:GetChildren()) do
-            sinkOne(child)
+        -- Very aggressive: every Heartbeat, any BasePart under Items is teleported below map.
+        for _, desc in ipairs(rootFolder:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                local mdl = desc:FindFirstAncestorOfClass("Model") or desc
+                local mp  = mainPart(mdl)
+                if mp then
+                    local pos = mp.Position
+                    if pos.Y > SINK_Y_TARGET + 5 then
+                        local targetCf = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
+                        if mdl:IsA("Model") then
+                            setPivot(mdl, targetCf)
+                        else
+                            mp.CFrame = targetCf
+                        end
+                    end
+                end
+            end
         end
     end
 
@@ -938,7 +966,7 @@ return function(C, R, UI)
     })
 
     ------------------------------------------------------------------------
-    -- UI: Sink Items (fast)
+    -- UI: Sink Items
     ------------------------------------------------------------------------
     tab:Section({ Title = "Sink Items" })
 
@@ -947,41 +975,16 @@ return function(C, R, UI)
         Value = false,
         Callback = function(on)
             sinkItemsEnabled = (on == true)
-
             if sinkItemsEnabled then
-                -- Heartbeat sweep
                 if not sinkItemsConn then
                     sinkItemsConn = Run.Heartbeat:Connect(function(dt)
                         doSinkItemsStep(dt)
                     end)
                 end
-
-                -- Event hooks for "very very quickly" sinking
-                local rootFolder = itemsRoot()
-                if rootFolder then
-                    if not sinkItemsChildConn then
-                        sinkItemsChildConn = rootFolder.ChildAdded:Connect(function(child)
-                            sinkOne(child)
-                        end)
-                    end
-                    if not sinkItemsDescConn then
-                        sinkItemsDescConn = rootFolder.DescendantAdded:Connect(function(desc)
-                            sinkOne(desc)
-                        end)
-                    end
-                end
             else
                 if sinkItemsConn then
                     sinkItemsConn:Disconnect()
                     sinkItemsConn = nil
-                end
-                if sinkItemsChildConn then
-                    sinkItemsChildConn:Disconnect()
-                    sinkItemsChildConn = nil
-                end
-                if sinkItemsDescConn then
-                    sinkItemsDescConn:Disconnect()
-                    sinkItemsDescConn = nil
                 end
             end
         end
