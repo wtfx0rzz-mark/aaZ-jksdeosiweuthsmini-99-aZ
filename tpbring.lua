@@ -400,7 +400,7 @@ return function(C, R, UI)
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         if isExcludedModel(m) or isUnderLogWall(m) or hasIceBlockTag(m) then return false end
 
-        -- IMPORTANT: already-delivered items for this run should not be picked again
+        -- Already delivered in this run? Do not pick again.
         local done = m:GetAttribute(DONE_ATTR)
         if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
             return false
@@ -432,7 +432,6 @@ return function(C, R, UI)
     -- Orb-mode item mapping (Bring to Orbs)
     ----------------------------------------------------------------
     -- Perfect, evenly-spaced line based on your provided edge orbs
-    -- We add ORB_HEIGHT so this is the "base" for the conveyor.
     local CUSTOM_ORB_BASES = {
         Vector3.new(-27.85, 4.05 + ORB_HEIGHT, 50.82), -- Orb 1
         Vector3.new( -6.68, 4.05 + ORB_HEIGHT, 47.66), -- Orb 2
@@ -499,7 +498,6 @@ return function(C, R, UI)
     end
 
     local function getCandidatesForOrbs(jobId)
-        -- union of all orb dropdown sets
         return collectCandidatesFromSet(orbUnionSet, jobId)
     end
 
@@ -683,11 +681,10 @@ return function(C, R, UI)
                 local mp = mainPart(m)
                 if not mp then continue end
                 if (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
-                    -- Skip items still marked in-flight for this run
                     local tIn = m:GetAttribute(INFLT_ATTR)
                     local jIn = m:GetAttribute(JOB_ATTR)
                     if tIn and jIn then
-                        -- In-flight; don't touch it here
+                        -- still in-flight: do not touch
                     else
                         for _,p in ipairs(allParts(m)) do
                             p.Anchored = false
@@ -720,33 +717,31 @@ return function(C, R, UI)
             while running and activeCount >= MAX_CONCURRENT do
                 Run.Heartbeat:Wait()
             end
+
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                local destBaseVec
+                local destBaseVec = nil
 
                 if CURRENT_MODE == "orbs" then
                     local idx = orbIndexForModel(m)
                     if idx and CUSTOM_ORB_BASES[idx] then
                         destBaseVec = CUSTOM_ORB_BASES[idx]
-                    else
-                        -- No orb mapping for this model; skip
-                        goto continue
                     end
                 else
-                    -- camp/scrap/all -> use global orbPosVec
                     destBaseVec = orbPosVec
                 end
 
-                activeCount += 1
-                task.spawn(function()
-                    startConveyor(m, jobId, destBaseVec)
-                    task.delay(8, function()
-                        activeCount = math.max(0, activeCount - 1)
+                if destBaseVec then
+                    activeCount += 1
+                    task.spawn(function()
+                        startConveyor(m, jobId, destBaseVec)
+                        task.delay(8, function()
+                            activeCount = math.max(0, activeCount - 1)
+                        end)
                     end)
-                end)
-                task.wait(START_STAGGER)
+                    task.wait(START_STAGGER)
+                end
             end
-            ::continue::
         end
     end
 
@@ -754,7 +749,6 @@ return function(C, R, UI)
         running = false
         if hb then hb:Disconnect() hb = nil end
 
-        -- Flush any staged-but-not-released
         for i = #releaseQueue, 1, -1 do
             local rec = releaseQueue[i]
             if rec and rec.model and rec.model.Parent then
@@ -870,7 +864,6 @@ return function(C, R, UI)
 
             spawnOrbAt(pos, color)
         elseif mode == "orbs" then
-            -- Ensure we actually have something assigned to orbs
             local any = false
             for i = 1, 4 do
                 if next(orbItemSets[i]) ~= nil then
@@ -882,7 +875,6 @@ return function(C, R, UI)
                 CURRENT_MODE = nil
                 return
             end
-            -- No global orb in this mode; items go directly to CUSTOM_ORB_BASES
             destroyOrb()
             orbPosVec = nil
         else
@@ -960,7 +952,7 @@ return function(C, R, UI)
     })
 
     ----------------------------------------------------------------
-    -- UI: Bring to Orbs (Level 4 fire edge)
+    -- UI: Bring to Orbs (Level 4 Fire Edge)
     ----------------------------------------------------------------
     tab:Section({ Title = "Bring to Orbs (Level 4 Fire Edge)" })
 
@@ -1027,7 +1019,6 @@ return function(C, R, UI)
                     spawnOrbAt(pos, color)
                 end
             elseif CURRENT_MODE == "orbs" then
-                -- No global orb to respawn in orbs mode
                 destroyOrb()
                 orbPosVec = nil
             end
