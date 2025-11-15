@@ -62,11 +62,12 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
-    -- Player Nudge config
-    local PLAYER_NUDGE_RANGE    = 300   -- how close the target has to be to an item
-    local PLAYER_NUDGE_UP       = 20   -- studs up
-    local PLAYER_NUDGE_AWAY     = 50   -- studs away
-    local PLAYER_NUDGE_COOLDOWN = 0.1  -- seconds per item between nudges
+    local PLAYER_NUDGE_RANGE    = 300
+    local PLAYER_NUDGE_UP       = 20
+    local PLAYER_NUDGE_AWAY     = 50
+    local PLAYER_NUDGE_COOLDOWN = 0.1
+
+    local SINK_Y_TARGET         = -500
 
     local function hrp(p)
         p = p or lp
@@ -347,6 +348,10 @@ return function(C, R, UI)
         return false, nil
     end
 
+    local function itemsRoot()
+        return WS:FindFirstChild("Items") or WS:FindFirstChild("items")
+    end
+
     local running = false
     local desiredPerTarget = CFG.DesiredLogs
     local active  = {}
@@ -359,10 +364,12 @@ return function(C, R, UI)
     local scanAt = 0
     local scanCache = {}
 
-    -- Player Nudge runtime state
     local playerNudgeEnabled = false
     local playerNudgeConn    = nil
     local lastNudgeItemAt    = {}
+
+    local sinkItemsEnabled   = false
+    local sinkItemsConn      = nil
 
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
@@ -400,7 +407,7 @@ return function(C, R, UI)
                 xz1 = math.random()*(W_XZ1_MAX-W_XZ1_MIN)+W_XZ1_MIN,
                 xz2 = math.random()*(W_XZ2_MAX-W_XZ2_MIN)+W_XZ2_MIN,
                 y1  = math.random()*(W_Y1_MAX -W_Y1_MIN )+W_Y1_MIN,
-                y2  = math.random()*(W_Y2_MAX -W_Y2_MIN )+W_Y2_MIN,
+                y2  = math.random()*(W_Y2_MAX -W_Y2_MIN )+W_Y2_MAX,
             },
             started    = false,
             snap       = nil,
@@ -666,11 +673,9 @@ return function(C, R, UI)
         countByUid  = {}
     end
 
-    -- Dropdown state (used both by Chaotic Log Smog and Player Nudge)
     local selectedSet = {}
     local playerDD
 
-    -- Build the Players dropdown (now placed at the top by building it first)
     local function buildPlayerDropdownOnce()
         if playerDD then return end
         playerDD = tab:Dropdown({
@@ -684,12 +689,9 @@ return function(C, R, UI)
         })
     end
 
-    -- Build immediately so it appears at the top
     buildPlayerDropdownOnce()
-    -- Keep the delayed call (no-op once built) to preserve earlier behavior
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
-    -- Main chaotic smog section
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
     tab:Slider({
@@ -760,7 +762,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Player Nudge logic: uses selected players; nudges nearby items (not NPCs, not you)
     local function doPlayerNudgeStep(dt)
         if not playerNudgeEnabled then return end
 
@@ -787,7 +788,6 @@ return function(C, R, UI)
                     if part:IsA("BasePart") and not part.Anchored then
                         local mdl = part:FindFirstAncestorOfClass("Model") or part
                         if mdl and not isCharacterModel(mdl) then
-                            -- Don't fight with the chaotic smog logs
                             if not active[mdl] then
                                 local last = lastNudgeItemAt[mdl] or 0
                                 if now - last >= PLAYER_NUDGE_COOLDOWN then
@@ -813,7 +813,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Player Nudge UI (bottom section)
     tab:Section({ Title = "Player Nudge" })
 
     tab:Toggle({
@@ -831,6 +830,58 @@ return function(C, R, UI)
                 if playerNudgeConn then
                     playerNudgeConn:Disconnect()
                     playerNudgeConn = nil
+                end
+            end
+        end
+    })
+
+    local function doSinkItemsStep(dt)
+        if not sinkItemsEnabled then return end
+        local rootFolder = itemsRoot()
+        if not rootFolder then return end
+
+        for _, obj in ipairs(rootFolder:GetChildren()) do
+            local mdl
+            if obj:IsA("Model") then
+                mdl = obj
+            elseif obj:IsA("BasePart") then
+                mdl = obj:FindFirstAncestorOfClass("Model") or obj
+            end
+
+            if mdl then
+                local mp = mainPart(mdl)
+                if mp then
+                    local pos = mp.Position
+                    if pos.Y > SINK_Y_TARGET then
+                        local targetCf = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
+                        if mdl:IsA("Model") then
+                            setPivot(mdl, targetCf)
+                        else
+                            mp.CFrame = targetCf
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    tab:Section({ Title = "Sink Items" })
+
+    tab:Toggle({
+        Title = "Sink Items",
+        Value = false,
+        Callback = function(on)
+            sinkItemsEnabled = (on == true)
+            if sinkItemsEnabled then
+                if not sinkItemsConn then
+                    sinkItemsConn = Run.Heartbeat:Connect(function(dt)
+                        doSinkItemsStep(dt)
+                    end)
+                end
+            else
+                if sinkItemsConn then
+                    sinkItemsConn:Disconnect()
+                    sinkItemsConn = nil
                 end
             end
         end
