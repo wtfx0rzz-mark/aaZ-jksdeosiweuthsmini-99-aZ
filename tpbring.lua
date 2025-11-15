@@ -180,8 +180,7 @@ return function(C, R, UI)
     cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
     scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
 
-    -- Mode-specific sets
-    local fuelModeSet = { ["Coal"] = true, ["Fuel Canister"] = true, ["Oil Barrel"] = true } -- no Log
+    local fuelModeSet = { ["Coal"] = true, ["Fuel Canister"] = true, ["Oil Barrel"] = true }
     local scrapModeSet = {}
     for k,v in pairs(junkSet)   do if v then scrapModeSet[k] = true end end
     for k,v in pairs(scrapAlso) do if v then scrapModeSet[k] = true end end
@@ -201,7 +200,6 @@ return function(C, R, UI)
     addListToSet(ammoMisc, allModeSet)
     addListToSet(pelts, allModeSet)
 
-    -- Flat list of all item names for orb dropdowns
     local allItemNames = {}
     for name,_ in pairs(allModeSet) do
         allItemNames[#allItemNames+1] = name
@@ -279,7 +277,6 @@ return function(C, R, UI)
         return false
     end
 
-    -- nameMatches: same logic as Bring, with Apple special case
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then
@@ -289,19 +286,16 @@ return function(C, R, UI)
         local nm = m and m.Name or ""
         local l  = nm:lower()
 
-        -- Special Apple logic (free apples only)
         if nm == "Apple" and selectedSet["Apple"] then
             if itemsFolder and m.Parent ~= itemsFolder then return false end
             if isInsideTree(m) then return false end
             return true
         end
 
-        -- Direct exact-name membership
         if selectedSet[nm] then
             return true
         end
 
-        -- Patterned logic
         if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
             return true
         end
@@ -394,7 +388,6 @@ return function(C, R, UI)
         return nil
     end
 
-    -- ONLY CHANGE: stronger "done" logic for orbs mode
     local function canPick(m, selectedSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
         local itemsFolder = itemsRootOrNil()
@@ -403,12 +396,10 @@ return function(C, R, UI)
 
         local done = m:GetAttribute(DONE_ATTR)
         if CURRENT_MODE == "orbs" then
-            -- Once an item has been delivered to any orb, never pick it again.
             if done ~= nil then
                 return false
             end
         else
-            -- For campfire/scrapper/noticeboard: only skip items delivered in THIS run.
             if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
                 return false
             end
@@ -440,19 +431,18 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- Orb-mode item mapping (Bring to Orbs)
     ----------------------------------------------------------------
-    -- Evenly aligned line based on your edge orbs
     local CUSTOM_ORB_BASES = {
-        Vector3.new(-27.85, 4.05 + ORB_HEIGHT, 50.82), -- Orb 1
-        Vector3.new( -6.68, 4.05 + ORB_HEIGHT, 47.66), -- Orb 2
-        Vector3.new( 14.50, 4.05 + ORB_HEIGHT, 44.50), -- Orb 3
-        Vector3.new( 35.67, 4.05 + ORB_HEIGHT, 41.33), -- Orb 4
+        Vector3.new(-27.85, 4.05 + ORB_HEIGHT, 50.82),
+        Vector3.new( -6.68, 4.05 + ORB_HEIGHT, 47.66),
+        Vector3.new( 14.50, 4.05 + ORB_HEIGHT, 44.50),
+        Vector3.new( 35.67, 4.05 + ORB_HEIGHT, 41.33),
     }
 
     local orbItemSets = {
-        {}, -- orb 1
-        {}, -- orb 2
-        {}, -- orb 3
-        {}, -- orb 4
+        {},
+        {},
+        {},
+        {},
     }
 
     local orbUnionSet = {}
@@ -467,7 +457,6 @@ return function(C, R, UI)
     end
 
     local function orbIndexForModel(m)
-        -- First orb that matches wins (Orb1 > Orb2 > Orb3 > Orb4)
         for i = 1, 4 do
             local set = orbItemSets[i]
             if next(set) ~= nil and nameMatches(set, m) then
@@ -569,13 +558,6 @@ return function(C, R, UI)
         table.insert(releaseQueue, {model=m, pos=tgt})
     end
 
-    private function downloadFile(url) {
-      chrome.downloads.download({
-        url: url,
-        saveAs: true
-      });
-    }
-
     local function releaseOne(rec)
         local m = rec and rec.model
         if not (m and m.Parent) then return end
@@ -598,9 +580,6 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
-    -- destBaseVec:
-    --   camp/scrap/all : global orbPosVec
-    --   orbs mode      : per-item CUSTOM_ORB_BASES[index]
     local function startConveyor(m, jobId, destBaseVec)
         if not (running and m and m.Parent) then return end
         local mp = mainPart(m)
@@ -682,7 +661,9 @@ return function(C, R, UI)
         end
     end
 
-    -- Unstick pass: force-drop anything that ends up stuck near the orb
+    ----------------------------------------------------------------
+    -- Unstick pass: force-drop anything stuck near orb
+    ----------------------------------------------------------------
     do
         local acc = 0
         Run.Heartbeat:Connect(function(dt)
@@ -699,25 +680,24 @@ return function(C, R, UI)
                 local mp = mainPart(m)
                 if not mp then continue end
                 if (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
-                    local tIn = m:GetAttribute(INFLT_ATTR)
-                    local jIn = m:GetAttribute(JOB_ATTR)
+                    local tIn  = m:GetAttribute(INFLT_ATTR)
+                    local jIn  = m:GetAttribute(JOB_ATTR)
                     local info = inflight[m]
-                    local age = tIn and (now - tIn) or nil
+                    local age  = tIn and (now - tIn) or nil
 
                     local treatAsStuck = false
 
-                    -- No in-flight attrs at all -> just force-drop
                     if not tIn or not jIn then
                         treatAsStuck = true
-                    -- Has attrs but no active inflight record -> desync / stuck
                     elseif not info then
                         treatAsStuck = true
-                    -- Has attrs + inflight, but has been in this state too long
                     elseif age and age >= STUCK_TTL then
                         treatAsStuck = true
                     end
 
-                    if treatAsStuck then
+                    if not treatAsStuck then
+                        -- still in-flight and within TTL: leave it alone
+                    else
                         inflight[m] = nil
                         pcall(function()
                             m:SetAttribute(INFLT_ATTR, nil)
@@ -950,7 +930,7 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- UI TOGGLES (existing modes)
+    -- UI TOGGLES
     ----------------------------------------------------------------
     tab:Toggle({
         Title = "Send Fuel to Campfire",
