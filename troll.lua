@@ -62,18 +62,21 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
-    -- Player Nudge config
-    local PLAYER_NUDGE_RANGE    = 300   -- radius around each selected player
-    local PLAYER_NUDGE_UP       = 20    -- base studs up
-    local PLAYER_NUDGE_AWAY     = 50    -- base studs away
-    local PLAYER_NUDGE_COOLDOWN = 0.10  -- per-item cooldown in seconds
+    local PLAYER_NUDGE_RANGE    = 300
+    local PLAYER_NUDGE_UP       = 20
+    local PLAYER_NUDGE_AWAY     = 50
+    local PLAYER_NUDGE_COOLDOWN = 0.10
 
-    -- Sink Items config
-    local SINK_Y_TARGET         = -500  -- Y to teleport items to (below map)
+    local SINK_Y_TARGET         = -500
 
-    ------------------------------------------------------------------------
-    -- Basic helpers
-    ------------------------------------------------------------------------
+    local AVOID_ITEMS_RANGE     = 200
+    local AVOID_NEAR_DIST       = 15
+    local AVOID_STOP_DIST       = 30
+    local AVOID_KICK_COOLDOWN   = 0.20
+    local HOP_INTERVAL          = 0.40
+    local HOP_UP_VEL            = 35
+    local HOP_EXTRA_SPEED       = 10
+
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
@@ -153,9 +156,6 @@ return function(C, R, UI)
         end
     end
 
-    ------------------------------------------------------------------------
-    -- Remotes (drag)
-    ------------------------------------------------------------------------
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do
@@ -195,9 +195,6 @@ return function(C, R, UI)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
     end
 
-    ------------------------------------------------------------------------
-    -- World queries
-    ------------------------------------------------------------------------
     local function logsNear(center, excludeSet, limit)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -363,9 +360,6 @@ return function(C, R, UI)
         return WS:FindFirstChild("Items") or WS:FindFirstChild("items")
     end
 
-    ------------------------------------------------------------------------
-    -- State
-    ------------------------------------------------------------------------
     local running = false
     local desiredPerTarget = CFG.DesiredLogs
     local active  = {}
@@ -378,19 +372,19 @@ return function(C, R, UI)
     local scanAt = 0
     local scanCache = {}
 
-    -- Player Nudge runtime state
     local playerNudgeEnabled = false
     local playerNudgeConn    = nil
     local lastNudgeItemAt    = {}
-    local driftItems         = {}  -- items currently in "drift to sky" mode
+    local driftItems         = {}
 
-    -- Sink Items runtime state
-    local sinkItemsEnabled = false
-    local sinkItemsConn    = nil
+    local sinkItemsEnabled   = false
+    local sinkItemsConn      = nil
 
-    ------------------------------------------------------------------------
-    -- Orbit helpers
-    ------------------------------------------------------------------------
+    local itemsAvoidEnabled  = false
+    local itemsAvoidConn     = nil
+    local lastAvoidKickAt    = {}
+    local hopState           = {}
+
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
         local m = off.Magnitude
@@ -403,9 +397,6 @@ return function(C, R, UI)
         if not countByUid[uid] then countByUid[uid] = 0 end
     end
 
-    ------------------------------------------------------------------------
-    -- Adoption / shedding (Chaotic Log Smog)
-    ------------------------------------------------------------------------
     local function adopt(model, tgt, seed)
         if active[model] then return end
         local uid = tgt.UserId
@@ -490,6 +481,8 @@ return function(C, R, UI)
             end)
         end
         driftItems[model] = nil
+        hopState[model]   = nil
+        lastAvoidKickAt[model] = nil
     end
 
     local function ensureSlot(st)
@@ -636,9 +629,6 @@ return function(C, R, UI)
         return true
     end
 
-    ------------------------------------------------------------------------
-    -- Reconcile / stop
-    ------------------------------------------------------------------------
     local function reconcile()
         if not running then return end
         local myRoot = hrp(); if not myRoot then return end
@@ -701,9 +691,6 @@ return function(C, R, UI)
         countByUid  = {}
     end
 
-    ------------------------------------------------------------------------
-    -- Dropdown state (shared)
-    ------------------------------------------------------------------------
     local selectedSet = {}
     local playerDD
 
@@ -723,12 +710,9 @@ return function(C, R, UI)
     buildPlayerDropdownOnce()
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
-    ------------------------------------------------------------------------
-    -- Player Nudge helper (stronger + drift into sky)
-    ------------------------------------------------------------------------
     local function quickNudgeModel(mdl, origin, rootCf)
         if not mdl or not mdl.Parent then return end
-        if active[mdl] then return end  -- don't fight log smog
+        if active[mdl] then return end
 
         local now = os.clock()
         local last = lastNudgeItemAt[mdl] or 0
@@ -746,12 +730,10 @@ return function(C, R, UI)
         end
         local dir = horiz.Magnitude > 1e-3 and horiz.Unit or Vector3.new(0, 0, 1)
 
-        -- Stronger initial push
         local initialAway = PLAYER_NUDGE_AWAY * 1.5
         local initialUp   = PLAYER_NUDGE_UP * 1.4
         local vel = dir * initialAway + Vector3.new(0, initialUp, 0)
 
-        -- Track for drift phase
         driftItems[mdl] = {
             originY = origin.Y,
             dir     = dir,
@@ -775,7 +757,6 @@ return function(C, R, UI)
         local pTargets = selectedPlayersList(selectedSet)
         if #pTargets == 0 then return end
 
-        -- Main “kick away” phase near the player
         for _, tgt in ipairs(pTargets) do
             local root = hrp(tgt)
             if root then
@@ -802,7 +783,6 @@ return function(C, R, UI)
             end
         end
 
-        -- Drift phase: once items are ~20 studs above origin height, let them float away
         local now = os.clock()
         for mdl, info in pairs(driftItems) do
             if not mdl or not mdl.Parent then
@@ -817,18 +797,15 @@ return function(C, R, UI)
                     local t = now - (info.start or now)
 
                     if height >= 20 then
-                        -- Drift direction: mostly up, slightly along original away direction
                         local driftDir = info.dir + Vector3.new(0, 1.0, 0)
                         if driftDir.Magnitude < 1e-3 then
                             driftDir = Vector3.new(0, 1, 0)
                         end
                         driftDir = driftDir.Unit
 
-                        -- Speed slowly ramps so it feels like it's “catching a breeze”
                         local speed = 40 + t * 15
                         mp.AssemblyLinearVelocity = driftDir * speed
 
-                        -- After high enough / long enough, dispose it
                         if height > 300 or t > 10 then
                             mp.CFrame = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
                             driftItems[mdl] = nil
@@ -839,15 +816,11 @@ return function(C, R, UI)
         end
     end
 
-    ------------------------------------------------------------------------
-    -- Sink Items (brutal sweep of Workspace.Items)
-    ------------------------------------------------------------------------
     local function doSinkItemsStep(dt)
         if not sinkItemsEnabled then return end
         local rootFolder = itemsRoot()
         if not rootFolder then return end
 
-        -- Very aggressive: every Heartbeat, any BasePart under Items is teleported below map.
         for _, desc in ipairs(rootFolder:GetDescendants()) do
             if desc:IsA("BasePart") then
                 local mdl = desc:FindFirstAncestorOfClass("Model") or desc
@@ -867,9 +840,96 @@ return function(C, R, UI)
         end
     end
 
-    ------------------------------------------------------------------------
-    -- UI: Chaotic Log Smog
-    ------------------------------------------------------------------------
+    local function doItemsAvoidStep(dt)
+        if not itemsAvoidEnabled then return end
+        local rootFolder = itemsRoot()
+        if not rootFolder then return end
+
+        local pTargets = selectedPlayersList(selectedSet)
+        if #pTargets == 0 then return end
+
+        local now = os.clock()
+        for _, desc in ipairs(rootFolder:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                local mdl = desc:FindFirstAncestorOfClass("Model") or desc
+                if mdl and mdl.Parent and not active[mdl] and not driftItems[mdl] then
+                    local mp = mainPart(mdl)
+                    if mp then
+                        local itemPos = mp.Position
+                        local closestDist = math.huge
+                        local closestRoot, closestCF, closestVel
+
+                        for _, tgt in ipairs(pTargets) do
+                            local root = hrp(tgt)
+                            if root then
+                                local d = (itemPos - root.Position).Magnitude
+                                if d < closestDist then
+                                    closestDist = d
+                                    closestRoot = root
+                                    closestCF   = root.CFrame
+                                    closestVel  = root.AssemblyLinearVelocity
+                                end
+                            end
+                        end
+
+                        if closestRoot and closestDist < AVOID_STOP_DIST then
+                            local lastKick = lastAvoidKickAt[mdl] or 0
+                            if now - lastKick >= AVOID_KICK_COOLDOWN then
+                                lastAvoidKickAt[mdl] = now
+
+                                local origin = closestRoot.Position
+                                local toItem = itemPos - origin
+                                local horiz = Vector3.new(toItem.X, 0, toItem.Z)
+                                if horiz.Magnitude < 1e-3 and closestCF then
+                                    local look = closestCF.LookVector
+                                    horiz = Vector3.new(look.X, 0, look.Z)
+                                end
+                                local dir = horiz.Magnitude > 1e-3 and horiz.Unit or Vector3.new(0,0,1)
+
+                                local pv = closestVel or Vector3.zero
+                                local pvXZ = Vector3.new(pv.X,0,pv.Z)
+                                local pSpeed = pvXZ.Magnitude
+
+                                local horizSpeed
+                                local upSpeed
+
+                                if closestDist < AVOID_NEAR_DIST then
+                                    horizSpeed = math.max(pSpeed*1.6, 40)
+                                    upSpeed    = HOP_UP_VEL
+                                else
+                                    horizSpeed = math.max(pSpeed, 12) + HOP_EXTRA_SPEED
+                                    upSpeed    = HOP_UP_VEL
+                                    local hs = hopState[mdl]
+                                    if hs and (now - hs.lastHopAt) < HOP_INTERVAL then
+                                        horizSpeed = 0
+                                        upSpeed    = 0
+                                    end
+                                end
+
+                                if horizSpeed > 0 or upSpeed > 0 then
+                                    local vel = dir * horizSpeed + Vector3.new(0, upSpeed, 0)
+                                    hopState[mdl] = { lastHopAt = now }
+
+                                    task.spawn(function()
+                                        safeStartDrag(mdl)
+                                        task.wait(0.03)
+                                        local mp2 = mainPart(mdl)
+                                        if mp2 then
+                                            mp2.AssemblyLinearVelocity = vel
+                                        end
+                                        finallyStopDrag(mdl)
+                                    end)
+                                end
+                            end
+                        else
+                            hopState[mdl] = nil
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
     tab:Slider({
@@ -940,9 +1000,6 @@ return function(C, R, UI)
         end
     })
 
-    ------------------------------------------------------------------------
-    -- UI: Player Nudge
-    ------------------------------------------------------------------------
     tab:Section({ Title = "Player Nudge" })
 
     tab:Toggle({
@@ -965,9 +1022,28 @@ return function(C, R, UI)
         end
     })
 
-    ------------------------------------------------------------------------
-    -- UI: Sink Items
-    ------------------------------------------------------------------------
+    tab:Section({ Title = "Items Avoid Players" })
+
+    tab:Toggle({
+        Title = "Items Avoid Players",
+        Value = false,
+        Callback = function(on)
+            itemsAvoidEnabled = (on == true)
+            if itemsAvoidEnabled then
+                if not itemsAvoidConn then
+                    itemsAvoidConn = Run.Heartbeat:Connect(function(dt)
+                        doItemsAvoidStep(dt)
+                    end)
+                end
+            else
+                if itemsAvoidConn then
+                    itemsAvoidConn:Disconnect()
+                    itemsAvoidConn = nil
+                end
+            end
+        end
+    })
+
     tab:Section({ Title = "Sink Items" })
 
     tab:Toggle({
