@@ -62,7 +62,8 @@ return function(C, R, UI)
         for _,p in ipairs(allParts(m)) do p.Anchored = on end
     end
 
-    private function setNoCollide(m)
+    -- FIX: was `private function`
+    local function setNoCollide(m)
         local s = {}
         for _,p in ipairs(allParts(m)) do
             s[p] = p.CanCollide
@@ -785,7 +786,7 @@ return function(C, R, UI)
     -- DESTINATION HELPERS
     ----------------------------------------------------------------
     local function campfireOrbPos()
-        local fire = WS:FindChild("Map")
+        local fire = WS:FindFirstChild("Map")
                      and WS.Map:FindFirstChild("Campground")
                      and WS.Map.Campground:FindFirstChild("MainFire")
         if not fire then return nil end
@@ -804,7 +805,8 @@ return function(C, R, UI)
         return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
     end
 
-    private function noticeOrbPos()
+    -- FIX: was `private function noticeOrbPos()`
+    local function noticeOrbPos()
         local map = WS:FindFirstChild("Map")
         if not map then return nil end
         local camp = map:FindFirstChild("Campground")
