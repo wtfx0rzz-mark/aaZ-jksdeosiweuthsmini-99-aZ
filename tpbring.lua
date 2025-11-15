@@ -13,10 +13,12 @@ return function(C, R, UI)
         local ch = lp.Character or lp.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
+
     local function mainPart(m)
         if not (m and m:IsA("Model")) then return nil end
         return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
     end
+
     local function allParts(m)
         local t = {}
         if not m then return t end
@@ -25,6 +27,7 @@ return function(C, R, UI)
         end
         return t
     end
+
     local function setPivot(m, cf)
         if m:IsA("Model") then
             m:PivotTo(cf)
@@ -33,6 +36,7 @@ return function(C, R, UI)
             if p then p.CFrame = cf end
         end
     end
+
     local function zeroAssembly(m)
         for _,p in ipairs(allParts(m)) do
             p.AssemblyLinearVelocity  = Vector3.new()
@@ -41,19 +45,23 @@ return function(C, R, UI)
             p.Velocity                = Vector3.new()
         end
     end
+
     local function snapshotCollide(m)
         local s = {}
         for _,p in ipairs(allParts(m)) do s[p] = p.CanCollide end
         return s
     end
+
     local function setCollideFromSnapshot(snap)
         for part,can in pairs(snap or {}) do
             if part and part.Parent then part.CanCollide = can end
         end
     end
+
     local function setAnchored(m, on)
         for _,p in ipairs(allParts(m)) do p.Anchored = on end
     end
+
     local function setNoCollide(m)
         local s = {}
         for _,p in ipairs(allParts(m)) do
@@ -63,6 +71,9 @@ return function(C, R, UI)
         return s
     end
 
+    ----------------------------------------------------------------
+    -- Remotes
+    ----------------------------------------------------------------
     local startDrag, stopDrag = nil, nil
     do
         local re = RS:FindFirstChild("RemoteEvents")
@@ -72,6 +83,9 @@ return function(C, R, UI)
         end
     end
 
+    ----------------------------------------------------------------
+    -- EdgeButtons container (unchanged)
+    ----------------------------------------------------------------
     local playerGui = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
     local edgeGui   = playerGui:FindFirstChild("EdgeButtons")
     if not edgeGui then
@@ -97,7 +111,9 @@ return function(C, R, UI)
         list.Parent = stack
     end
 
+    ----------------------------------------------------------------
     -- CORE CONFIG
+    ----------------------------------------------------------------
     local DRAG_SPEED       = 220
     local ORB_HEIGHT       = 10
     local MAX_CONCURRENT   = 40
@@ -123,7 +139,7 @@ return function(C, R, UI)
     local DONE_ATTR  = "OrbDelivered"
 
     local CURRENT_RUN_ID   = nil
-    local CURRENT_MODE     = nil  -- "fuel" | "scrap" | "all" | nil
+    local CURRENT_MODE     = nil  -- "fuel" | "scrap" | "all" | "orbs" | nil
 
     local running      = false
     local hb           = nil
@@ -185,6 +201,13 @@ return function(C, R, UI)
     addListToSet(ammoMisc, allModeSet)
     addListToSet(pelts, allModeSet)
 
+    -- Flat list of all item names for orb dropdowns
+    local allItemNames = {}
+    for name,_ in pairs(allModeSet) do
+        allItemNames[#allItemNames+1] = name
+    end
+    table.sort(allItemNames)
+
     ----------------------------------------------------------------
     -- Shared item helpers (adapted from Bring)
     ----------------------------------------------------------------
@@ -197,6 +220,7 @@ return function(C, R, UI)
         local n = (m.Name or ""):lower()
         return n == "logwall" or n == "log wall" or (n:find("log",1,true) and n:find("wall",1,true))
     end
+
     local function isUnderLogWall(inst)
         local cur = inst
         while cur and cur ~= WS do
@@ -208,6 +232,7 @@ return function(C, R, UI)
         end
         return false
     end
+
     local function hasIceBlockTag(inst)
         if not inst then return false end
         for _,d in ipairs(inst:GetDescendants()) do
@@ -227,10 +252,12 @@ return function(C, R, UI)
         end
         return false
     end
+
     local function hasHumanoid(model)
         if not (model and model:IsA("Model")) then return false end
         return model:FindFirstChildOfClass("Humanoid") ~= nil
     end
+
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or ""):lower()
@@ -240,6 +267,7 @@ return function(C, R, UI)
         if isUnderLogWall(m) then return true end
         return false
     end
+
     local function isInsideTree(m)
         local cur = m and m.Parent
         while cur and cur ~= WS do
@@ -251,8 +279,7 @@ return function(C, R, UI)
         return false
     end
 
-    -- FIXED nameMatches: Apple special case only for Apple models,
-    -- instead of gating all other names when Apple is present.
+    -- nameMatches: same logic as Bring, with Apple special case
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then
@@ -274,7 +301,7 @@ return function(C, R, UI)
             return true
         end
 
-        -- Other special patterns copied from Bring
+        -- Patterned logic
         if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then
             return true
         end
@@ -372,6 +399,13 @@ return function(C, R, UI)
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         if isExcludedModel(m) or isUnderLogWall(m) or hasIceBlockTag(m) then return false end
+
+        -- IMPORTANT: already-delivered items for this run should not be picked again
+        local done = m:GetAttribute(DONE_ATTR)
+        if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
+            return false
+        end
+
         local tIn = m:GetAttribute(INFLT_ATTR)
         local jIn = m:GetAttribute(JOB_ATTR)
         if tIn and jIn and tostring(jIn) ~= tostring(jobId) and os.clock() - tIn < STUCK_TTL then
@@ -394,8 +428,51 @@ return function(C, R, UI)
         return nil
     end
 
-    local function getCandidatesForCurrent(jobId)
-        local selectedSet = currentSelectedSet()
+    ----------------------------------------------------------------
+    -- Orb-mode item mapping (Bring to Orbs)
+    ----------------------------------------------------------------
+    -- Perfect, evenly-spaced line based on your provided edge orbs
+    -- We add ORB_HEIGHT so this is the "base" for the conveyor.
+    local CUSTOM_ORB_BASES = {
+        Vector3.new(-27.85, 4.05 + ORB_HEIGHT, 50.82), -- Orb 1
+        Vector3.new( -6.68, 4.05 + ORB_HEIGHT, 47.66), -- Orb 2
+        Vector3.new( 14.50, 4.05 + ORB_HEIGHT, 44.50), -- Orb 3
+        Vector3.new( 35.67, 4.05 + ORB_HEIGHT, 41.33), -- Orb 4
+    }
+
+    local orbItemSets = {
+        {}, -- orb 1
+        {}, -- orb 2
+        {}, -- orb 3
+        {}, -- orb 4
+    }
+
+    local orbUnionSet = {}
+
+    local function recomputeOrbUnionSet()
+        orbUnionSet = {}
+        for i = 1, 4 do
+            for name,_ in pairs(orbItemSets[i]) do
+                orbUnionSet[name] = true
+            end
+        end
+    end
+
+    local function orbIndexForModel(m)
+        -- First orb that matches wins (Orb1 > Orb2 > Orb3 > Orb4)
+        for i = 1, 4 do
+            local set = orbItemSets[i]
+            if next(set) ~= nil and nameMatches(set, m) then
+                return i
+            end
+        end
+        return nil
+    end
+
+    ----------------------------------------------------------------
+    -- Generic candidate collector
+    ----------------------------------------------------------------
+    local function collectCandidatesFromSet(selectedSet, jobId)
         if not selectedSet then return {} end
         local itemsFolder = itemsRootOrNil()
         if not itemsFolder then return {} end
@@ -414,6 +491,16 @@ return function(C, R, UI)
             end
         end
         return out
+    end
+
+    local function getCandidatesForCurrent(jobId)
+        local selectedSet = currentSelectedSet()
+        return collectCandidatesFromSet(selectedSet, jobId)
+    end
+
+    local function getCandidatesForOrbs(jobId)
+        -- union of all orb dropdown sets
+        return collectCandidatesFromSet(orbUnionSet, jobId)
     end
 
     ----------------------------------------------------------------
@@ -437,6 +524,7 @@ return function(C, R, UI)
         orb = o
         orbPosVec = orb.Position
     end
+
     local function destroyOrb()
         if orb then pcall(function() orb:Destroy() end) end
         orb = nil
@@ -450,6 +538,7 @@ return function(C, R, UI)
         end
         return (h % 100000) / 100000
     end
+
     local function landingOffset(m, jobId)
         local key = (typeof(m.GetDebugId)=="function" and m:GetDebugId() or (m.Name or "")) .. tostring(jobId)
         local r1 = hash01(key .. "a")
@@ -495,13 +584,16 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
-    local function startConveyor(m, jobId)
-        if not (running and m and m.Parent and orbPosVec) then return end
+    -- destBaseVec:
+    --   camp/scrap/all : global orbPosVec
+    --   orbs mode      : per-item CUSTOM_ORB_BASES[index]
+    local function startConveyor(m, jobId, destBaseVec)
+        if not (running and m and m.Parent) then return end
         local mp = mainPart(m)
         if not mp then return end
         local off = landingOffset(m, jobId)
         local function target()
-            local base = orbPosVec or mp.Position
+            local base = destBaseVec or orbPosVec or mp.Position
             return Vector3.new(base.X + off.X, base.Y + HOVER_ABOVE_ORB, base.Z + off.Z)
         end
         pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
@@ -514,7 +606,7 @@ return function(C, R, UI)
         inflight[m] = rec
 
         rec.conn = Run.Heartbeat:Connect(function(dt)
-            if not (running and m and m.Parent and orbPosVec) then
+            if not (running and m and m.Parent) then
                 if rec.conn then rec.conn:Disconnect() end
                 inflight[m] = nil
                 return
@@ -576,6 +668,7 @@ return function(C, R, UI)
         end
     end
 
+    -- Unstick pass: only touches items near orb that are NOT in-flight
     do
         local acc = 0
         Run.Heartbeat:Connect(function(dt)
@@ -590,21 +683,38 @@ return function(C, R, UI)
                 local mp = mainPart(m)
                 if not mp then continue end
                 if (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
-                    for _,p in ipairs(allParts(m)) do
-                        p.Anchored = false
-                        p.AssemblyAngularVelocity = Vector3.new()
-                        p.AssemblyLinearVelocity  = Vector3.new()
-                        p.CanCollide = true
+                    -- Skip items still marked in-flight for this run
+                    local tIn = m:GetAttribute(INFLT_ATTR)
+                    local jIn = m:GetAttribute(JOB_ATTR)
+                    if tIn and jIn then
+                        -- In-flight; don't touch it here
+                    else
+                        for _,p in ipairs(allParts(m)) do
+                            p.Anchored = false
+                            p.AssemblyAngularVelocity = Vector3.new()
+                            p.AssemblyLinearVelocity  = Vector3.new()
+                            p.CanCollide = true
+                        end
                     end
                 end
             end
         end)
     end
 
+    ----------------------------------------------------------------
+    -- Wave driver (mode-aware)
+    ----------------------------------------------------------------
     local function wave()
         if not CURRENT_MODE then return end
         local jobId = tostring(os.clock())
-        local list = getCandidatesForCurrent(jobId)
+
+        local list
+        if CURRENT_MODE == "orbs" then
+            list = getCandidatesForOrbs(jobId)
+        else
+            list = getCandidatesForCurrent(jobId)
+        end
+
         for i = 1, #list do
             if not running then break end
             while running and activeCount >= MAX_CONCURRENT do
@@ -612,21 +722,39 @@ return function(C, R, UI)
             end
             local m = list[i]
             if m and m.Parent and not inflight[m] then
+                local destBaseVec
+
+                if CURRENT_MODE == "orbs" then
+                    local idx = orbIndexForModel(m)
+                    if idx and CUSTOM_ORB_BASES[idx] then
+                        destBaseVec = CUSTOM_ORB_BASES[idx]
+                    else
+                        -- No orb mapping for this model; skip
+                        goto continue
+                    end
+                else
+                    -- camp/scrap/all -> use global orbPosVec
+                    destBaseVec = orbPosVec
+                end
+
                 activeCount += 1
                 task.spawn(function()
-                    startConveyor(m, jobId)
+                    startConveyor(m, jobId, destBaseVec)
                     task.delay(8, function()
                         activeCount = math.max(0, activeCount - 1)
                     end)
                 end)
                 task.wait(START_STAGGER)
             end
+            ::continue::
         end
     end
 
     local function stopAll()
         running = false
         if hb then hb:Disconnect() hb = nil end
+
+        -- Flush any staged-but-not-released
         for i = #releaseQueue, 1, -1 do
             local rec = releaseQueue[i]
             if rec and rec.model and rec.model.Parent then
@@ -634,6 +762,7 @@ return function(C, R, UI)
             end
             table.remove(releaseQueue, i)
         end
+
         for m,rec in pairs(inflight) do
             if rec and rec.conn then
                 rec.conn:Disconnect()
@@ -644,6 +773,7 @@ return function(C, R, UI)
             zeroAssembly(m)
             inflight[m] = nil
         end
+
         activeCount = 0
         destroyOrb()
     end
@@ -660,6 +790,7 @@ return function(C, R, UI)
         local cf = (mp and mp.CFrame) or fire:GetPivot()
         return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
     end
+
     local function scrapperOrbPos()
         local scr = WS:FindFirstChild("Map")
                     and WS.Map:FindFirstChild("Campground")
@@ -669,6 +800,7 @@ return function(C, R, UI)
         local cf = (mp and mp.CFrame) or scr:GetPivot()
         return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
     end
+
     local function noticeOrbPos()
         local map = WS:FindFirstChild("Map")
         if not map then return nil end
@@ -715,26 +847,49 @@ return function(C, R, UI)
         stopAll()
         CURRENT_MODE = mode
 
-        local pos, color
-        if mode == "fuel" then
-            pos   = campfireOrbPos()
-            color = Color3.fromRGB(255,200,50)
-        elseif mode == "scrap" then
-            pos   = scrapperOrbPos()
-            color = Color3.fromRGB(120,255,160)
-        elseif mode == "all" then
-            pos   = noticeOrbPos()
-            color = Color3.fromRGB(100,200,255)
+        CURRENT_RUN_ID = tostring(os.clock())
+
+        if mode == "fuel" or mode == "scrap" or mode == "all" then
+            local pos, color
+
+            if mode == "fuel" then
+                pos   = campfireOrbPos()
+                color = Color3.fromRGB(255,200,50)
+            elseif mode == "scrap" then
+                pos   = scrapperOrbPos()
+                color = Color3.fromRGB(120,255,160)
+            elseif mode == "all" then
+                pos   = noticeOrbPos()
+                color = Color3.fromRGB(100,200,255)
+            end
+
+            if not pos then
+                CURRENT_MODE = nil
+                return
+            end
+
+            spawnOrbAt(pos, color)
+        elseif mode == "orbs" then
+            -- Ensure we actually have something assigned to orbs
+            local any = false
+            for i = 1, 4 do
+                if next(orbItemSets[i]) ~= nil then
+                    any = true
+                    break
+                end
+            end
+            if not any then
+                CURRENT_MODE = nil
+                return
+            end
+            -- No global orb in this mode; items go directly to CUSTOM_ORB_BASES
+            destroyOrb()
+            orbPosVec = nil
         else
-            return
-        end
-        if not pos then
             CURRENT_MODE = nil
             return
         end
 
-        CURRENT_RUN_ID = tostring(os.clock())
-        spawnOrbAt(pos, color)
         running = true
         releaseQueue = {}
         releaseAcc   = 0
@@ -760,7 +915,7 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- UI TOGGLES
+    -- UI TOGGLES (existing modes)
     ----------------------------------------------------------------
     tab:Toggle({
         Title = "Send Fuel to Campfire",
@@ -804,21 +959,77 @@ return function(C, R, UI)
         end
     })
 
+    ----------------------------------------------------------------
+    -- UI: Bring to Orbs (Level 4 fire edge)
+    ----------------------------------------------------------------
+    tab:Section({ Title = "Bring to Orbs (Level 4 Fire Edge)" })
+
+    local function makeOrbDropdown(index)
+        return tab:Dropdown({
+            Title = ("Orb %d Items"):format(index),
+            Values = allItemNames,
+            Multi = true,
+            AllowNone = true,
+            Callback = function(selection)
+                local set = {}
+                if type(selection) == "table" then
+                    for _,name in ipairs(selection) do
+                        if name then
+                            set[tostring(name)] = true
+                        end
+                    end
+                elseif selection then
+                    set[tostring(selection)] = true
+                end
+                orbItemSets[index] = set
+                recomputeOrbUnionSet()
+            end
+        })
+    end
+
+    makeOrbDropdown(1)
+    makeOrbDropdown(2)
+    makeOrbDropdown(3)
+    makeOrbDropdown(4)
+
+    tab:Toggle({
+        Title = "Bring Selected Items to Orbs",
+        Value = false,
+        Callback = function(state)
+            if state then
+                startMode("orbs")
+            else
+                if CURRENT_MODE == "orbs" then
+                    startMode(nil)
+                end
+            end
+        end
+    })
+
+    ----------------------------------------------------------------
+    -- Respawn handling
+    ----------------------------------------------------------------
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if running and CURRENT_MODE then
-            local pos
-            if CURRENT_MODE == "fuel" then
-                pos = campfireOrbPos()
-            elseif CURRENT_MODE == "scrap" then
-                pos = scrapperOrbPos()
-            elseif CURRENT_MODE == "all" then
-                pos = noticeOrbPos()
-            end
-            if pos then
-                local color = (CURRENT_MODE == "fuel" and Color3.fromRGB(255,200,50))
-                              or (CURRENT_MODE == "scrap" and Color3.fromRGB(120,255,160))
-                              or Color3.fromRGB(100,200,255)
-                spawnOrbAt(pos, color)
+            if CURRENT_MODE == "fuel" or CURRENT_MODE == "scrap" or CURRENT_MODE == "all" then
+                local pos
+                if CURRENT_MODE == "fuel" then
+                    pos = campfireOrbPos()
+                elseif CURRENT_MODE == "scrap" then
+                    pos = scrapperOrbPos()
+                elseif CURRENT_MODE == "all" then
+                    pos = noticeOrbPos()
+                end
+                if pos then
+                    local color = (CURRENT_MODE == "fuel" and Color3.fromRGB(255,200,50))
+                                  or (CURRENT_MODE == "scrap" and Color3.fromRGB(120,255,160))
+                                  or Color3.fromRGB(100,200,255)
+                    spawnOrbAt(pos, color)
+                end
+            elseif CURRENT_MODE == "orbs" then
+                -- No global orb to respawn in orbs mode
+                destroyOrb()
+                orbPosVec = nil
             end
         end
     end)
