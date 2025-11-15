@@ -543,7 +543,7 @@ return function(C, R, UI)
             local speed = vel.Magnitude
             local newDir = (speed > 1e-3) and (vel / speed) or Vector3.zero
 
-            if st.lastVel.Magnitude > 1e-3 and newDir ~= Vector3.zero then
+            if st.lastVel and st.lastVel.Magnitude > 1e-3 and newDir ~= Vector3.zero then
                 local dot = newDir:Dot(st.lastVel.Unit)
                 if dot < CFG.FlipThresh then
                     st.burstUntil = os.clock() + CFG.FlipDart
@@ -953,7 +953,7 @@ return function(C, R, UI)
     end
 
     ---------------------------------------------------------------------
-    -- ITEMS AVOID PLAYERS (BUNNY HOP)
+    -- ITEMS AVOID PLAYERS (BUNNY HOP + WALL CLIMB)
     ---------------------------------------------------------------------
 
     local itemsAvoidEnabled = false
@@ -1026,6 +1026,26 @@ return function(C, R, UI)
                                     if hs and (now - hs.lastHopAt) < HOP_INTERVAL then
                                         horizSpeed = 0
                                         upSpeed    = 0
+                                    end
+                                end
+
+                                -- NEW: wall detection and "up the wall" behavior
+                                if horizSpeed > 0 then
+                                    local rcParams = RaycastParams.new()
+                                    rcParams.FilterType = Enum.RaycastFilterType.Exclude
+                                    rcParams.FilterDescendantsInstances = { mdl, lp.Character }
+
+                                    local castDist = 4
+                                    local rc = WS:Raycast(itemPos, dir * castDist, rcParams)
+                                    if rc and rc.Instance then
+                                        local n = rc.Normal
+                                        -- Project motion along wall plane
+                                        local alongWall = dir - dir:Dot(n) * n
+                                        if alongWall.Magnitude > 1e-3 then
+                                            dir = alongWall.Unit
+                                        end
+                                        -- Push harder upward to climb while hopping
+                                        upSpeed = upSpeed + 25
                                     end
                                 end
 
