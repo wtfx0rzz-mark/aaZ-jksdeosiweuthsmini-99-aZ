@@ -483,17 +483,26 @@ return function(C, R, UI)
         return false
     end
 
+    -- UPDATED: Apple + Berry now both require being detached items under Items (not embedded in trees/bushes)
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
-        if selectedSet["Apple"] then
-            if m.Name ~= "Apple" then return false end
+
+        local nm = m and m.Name or ""
+        local l  = nm:lower()
+
+        if selectedSet["Apple"] and nm == "Apple" then
             if itemsFolder and m.Parent ~= itemsFolder then return false end
             if isInsideTree(m) then return false end
             return true
         end
-        local nm = m and m.Name or ""
-        local l  = nm:lower()
+
+        if selectedSet["Berry"] and nm == "Berry" then
+            if itemsFolder and m.Parent ~= itemsFolder then return false end
+            if isInsideTree(m) then return false end
+            return true
+        end
+
         if selectedSet[nm] then return true end
         if selectedSet["Mossy Coin"] and (nm == "Mossy Coin" or nm:match("^Mossy Coin%d+$")) then return true end
         if selectedSet["Cultist"] and m and m:IsA("Model") and l:find("cultist",1,true) and hasHumanoid(m) then return true end
