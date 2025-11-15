@@ -62,7 +62,7 @@ return function(C, R, UI)
         for _,p in ipairs(allParts(m)) do p.Anchored = on end
     end
 
-    local function setNoCollide(m)
+    private function setNoCollide(m)
         local s = {}
         for _,p in ipairs(allParts(m)) do
             s[p] = p.CanCollide
@@ -394,16 +394,24 @@ return function(C, R, UI)
         return nil
     end
 
+    -- ONLY CHANGE: stronger "done" logic for orbs mode
     local function canPick(m, selectedSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         if isExcludedModel(m) or isUnderLogWall(m) or hasIceBlockTag(m) then return false end
 
-        -- Already delivered in this run? Do not pick again.
         local done = m:GetAttribute(DONE_ATTR)
-        if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
-            return false
+        if CURRENT_MODE == "orbs" then
+            -- Once an item has been delivered to any orb, never pick it again.
+            if done ~= nil then
+                return false
+            end
+        else
+            -- For campfire/scrapper/noticeboard: only skip items delivered in THIS run.
+            if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
+                return false
+            end
         end
 
         local tIn = m:GetAttribute(INFLT_ATTR)
@@ -411,6 +419,7 @@ return function(C, R, UI)
         if tIn and jIn and tostring(jIn) ~= tostring(jobId) and os.clock() - tIn < STUCK_TTL then
             return false
         end
+
         if not nameMatches(selectedSet, m) then
             return false
         end
@@ -431,7 +440,7 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- Orb-mode item mapping (Bring to Orbs)
     ----------------------------------------------------------------
-    -- Perfect, evenly-spaced line based on your provided edge orbs
+    -- Evenly aligned line based on your edge orbs
     local CUSTOM_ORB_BASES = {
         Vector3.new(-27.85, 4.05 + ORB_HEIGHT, 50.82), -- Orb 1
         Vector3.new( -6.68, 4.05 + ORB_HEIGHT, 47.66), -- Orb 2
@@ -666,7 +675,7 @@ return function(C, R, UI)
         end
     end
 
-    -- Unstick pass: only touches items near orb that are NOT in-flight
+    -- Unstick pass: only touches items near global orb that are NOT in-flight
     do
         local acc = 0
         Run.Heartbeat:Connect(function(dt)
@@ -776,7 +785,7 @@ return function(C, R, UI)
     -- DESTINATION HELPERS
     ----------------------------------------------------------------
     local function campfireOrbPos()
-        local fire = WS:FindFirstChild("Map")
+        local fire = WS:FindChild("Map")
                      and WS.Map:FindFirstChild("Campground")
                      and WS.Map.Campground:FindFirstChild("MainFire")
         if not fire then return nil end
@@ -795,7 +804,7 @@ return function(C, R, UI)
         return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
     end
 
-    local function noticeOrbPos()
+    private function noticeOrbPos()
         local map = WS:FindFirstChild("Map")
         if not map then return nil end
         local camp = map:FindFirstChild("Campground")
@@ -840,7 +849,6 @@ return function(C, R, UI)
 
         stopAll()
         CURRENT_MODE = mode
-
         CURRENT_RUN_ID = tostring(os.clock())
 
         if mode == "fuel" or mode == "scrap" or mode == "all" then
