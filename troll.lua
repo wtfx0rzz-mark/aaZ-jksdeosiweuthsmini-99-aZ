@@ -62,13 +62,18 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
-    local PLAYER_NUDGE_RANGE    = 300
-    local PLAYER_NUDGE_UP       = 20
-    local PLAYER_NUDGE_AWAY     = 50
-    local PLAYER_NUDGE_COOLDOWN = 0.1
+    -- Player Nudge config
+    local PLAYER_NUDGE_RANGE    = 300   -- radius around each selected player
+    local PLAYER_NUDGE_UP       = 20    -- studs up
+    local PLAYER_NUDGE_AWAY     = 50    -- studs away
+    local PLAYER_NUDGE_COOLDOWN = 0.10  -- per-item cooldown in seconds
 
-    local SINK_Y_TARGET         = -500
+    -- Sink Items config
+    local SINK_Y_TARGET         = -500  -- Y to teleport items to (below map)
 
+    ------------------------------------------------------------------------
+    -- Basic helpers
+    ------------------------------------------------------------------------
     local function hrp(p)
         p = p or lp
         local ch = p.Character or p.CharacterAdded:Wait()
@@ -148,6 +153,9 @@ return function(C, R, UI)
         end
     end
 
+    ------------------------------------------------------------------------
+    -- Remotes (drag)
+    ------------------------------------------------------------------------
     local function getRemote(...)
         local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
         for _,n in ipairs({...}) do
@@ -187,6 +195,9 @@ return function(C, R, UI)
         task.delay(0.20, function() pcall(safeStopDrag, model) end)
     end
 
+    ------------------------------------------------------------------------
+    -- World queries
+    ------------------------------------------------------------------------
     local function logsNear(center, excludeSet, limit)
         local params = OverlapParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -352,6 +363,9 @@ return function(C, R, UI)
         return WS:FindFirstChild("Items") or WS:FindFirstChild("items")
     end
 
+    ------------------------------------------------------------------------
+    -- State
+    ------------------------------------------------------------------------
     local running = false
     local desiredPerTarget = CFG.DesiredLogs
     local active  = {}
@@ -364,13 +378,21 @@ return function(C, R, UI)
     local scanAt = 0
     local scanCache = {}
 
+    -- Player Nudge runtime state
     local playerNudgeEnabled = false
     local playerNudgeConn    = nil
     local lastNudgeItemAt    = {}
 
-    local sinkItemsEnabled   = false
-    local sinkItemsConn      = nil
+    -- Sink Items runtime state
+    local sinkItemsEnabled      = false
+    local sinkItemsConn         = nil
+    local sinkItemsChildConn    = nil
+    local sinkItemsDescConn     = nil
+    local sinkProcessed         = setmetatable({}, { __mode = "k" }) -- weak keys
 
+    ------------------------------------------------------------------------
+    -- Orbit helpers
+    ------------------------------------------------------------------------
     local function clampOrbital(off)
         local maxOff = CFG.CloudMaxR + 3.0
         local m = off.Magnitude
@@ -383,6 +405,9 @@ return function(C, R, UI)
         if not countByUid[uid] then countByUid[uid] = 0 end
     end
 
+    ------------------------------------------------------------------------
+    -- Adoption / shedding (Chaotic Log Smog)
+    ------------------------------------------------------------------------
     local function adopt(model, tgt, seed)
         if active[model] then return end
         local uid = tgt.UserId
@@ -575,30 +600,31 @@ return function(C, R, UI)
 
         off = clampOrbital(off)
 
+        local basePos, baseLookVec = base, baseLook
         local posCandidate
         if os.clock() < st.nudgeUntil and root then
             local eye = root.Position + Vector3.new(0, CFG.NudgeEyeY, 0)
-            local look = baseLook or root.CFrame.LookVector
+            local look = baseLookVec or root.CFrame.LookVector
             local right = root.CFrame.RightVector
             local side = right * (st.nudgeSide * CFG.NudgeSideJitter)
             posCandidate = eye + look * CFG.NudgeAhead + side + Vector3.new(0, jy * 0.3, 0)
         else
-            posCandidate = base + off
+            posCandidate = basePos + off
         end
 
         posCandidate = projectOutOfHazards(posCandidate)
 
         local leashR = CFG.CloudMaxR + 6.0
-        local vecFromBase = posCandidate - base
+        local vecFromBase = posCandidate - basePos
         local dist = vecFromBase.Magnitude
         if dist > leashR then
-            posCandidate = base + vecFromBase.Unit * leashR
+            posCandidate = basePos + vecFromBase.Unit * leashR
         end
 
         local cur = getPivotPos(model) or posCandidate
-        local lookVec = (base - cur)
+        local lookVec = (basePos - cur)
         if lookVec.Magnitude < 1e-3 then
-            lookVec = baseLook or Vector3.new(0,0,-1)
+            lookVec = baseLookVec or Vector3.new(0,0,-1)
         else
             lookVec = lookVec.Unit
         end
@@ -611,6 +637,9 @@ return function(C, R, UI)
         return true
     end
 
+    ------------------------------------------------------------------------
+    -- Reconcile / stop
+    ------------------------------------------------------------------------
     local function reconcile()
         if not running then return end
         local myRoot = hrp(); if not myRoot then return end
@@ -673,6 +702,9 @@ return function(C, R, UI)
         countByUid  = {}
     end
 
+    ------------------------------------------------------------------------
+    -- Dropdown state (shared)
+    ------------------------------------------------------------------------
     local selectedSet = {}
     local playerDD
 
@@ -692,6 +724,124 @@ return function(C, R, UI)
     buildPlayerDropdownOnce()
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
+    ------------------------------------------------------------------------
+    -- Player Nudge helper (fixed to work for stationary players/logs)
+    ------------------------------------------------------------------------
+    local function quickNudgeModel(mdl, origin, rootCf)
+        if not mdl or not mdl.Parent then return end
+        if active[mdl] then return end  -- don't fight the log smog
+
+        local now = os.clock()
+        local last = lastNudgeItemAt[mdl] or 0
+        if now - last < PLAYER_NUDGE_COOLDOWN then return end
+        lastNudgeItemAt[mdl] = now
+
+        local mp = mainPart(mdl)
+        if not mp then return end
+
+        local toItem = mp.Position - origin
+        local horiz = Vector3.new(toItem.X, 0, toItem.Z)
+        if horiz.Magnitude < 1e-3 then
+            local look = rootCf.LookVector
+            horiz = Vector3.new(look.X, 0, look.Z)
+        end
+        local dir = horiz.Magnitude > 1e-3 and horiz.Unit or Vector3.new(0, 0, 1)
+        local vel = dir * PLAYER_NUDGE_AWAY + Vector3.new(0, PLAYER_NUDGE_UP, 0)
+
+        task.spawn(function()
+            -- Force server to give us control, then push
+            safeStartDrag(mdl)
+            task.wait(0.03)
+            local mp2 = mainPart(mdl)
+            if mp2 then
+                mp2.AssemblyLinearVelocity = vel
+            end
+            finallyStopDrag(mdl)
+        end)
+    end
+
+    local function doPlayerNudgeStep(dt)
+        if not playerNudgeEnabled then return end
+
+        local pTargets = selectedPlayersList(selectedSet)
+        if #pTargets == 0 then return end
+
+        for _, tgt in ipairs(pTargets) do
+            local root = hrp(tgt)
+            if root then
+                local origin = root.Position
+
+                local filterList = { lp.Character }
+                if tgt.Character then
+                    table.insert(filterList, tgt.Character)
+                end
+
+                local params = OverlapParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.FilterDescendantsInstances = filterList
+
+                local parts = WS:GetPartBoundsInRadius(origin, PLAYER_NUDGE_RANGE, params) or {}
+                for _, part in ipairs(parts) do
+                    if part:IsA("BasePart") and not part.Anchored then
+                        local mdl = part:FindFirstAncestorOfClass("Model") or part
+                        if mdl and not isCharacterModel(mdl) then
+                            quickNudgeModel(mdl, origin, root.CFrame)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    ------------------------------------------------------------------------
+    -- Sink Items helpers (faster + event-based)
+    ------------------------------------------------------------------------
+    local function sinkOne(obj)
+        if not sinkItemsEnabled then return end
+
+        local rootFolder = itemsRoot()
+        if not rootFolder or not obj or not obj.Parent then return end
+        if not obj:IsDescendantOf(rootFolder) then return end
+
+        local mdl
+        if obj:IsA("Model") then
+            mdl = obj
+        elseif obj:IsA("BasePart") then
+            mdl = obj:FindFirstAncestorOfClass("Model") or obj
+        else
+            return
+        end
+
+        if not mdl or sinkProcessed[mdl] then return end
+        sinkProcessed[mdl] = true
+
+        local mp = mainPart(mdl)
+        if not mp then return end
+
+        local pos = mp.Position
+        local targetCf = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
+
+        if mdl:IsA("Model") then
+            setPivot(mdl, targetCf)
+        else
+            mp.CFrame = targetCf
+        end
+    end
+
+    local function doSinkItemsStep(dt)
+        if not sinkItemsEnabled then return end
+        local rootFolder = itemsRoot()
+        if not rootFolder then return end
+
+        -- Fallback / periodic sweep: catches anything that slipped past event hooks
+        for _, child in ipairs(rootFolder:GetChildren()) do
+            sinkOne(child)
+        end
+    end
+
+    ------------------------------------------------------------------------
+    -- UI: Chaotic Log Smog
+    ------------------------------------------------------------------------
     tab:Section({ Title = "Troll: Chaotic Log Smog" })
 
     tab:Slider({
@@ -762,57 +912,9 @@ return function(C, R, UI)
         end
     })
 
-    local function doPlayerNudgeStep(dt)
-        if not playerNudgeEnabled then return end
-
-        local now = os.clock()
-        local pTargets = selectedPlayersList(selectedSet)
-        if #pTargets == 0 then return end
-
-        for _, tgt in ipairs(pTargets) do
-            local root = hrp(tgt)
-            if root then
-                local origin = root.Position
-
-                local filterList = { lp.Character }
-                if tgt.Character then
-                    table.insert(filterList, tgt.Character)
-                end
-
-                local params = OverlapParams.new()
-                params.FilterType = Enum.RaycastFilterType.Exclude
-                params.FilterDescendantsInstances = filterList
-
-                local parts = WS:GetPartBoundsInRadius(origin, PLAYER_NUDGE_RANGE, params) or {}
-                for _, part in ipairs(parts) do
-                    if part:IsA("BasePart") and not part.Anchored then
-                        local mdl = part:FindFirstAncestorOfClass("Model") or part
-                        if mdl and not isCharacterModel(mdl) then
-                            if not active[mdl] then
-                                local last = lastNudgeItemAt[mdl] or 0
-                                if now - last >= PLAYER_NUDGE_COOLDOWN then
-                                    lastNudgeItemAt[mdl] = now
-                                    local mp = mainPart(mdl)
-                                    if mp then
-                                        local toItem = mp.Position - origin
-                                        local horiz = Vector3.new(toItem.X, 0, toItem.Z)
-                                        if horiz.Magnitude < 1e-3 then
-                                            local look = root.CFrame.LookVector
-                                            horiz = Vector3.new(look.X, 0, look.Z)
-                                        end
-                                        local dir = horiz.Magnitude > 1e-3 and horiz.Unit or Vector3.new(0, 0, 1)
-                                        local vel = dir * PLAYER_NUDGE_AWAY + Vector3.new(0, PLAYER_NUDGE_UP, 0)
-                                        mp.AssemblyLinearVelocity = vel
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
+    ------------------------------------------------------------------------
+    -- UI: Player Nudge
+    ------------------------------------------------------------------------
     tab:Section({ Title = "Player Nudge" })
 
     tab:Toggle({
@@ -835,36 +937,9 @@ return function(C, R, UI)
         end
     })
 
-    local function doSinkItemsStep(dt)
-        if not sinkItemsEnabled then return end
-        local rootFolder = itemsRoot()
-        if not rootFolder then return end
-
-        for _, obj in ipairs(rootFolder:GetChildren()) do
-            local mdl
-            if obj:IsA("Model") then
-                mdl = obj
-            elseif obj:IsA("BasePart") then
-                mdl = obj:FindFirstAncestorOfClass("Model") or obj
-            end
-
-            if mdl then
-                local mp = mainPart(mdl)
-                if mp then
-                    local pos = mp.Position
-                    if pos.Y > SINK_Y_TARGET then
-                        local targetCf = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
-                        if mdl:IsA("Model") then
-                            setPivot(mdl, targetCf)
-                        else
-                            mp.CFrame = targetCf
-                        end
-                    end
-                end
-            end
-        end
-    end
-
+    ------------------------------------------------------------------------
+    -- UI: Sink Items (fast)
+    ------------------------------------------------------------------------
     tab:Section({ Title = "Sink Items" })
 
     tab:Toggle({
@@ -872,16 +947,41 @@ return function(C, R, UI)
         Value = false,
         Callback = function(on)
             sinkItemsEnabled = (on == true)
+
             if sinkItemsEnabled then
+                -- Heartbeat sweep
                 if not sinkItemsConn then
                     sinkItemsConn = Run.Heartbeat:Connect(function(dt)
                         doSinkItemsStep(dt)
                     end)
                 end
+
+                -- Event hooks for "very very quickly" sinking
+                local rootFolder = itemsRoot()
+                if rootFolder then
+                    if not sinkItemsChildConn then
+                        sinkItemsChildConn = rootFolder.ChildAdded:Connect(function(child)
+                            sinkOne(child)
+                        end)
+                    end
+                    if not sinkItemsDescConn then
+                        sinkItemsDescConn = rootFolder.DescendantAdded:Connect(function(desc)
+                            sinkOne(desc)
+                        end)
+                    end
+                end
             else
                 if sinkItemsConn then
                     sinkItemsConn:Disconnect()
                     sinkItemsConn = nil
+                end
+                if sinkItemsChildConn then
+                    sinkItemsChildConn:Disconnect()
+                    sinkItemsChildConn = nil
+                end
+                if sinkItemsDescConn then
+                    sinkItemsDescConn:Disconnect()
+                    sinkItemsDescConn = nil
                 end
             end
         end
