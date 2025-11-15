@@ -98,7 +98,8 @@ return function(C, R, UI)
 
     local function hrp(p)
         p = p or lp
-        local ch = p.Character or p.CharacterAdded:Wait()
+        local ch = p.Character
+        if not ch then return nil end
         return ch:FindFirstChild("HumanoidRootPart")
     end
 
