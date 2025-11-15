@@ -49,8 +49,13 @@ return function(C, R, UI)
         NudgeEyeY         = 2.0,
         NudgeSideJitter   = 1.2,
 
-        HazardTopPad = 6.0,
-        HazardRadPad = 2.0
+        HazardTopPad      = 6.0,
+        HazardRadPad      = 2.0,
+
+        -- New: extra chaos when near campfire/scrapper so logs don't sit still
+        HazardChaosAmpXZ  = 4.0,
+        HazardChaosAmpY   = 6.0,
+        HazardChaosFreq   = 3.0
     }
 
     local BURST_CHANCE_PER_SEC = 0.15
@@ -88,9 +93,9 @@ return function(C, R, UI)
     local HOP_EXTRA_SPEED       = 10
 
     -- Player-nudge drift parameters
-    local DRIFT_HEIGHT      = 10      -- height above player Y to start sky-drift
-    local DRIFT_MAX_HEIGHT  = 400     -- max height before we sink item
-    local DRIFT_MAX_TIME    = 10      -- max drift time before sink
+    local DRIFT_HEIGHT      = 10
+    local DRIFT_MAX_HEIGHT  = 400
+    local DRIFT_MAX_TIME    = 10
 
     ---------------------------------------------------------------------
     -- HELPERS
@@ -98,8 +103,7 @@ return function(C, R, UI)
 
     local function hrp(p)
         p = p or lp
-        local ch = p.Character
-        if not ch then return nil end
+        local ch = p.Character or p.CharacterAdded:Wait()
         return ch:FindFirstChild("HumanoidRootPart")
     end
 
@@ -333,10 +337,12 @@ return function(C, R, UI)
         return list
     end
 
+    -- CHANGED: now adds time-based jitter so logs don't sit still near camp/scrap
     local function projectOutOfHazards(pos)
         local hs = hazardInfo()
         if #hs == 0 then return pos end
-        for _,h in ipairs(hs) do
+        local now = os.clock()
+        for idx,h in ipairs(hs) do
             local c = h.center
             if c then
                 local rSafe = (h.r or 0) + CFG.HazardRadPad
@@ -350,10 +356,16 @@ return function(C, R, UI)
                     else
                         rim = c + Vector3.new(rSafe, 0, 0)
                     end
+
+                    local t = now * CFG.HazardChaosFreq + idx * 1.37
+                    local jitterXZ = math.sin(t + v.X * 0.25) * CFG.HazardChaosAmpXZ
+                    local jitterZ  = math.cos(t * 1.17 + v.Z * 0.33) * CFG.HazardChaosAmpXZ
+                    local jitterY  = math.sin(t * 1.41 + v.Y * 0.19) * CFG.HazardChaosAmpY
+
                     pos = Vector3.new(
-                        rim.X,
-                        math.max(pos.Y, c.Y + CFG.HazardTopPad) + CFG.AvoidLift,
-                        rim.Z
+                        rim.X + jitterXZ,
+                        math.max(pos.Y, c.Y + CFG.HazardTopPad) + CFG.AvoidLift + jitterY,
+                        rim.Z + jitterZ
                     )
                 end
             end
@@ -815,14 +827,14 @@ return function(C, R, UI)
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
     ---------------------------------------------------------------------
-    -- PLAYER NUDGE (REUSE BUNNY-HOP STYLE + SKY DRIFT)
+    -- PLAYER NUDGE
     ---------------------------------------------------------------------
 
     local playerNudgeEnabled = false
     local playerNudgeConn    = nil
 
     local lastNudgeItemAt = {}
-    local driftItems      = {}  -- mdl -> { originY, dirXZ, start }
+    local driftItems      = {}
 
     local function doPlayerNudgeStep(dt)
         if not playerNudgeEnabled then return end
@@ -835,7 +847,6 @@ return function(C, R, UI)
 
         local now = os.clock()
 
-        -- Stage 1: assign new "drifter" items, using a hop similar to bunny-hopping logic
         for _, desc in ipairs(rootFolder:GetDescendants()) do
             if desc:IsA("BasePart") then
                 local mdl = desc:FindFirstAncestorOfClass("Model") or desc
@@ -881,7 +892,6 @@ return function(C, R, UI)
                                         start   = now
                                     }
 
-                                    -- Initial hop away + up, via remote drag so everyone sees it
                                     task.spawn(function()
                                         safeStartDrag(mdl)
                                         task.wait(0.03)
@@ -900,7 +910,6 @@ return function(C, R, UI)
             end
         end
 
-        -- Stage 2: drift existing drifters smoothly up into the sky
         local now2 = os.clock()
         for mdl, info in pairs(driftItems) do
             if not mdl or not mdl.Parent then
@@ -923,16 +932,13 @@ return function(C, R, UI)
 
                     local speed
                     if h < DRIFT_HEIGHT then
-                        -- still close to the ground: push more gently upward+away
                         speed = 35
                     else
-                        -- once it's up ~10 studs, let it drift faster into the sky
                         speed = 45 + age * 15
                     end
 
                     mp.AssemblyLinearVelocity = dir * speed
 
-                    -- final cleanup: sink below map after high enough / long enough
                     if h > DRIFT_MAX_HEIGHT or age > DRIFT_MAX_TIME then
                         mp.CFrame = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
                         driftItems[mdl] = nil
@@ -974,7 +980,7 @@ return function(C, R, UI)
     end
 
     ---------------------------------------------------------------------
-    -- ITEMS AVOID PLAYERS (BUNNY HOP + WALL CLIMB)  -- UNCHANGED
+    -- ITEMS AVOID PLAYERS
     ---------------------------------------------------------------------
 
     local itemsAvoidEnabled = false
@@ -1050,7 +1056,6 @@ return function(C, R, UI)
                                     end
                                 end
 
-                                -- Wall detection & bunny-hop up walls
                                 if horizSpeed > 0 then
                                     local rcParams = RaycastParams.new()
                                     rcParams.FilterType = Enum.RaycastFilterType.Exclude
