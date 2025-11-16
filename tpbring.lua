@@ -694,6 +694,7 @@ return function(C, R, UI)
         end)
     end
 
+    private_flushStaleStaged = nil
     local function flushStaleStaged()
         local now = os.clock()
         for m,info in pairs(inflight) do
@@ -727,45 +728,43 @@ return function(C, R, UI)
 
             local now = os.clock()
             for _,m in ipairs(items:GetChildren()) do
-                if not m:IsA("Model") then continue end
-                local mp = mainPart(m)
-                if not mp then continue end
-                if (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
-                    local tIn  = m:GetAttribute(INFLT_ATTR)
-                    local jIn  = m:GetAttribute(JOB_ATTR)
-                    local info = inflight[m]
-                    local age  = tIn and (now - tIn) or nil
+                if m:IsA("Model") then
+                    local mp = mainPart(m)
+                    if mp and (mp.Position - orbPosVec).Magnitude <= ORB_UNSTICK_RAD then
+                        local tIn  = m:GetAttribute(INFLT_ATTR)
+                        local jIn  = m:GetAttribute(JOB_ATTR)
+                        local info = inflight[m]
+                        local age  = tIn and (now - tIn) or nil
 
-                    local treatAsStuck = false
+                        local treatAsStuck = false
 
-                    if not tIn or not jIn then
-                        treatAsStuck = true
-                    elseif not info then
-                        treatAsStuck = true
-                    elseif age and age >= STUCK_TTL then
-                        treatAsStuck = true
-                    end
+                        if not tIn or not jIn then
+                            treatAsStuck = true
+                        elseif not info then
+                            treatAsStuck = true
+                        elseif age and age >= STUCK_TTL then
+                            treatAsStuck = true
+                        end
 
-                    if not treatAsStuck then
-                        -- still in-flight and within TTL: leave it alone
-                    else
-                        inflight[m] = nil
-                        pcall(function()
-                            m:SetAttribute(INFLT_ATTR, nil)
-                            m:SetAttribute(JOB_ATTR, nil)
-                            m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
-                        end)
-                        for _,p in ipairs(allParts(m)) do
-                            p.Anchored = false
-                            p.AssemblyAngularVelocity = Vector3.new()
-                            p.AssemblyLinearVelocity  = Vector3.new()
-                            p.CanCollide = true
-                            pcall(function() p:SetNetworkOwner(nil) end)
+                        if treatAsStuck then
+                            inflight[m] = nil
                             pcall(function()
-                                if p.SetNetworkOwnershipAuto then
-                                    p:SetNetworkOwnershipAuto()
-                                end
+                                m:SetAttribute(INFLT_ATTR, nil)
+                                m:SetAttribute(JOB_ATTR, nil)
+                                m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
                             end)
+                            for _,p in ipairs(allParts(m)) do
+                                p.Anchored = false
+                                p.AssemblyAngularVelocity = Vector3.new()
+                                p.AssemblyLinearVelocity  = Vector3.new()
+                                p.CanCollide = true
+                                pcall(function() p:SetNetworkOwner(nil) end)
+                                pcall(function()
+                                    if p.SetNetworkOwnershipAuto then
+                                        p:SetNetworkOwnershipAuto()
+                                    end
+                                end)
+                            end
                         end
                     end
                 end
