@@ -219,17 +219,34 @@ return function(C, R, UI)
 
     -- important / rare items to keep pre-dragged in the background
     local preDragImportantSet = {}
-    addListToSet(weaponsArmor, preDragImportantSet)
+    addListToSet(weaponsArmor, preDragImportantSet) -- includes Sword + sword variants via nameMatches
+
+    -- explicit always-grab add-ons (includes Cultist Gem, Strong Flashlight, etc.)
     addListToSet({
         "Giant Sack","Good Sack",
-        "Blueprint","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"
+        "Blueprint","Forest Gem","Key","Flashlight","Strong Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"
     }, preDragImportantSet)
+
+    -- easy view list of always-grab names
+    local alwaysGrabNames = {}
+    for name,_ in pairs(preDragImportantSet) do
+        alwaysGrabNames[#alwaysGrabNames+1] = name
+    end
+    table.sort(alwaysGrabNames)
 
     local allItemNames = {}
     for name,_ in pairs(allModeSet) do
         allItemNames[#allItemNames+1] = name
     end
     table.sort(allItemNames)
+
+    local function cloneArray(src)
+        local t = {}
+        for i,v in ipairs(src) do
+            t[i] = v
+        end
+        return t
+    end
 
     ----------------------------------------------------------------
     -- Shared item helpers
@@ -361,6 +378,7 @@ return function(C, R, UI)
             return true
         end
 
+        -- "Any sword variants" – any name containing "sword" when Sword is in set.
         if selectedSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then
             return true
         end
@@ -373,7 +391,11 @@ return function(C, R, UI)
             return true
         end
 
+        -- Flashlight / Strong Flashlight and variants
         if selectedSet["Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then
+            return true
+        end
+        if selectedSet["Strong Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then
             return true
         end
 
@@ -478,13 +500,18 @@ return function(C, R, UI)
         {},
     }
 
+    -- per-orb enable/disable
+    local orbEnabled = { true, true, true, true }
+
     local orbUnionSet = {}
 
     local function recomputeOrbUnionSet()
         orbUnionSet = {}
         for i = 1, 4 do
-            for name,_ in pairs(orbItemSets[i]) do
-                orbUnionSet[name] = true
+            if orbEnabled[i] then
+                for name,_ in pairs(orbItemSets[i]) do
+                    orbUnionSet[name] = true
+                end
             end
         end
     end
@@ -492,12 +519,20 @@ return function(C, R, UI)
     local function orbIndexForModel(m)
         for i = 1, 4 do
             local set = orbItemSets[i]
-            if next(set) ~= nil and nameMatches(set, m) then
+            if orbEnabled[i] and next(set) ~= nil and nameMatches(set, m) then
                 return i
             end
         end
         return nil
     end
+
+    -- per-orb dropdown lists (separate, so they can be reordered independently later)
+    local orbDropdownValues = {
+        cloneArray(allItemNames),
+        cloneArray(allItemNames),
+        cloneArray(allItemNames),
+        cloneArray(allItemNames),
+    }
 
     ----------------------------------------------------------------
     -- Generic candidate collector
@@ -615,6 +650,18 @@ return function(C, R, UI)
                 end
             end)
         end
+
+        -- if this is an always-grab item near the campfire, ensure background drag is stopped
+        local mp2 = mainPart(m)
+        if mp2 and stopDrag and isPreDragImportantModel(m) then
+            local campPos = campfireOrbPos()
+            if campPos and (mp2.Position - campPos).Magnitude <= 30 then
+                pcall(function()
+                    stopDrag:FireServer(m)
+                end)
+            end
+        end
+
         pcall(function()
             m:SetAttribute(INFLT_ATTR, nil)
             m:SetAttribute(JOB_ATTR, nil)
@@ -940,7 +987,7 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- DESTINATION HELPERS
     ----------------------------------------------------------------
-    local function campfireOrbPos()
+    function campfireOrbPos()
         local fire = WS:FindFirstChild("Map")
                      and WS.Map:FindFirstChild("Campground")
                      and WS.Map.Campground:FindFirstChild("MainFire")
@@ -1107,7 +1154,7 @@ return function(C, R, UI)
         elseif mode == "orbs" then
             local any = false
             for i = 1, 4 do
-                if next(orbItemSets[i]) ~= nil then
+                if orbEnabled[i] and next(orbItemSets[i]) ~= nil then
                     any = true
                     break
                 end
@@ -1199,7 +1246,7 @@ return function(C, R, UI)
     local function makeOrbDropdown(index)
         return tab:Dropdown({
             Title = ("Orb %d Items"):format(index),
-            Values = allItemNames,
+            Values = orbDropdownValues[index],
             Multi = true,
             AllowNone = true,
             Callback = function(selection)
@@ -1223,6 +1270,43 @@ return function(C, R, UI)
     makeOrbDropdown(2)
     makeOrbDropdown(3)
     makeOrbDropdown(4)
+
+    -- per-orb enable toggles
+    tab:Toggle({
+        Title = "Orb 1 Enabled",
+        Value = true,
+        Callback = function(state)
+            orbEnabled[1] = state and true or false
+            recomputeOrbUnionSet()
+        end
+    })
+
+    tab:Toggle({
+        Title = "Orb 2 Enabled",
+        Value = true,
+        Callback = function(state)
+            orbEnabled[2] = state and true or false
+            recomputeOrbUnionSet()
+        end
+    })
+
+    tab:Toggle({
+        Title = "Orb 3 Enabled",
+        Value = true,
+        Callback = function(state)
+            orbEnabled[3] = state and true or false
+            recomputeOrbUnionSet()
+        end
+    })
+
+    tab:Toggle({
+        Title = "Orb 4 Enabled",
+        Value = true,
+        Callback = function(state)
+            orbEnabled[4] = state and true or false
+            recomputeOrbUnionSet()
+        end
+    })
 
     tab:Toggle({
         Title = "Bring Selected Items to Orbs",
