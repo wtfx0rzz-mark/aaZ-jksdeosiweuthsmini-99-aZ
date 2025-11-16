@@ -234,11 +234,22 @@ return function(C, R, UI)
     end
     table.sort(alwaysGrabNames)
 
-    local allItemNames = {}
-    for name,_ in pairs(allModeSet) do
-        allItemNames[#allItemNames+1] = name
+    -- grouped dropdown ordering: by category
+    local groupedItemValues = {}
+    local function appendListIntoGrouped(list)
+        for _,name in ipairs(list) do
+            if allModeSet[name] then
+                groupedItemValues[#groupedItemValues+1] = name
+            end
+        end
     end
-    table.sort(allItemNames)
+    appendListIntoGrouped(junkItems)
+    appendListIntoGrouped(fuelItems)
+    appendListIntoGrouped(foodItems)
+    appendListIntoGrouped(medicalItems)
+    appendListIntoGrouped(weaponsArmor)
+    appendListIntoGrouped(ammoMisc)
+    appendListIntoGrouped(pelts)
 
     local function cloneArray(src)
         local t = {}
@@ -526,12 +537,12 @@ return function(C, R, UI)
         return nil
     end
 
-    -- per-orb dropdown lists (separate, so they can be reordered independently later)
+    -- per-orb dropdown lists (grouped by category; same ordering in each orb)
     local orbDropdownValues = {
-        cloneArray(allItemNames),
-        cloneArray(allItemNames),
-        cloneArray(allItemNames),
-        cloneArray(allItemNames),
+        cloneArray(groupedItemValues),
+        cloneArray(groupedItemValues),
+        cloneArray(groupedItemValues),
+        cloneArray(groupedItemValues),
     }
 
     ----------------------------------------------------------------
