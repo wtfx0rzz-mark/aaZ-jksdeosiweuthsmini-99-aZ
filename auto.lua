@@ -8,6 +8,12 @@ return function(C, R, UI)
         local UIS      = game:GetService("UserInputService")
         local Lighting = (C and C.Services and C.Services.Lighting) or game:GetService("Lighting")
         local VIM      = game:GetService("VirtualInputManager")
+        local WDModule = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
+        if not WDModule then
+            local defaultRS = game:GetService("ReplicatedStorage")
+            WDModule = defaultRS:WaitForChild("LoopWatchdog")
+        end
+        local WD = require(WDModule)
 
         local lp = Players.LocalPlayer
         local Tabs = (UI and UI.Tabs) or {}
@@ -574,6 +580,7 @@ return function(C, R, UI)
         })
 
         local godOn, godHB, godAcc = false, nil, 0
+        local wd_god = WD.register("auto::godmode", function() return godOn end)
         local GOD_INTERVAL = 0.5
         local function fireGod()
             local f = RS:FindFirstChild("RemoteEvents")
@@ -586,11 +593,16 @@ return function(C, R, UI)
             if godHB then godHB:Disconnect() end
             godAcc = 0
             godHB = Run.Heartbeat:Connect(function(dt)
+                wd_god:tick()
                 godAcc += dt
                 if godAcc >= GOD_INTERVAL then godAcc = 0; fireGod() end
             end)
         end
-        local function disableGod() godOn = false; if godHB then godHB:Disconnect() godHB = nil end end
+        local function disableGod()
+            godOn = false
+            if godHB then godHB:Disconnect() godHB = nil end
+            wd_god:stop()
+        end
         tab:Toggle({ Title = "Godmode", Value = true, Callback = function(state) if state then enableGod() else disableGod() end end })
         task.defer(enableGod)
 
@@ -667,6 +679,7 @@ return function(C, R, UI)
         local STUN_RADIUS     = 24
         local OFF_PULSE_EVERY = 1.5
         local autoStunOn, autoStunThread = false, nil
+        local wd_autoStun = WD.register("auto::stun", function() return autoStunOn end)
         local lastFlashState, lastFlashName = nil, nil
         local function resolveFlashlightName()
             local inv = lp and lp:FindFirstChild("Inventory")
@@ -740,6 +753,7 @@ return function(C, R, UI)
                 local fname = resolveFlashlightName()
                 local lastPulse = os.clock()
                 while autoStunOn do
+                    wd_autoStun:tick()
                     if not fname then fname = resolveFlashlightName() end
                     local target = nearestMonsterWithin(STUN_RADIUS)
                     if fname and target then
@@ -763,6 +777,7 @@ return function(C, R, UI)
         end
         local function disableAutoStun()
             autoStunOn = false
+            wd_autoStun:stop()
         end
         tab:Toggle({
             Title = "Auto Stun Monster",
@@ -806,6 +821,7 @@ return function(C, R, UI)
             return (type(n)=="string") and (n:match("^WebbedTreeBig%d*$") ~= nil)
         end
         local hideBigTreesOn, hideConn, hideAcc = false, nil, 0
+        local wd_hideTrees = WD.register("auto::hideTrees", function() return hideBigTreesOn end)
         local function deleteBigTreesOnce()
             local count = 0
             for _,d in ipairs(WS:GetDescendants()) do
@@ -823,6 +839,7 @@ return function(C, R, UI)
             if hideConn then hideConn:Disconnect() end
             hideAcc = 0
             hideConn = Run.Heartbeat:Connect(function(dt)
+                wd_hideTrees:tick()
                 hideAcc += dt
                 if hideAcc >= 60 then
                     hideAcc = 0
@@ -833,6 +850,7 @@ return function(C, R, UI)
         local function disableHideBigTrees()
             hideBigTreesOn = false
             if hideConn then hideConn:Disconnect() hideConn = nil end
+            wd_hideTrees:stop()
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
         local cam = WS.CurrentCamera
@@ -945,11 +963,13 @@ return function(C, R, UI)
             return ok
         end
         local coinOn = true
+        local wd_coin = WD.register("auto::coins", function() return coinOn end)
         local function enableCoin()
             if coinConn then return end
             coinOn = true
             coinAcc = 0
             coinConn = Run.Heartbeat:Connect(function(dt)
+                wd_coin:tick()
                 coinAcc += dt
                 if coinAcc < COIN_INTERVAL then return end
                 coinAcc = 0
@@ -989,6 +1009,7 @@ return function(C, R, UI)
             coinOn = false
             if coinConn then coinConn:Disconnect(); coinConn = nil end
             coinSeen = {}
+            wd_coin:stop()
         end
         tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
         if coinOn then enableCoin() end
@@ -1332,6 +1353,7 @@ return function(C, R, UI)
                 teleportSticky(CFrame.new(standPos, chestCenter), true)
             end
             local cfHB, childAdd, childRem
+            local wd_chestFinder = WD.register("auto::chestFinder", function() return chestFinderOn end)
             nextChestBtn.MouseButton1Click:Connect(function()
                 local list = unopenedList()
                 if #list == 0 then
@@ -1377,6 +1399,7 @@ return function(C, R, UI)
                     childRem = items.ChildRemoved:Connect(function(c) chests[c] = nil end)
                 end
                 cfHB = Run.Heartbeat:Connect(function()
+                    wd_chestFinder:tick()
                     for m,_ in pairs(chests) do if m and m.Parent then updateChestRecord(m) end end
                     refreshButton()
                 end)
@@ -1388,11 +1411,13 @@ return function(C, R, UI)
                 if childAdd then childAdd:Disconnect() childAdd = nil end
                 if childRem then childRem:Disconnect() childRem = nil end
                 nextChestBtn.Visible = false
+                wd_chestFinder:stop()
             end
         end
 
         do
             local deleteOn = false
+            local wd_deleteChest = WD.register("auto::chestCleanup", function() return deleteOn end)
             local addConn, remConn, sweepHB
             local tracked   = setmetatable({}, { __mode = "k" })
             local deleteExcl = setmetatable({}, { __mode = "k" })
@@ -1524,6 +1549,7 @@ return function(C, R, UI)
                 end
                 if sweepHB then sweepHB:Disconnect() end
                 sweepHB = Run.Heartbeat:Connect(function()
+                    wd_deleteChest:tick()
                     sweepDeleteOpened()
                 end)
             end
@@ -1532,6 +1558,7 @@ return function(C, R, UI)
                 if addConn   then addConn:Disconnect();   addConn = nil end
                 if remConn   then remConn:Disconnect();   remConn = nil end
                 if sweepHB   then sweepHB:Disconnect();   sweepHB = nil end
+                wd_deleteChest:stop()
             end
             tab:Toggle({
                 Title = "Delete Chests After Opening",

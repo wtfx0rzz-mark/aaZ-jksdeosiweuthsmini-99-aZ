@@ -3,6 +3,12 @@ return function(C, R, UI)
     local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
+    local WDModule = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
+    if not WDModule then
+        local defaultRS = game:GetService("ReplicatedStorage")
+        WDModule = defaultRS:WaitForChild("LoopWatchdog")
+    end
+    local WD = require(WDModule)
     local CS       = game:GetService("CollectionService")
     local UIS      = game:GetService("UserInputService")
 
@@ -555,6 +561,7 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     local PREC_Enable = false
     local PREC_Speed  = 2.0 -- studs/sec, controlled by slider
+    local wd_precisionMove = WD.register("debug::precisionMove", function() return PREC_Enable end)
 
     local PREC_BaseLook   = nil
     local PREC_BaseRight  = nil
@@ -569,6 +576,7 @@ return function(C, R, UI)
 
     local moveGui     = nil
     local moveConn    = nil
+    local moveGuiConns = {}
 
     local origCamType    = nil
     local origCamSubject = nil
@@ -582,6 +590,13 @@ return function(C, R, UI)
         moveDown    = false
     end
 
+    local function trackMoveConn(conn)
+        if conn then
+            moveGuiConns[#moveGuiConns+1] = conn
+        end
+        return conn
+    end
+
     local function destroyMoveGui()
         clearMoveFlags()
         if moveGui then
@@ -592,12 +607,20 @@ return function(C, R, UI)
             moveConn:Disconnect()
             moveConn = nil
         end
+        for i = #moveGuiConns, 1, -1 do
+            local conn = moveGuiConns[i]
+            if conn and conn.Disconnect then
+                pcall(function() conn:Disconnect() end)
+            end
+            moveGuiConns[i] = nil
+        end
     end
 
     local function ensureMoveHeartbeat()
         if moveConn then return end
 
         moveConn = Run.Heartbeat:Connect(function(dt)
+            wd_precisionMove:tick()
             if not PREC_Enable then return end
             local root = hrp(); if not root then return end
             if not PREC_BaseLook or not PREC_BaseRight or not PREC_CamOffset then return end
@@ -657,15 +680,15 @@ return function(C, R, UI)
     end
 
     local function bindMoveButton(btn, setter)
-        btn.MouseButton1Down:Connect(function()
+        trackMoveConn(btn.MouseButton1Down:Connect(function()
             setter(true)
-        end)
-        btn.MouseButton1Up:Connect(function()
+        end))
+        trackMoveConn(btn.MouseButton1Up:Connect(function()
             setter(false)
-        end)
-        btn.MouseLeave:Connect(function()
+        end))
+        trackMoveConn(btn.MouseLeave:Connect(function()
             setter(false)
-        end)
+        end))
     end
 
     local function createMoveGui()
@@ -832,27 +855,27 @@ return function(C, R, UI)
             end
         end)
 
-        bar.InputBegan:Connect(function(input)
+        trackMoveConn(bar.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1
                 or input.UserInputType == Enum.UserInputType.Touch then
                 dragging = true
                 dragInput = input
                 setFromX(input.Position.X)
             end
-        end)
+        end))
 
-        UIS.InputChanged:Connect(function(input)
+        trackMoveConn(UIS.InputChanged:Connect(function(input)
             if dragging then
                 setFromX(input.Position.X)
             end
-        end)
+        end))
 
-        UIS.InputEnded:Connect(function(input)
+        trackMoveConn(UIS.InputEnded:Connect(function(input)
             if input == dragInput then
                 dragging = false
                 dragInput = nil
             end
-        end)
+        end))
 
         -- Initial slider position (~low speed for precision)
         applyAlpha(0.1) -- ~10% of range
@@ -897,6 +920,7 @@ return function(C, R, UI)
                 end
             end
             origCamType, origCamSubject = nil, nil
+            wd_precisionMove:stop()
         end
     end
 

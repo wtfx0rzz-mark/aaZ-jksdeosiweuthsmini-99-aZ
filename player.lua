@@ -5,6 +5,13 @@ return function(C, R, UI)
     local Players      = C.Services.Players
     local RunService   = C.Services.RunService or game:GetService("RunService")
     local UIS          = C.Services.UIS        or game:GetService("UserInputService")
+    local RS           = C.Services.RS         or game:GetService("ReplicatedStorage")
+    local WDModule     = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
+    if not WDModule then
+        local defaultRS = game:GetService("ReplicatedStorage")
+        WDModule = defaultRS:WaitForChild("LoopWatchdog")
+    end
+    local WD = require(WDModule)
 
     local lp = Players.LocalPlayer
     local tab = UI.Tabs and UI.Tabs.Player
@@ -25,6 +32,12 @@ return function(C, R, UI)
     local keyDownConn, keyUpConn, jumpConn, noclipConn, renderConn
     local mobileAddedConn, mobileRenderConn
     local bodyGyro, bodyVelocity
+    local wd_desktopFly = WD.register("player::desktopFly", function() return FLYING and not mobileFlyEnabled end)
+    local wd_mobileFly  = WD.register("player::mobileFly", function() return FLYING and mobileFlyEnabled end)
+    local wd_forceFly   = WD.register("player::forceFly", function() return forceFlyEnabled end)
+    local wd_walkSpeed  = WD.register("player::walkSpeed", function() return speedEnabled end)
+    local noclipActive  = false
+    local wd_noclip     = WD.register("player::noclip", function() return noclipActive end)
 
     local EnableFlyToggleCtrl, ForceFlyToggleCtrl
 
@@ -87,6 +100,7 @@ return function(C, R, UI)
         end)
 
         renderConn = RunService.RenderStepped:Connect(function()
+            wd_desktopFly:tick()
             local cam = workspace.CurrentCamera
             if not cam or not root then return end
             local humCheck = humanoid()
@@ -117,6 +131,7 @@ return function(C, R, UI)
         disconnectConn(renderConn); renderConn = nil
         disconnectConn(keyDownConn); keyDownConn = nil
         disconnectConn(keyUpConn);   keyUpConn   = nil
+        wd_desktopFly:stop()
         local hum = humanoid()
         if hum then hum.PlatformStand = false end
         clearInstance(bodyVelocity); bodyVelocity = nil
@@ -161,6 +176,7 @@ return function(C, R, UI)
         end)
 
         mobileRenderConn = RunService.RenderStepped:Connect(function()
+            wd_mobileFly:tick()
             root = hrp()
             local cam = workspace.CurrentCamera
             if not root or not cam then return end
@@ -191,6 +207,7 @@ return function(C, R, UI)
         clearInstance(bodyVelocity); bodyVelocity = nil
         clearInstance(bodyGyro);     bodyGyro     = nil
         FLYING = false
+        wd_mobileFly:stop()
     end
 
     local function startFly()
@@ -221,6 +238,7 @@ return function(C, R, UI)
         forceLastFaceDir = root.CFrame.LookVector
 
         forceFlyConn = RunService.RenderStepped:Connect(function(dt)
+            wd_forceFly:tick()
             local r = hrp()
             local h = humanoid()
             local cam = workspace.CurrentCamera
@@ -262,12 +280,14 @@ return function(C, R, UI)
     local function stopForceFly()
         if not forceFlyConn then
             forceFlyEnabled = false
+            wd_forceFly:stop()
             return
         end
         disconnectConn(forceFlyConn); forceFlyConn = nil
         forceFlyEnabled  = false
         forceDesiredPos  = nil
         forceLastFaceDir = nil
+        wd_forceFly:stop()
         local h = humanoid()
         if h then h.PlatformStand = false end
         local r = hrp()
@@ -286,6 +306,7 @@ return function(C, R, UI)
     end
 
     RunService.Heartbeat:Connect(function()
+        wd_walkSpeed:tick()
         if not speedEnabled then return end
         local hum = humanoid()
         if hum and hum.WalkSpeed ~= walkSpeedValue then
@@ -298,7 +319,9 @@ return function(C, R, UI)
     --========================
     local function startNoclip()
         disconnectConn(noclipConn)
+        noclipActive = true
         noclipConn = RunService.Stepped:Connect(function()
+            wd_noclip:tick()
             local ch = lp.Character
             if not ch then return end
             for _, part in ipairs(ch:GetDescendants()) do
@@ -310,6 +333,8 @@ return function(C, R, UI)
     end
     local function stopNoclip()
         disconnectConn(noclipConn); noclipConn = nil
+        noclipActive = false
+        wd_noclip:stop()
     end
 
     --========================
@@ -371,6 +396,9 @@ return function(C, R, UI)
         Value = true,
         Callback = function(state)
             speedEnabled = state
+            if not speedEnabled then
+                wd_walkSpeed:stop()
+            end
             if state then setWalkSpeed(walkSpeedValue) else setWalkSpeed(16) end
         end
     })

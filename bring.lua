@@ -4,6 +4,12 @@ return function(C, R, UI)
     local RS      = C.Services.RS
     local Run     = C.Services.Run or game:GetService("RunService")
     local lp      = Players.LocalPlayer
+    local WDModule = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
+    if not WDModule then
+        local defaultRS = game:GetService("ReplicatedStorage")
+        WDModule = defaultRS:WaitForChild("LoopWatchdog")
+    end
+    local WD = require(WDModule)
 
     local Tabs = UI and UI.Tabs or {}
     local tab  = Tabs.Bring
@@ -843,7 +849,9 @@ return function(C, R, UI)
 
         local watched = setmetatable({}, {__mode="k"})
         local acc = 0
+        local wd_orbGuard = WD.register("bring::orbGuard", function() return true end)
         Run.Heartbeat:Connect(function(dt)
+            wd_orbGuard:tick()
             acc += dt
             if acc < (1 / GUARD_HZ) then return end
             acc = 0
