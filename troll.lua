@@ -7,12 +7,6 @@ return function(C, R, UI)
     local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
-    local WDModule = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
-    if not WDModule then
-        local defaultRS = game:GetService("ReplicatedStorage")
-        WDModule = defaultRS:WaitForChild("LoopWatchdog")
-    end
-    local WD = require(WDModule)
 
     local lp = Players.LocalPlayer
 
@@ -412,8 +406,6 @@ return function(C, R, UI)
     local targets     = {}
 
     local reconcileConn, hbConn = nil, nil
-    local wd_float     = WD.register("troll::float", function() return running end)
-    local wd_reconcile = WD.register("troll::reconcile", function() return running end)
     local scanAt   = 0
     local scanCache = {}
 
@@ -788,8 +780,6 @@ return function(C, R, UI)
 
     local function stopAll()
         running = false
-        wd_float:stop()
-        wd_reconcile:stop()
 
         if reconcileConn then
             reconcileConn:Disconnect()
@@ -842,7 +832,6 @@ return function(C, R, UI)
 
     local playerNudgeEnabled = false
     local playerNudgeConn    = nil
-    local wd_playerNudge     = WD.register("troll::playerNudge", function() return playerNudgeEnabled end)
 
     local lastNudgeItemAt = {}
     local driftItems      = {}
@@ -965,7 +954,6 @@ return function(C, R, UI)
 
     local sinkItemsEnabled = false
     local sinkItemsConn    = nil
-    local wd_sinkItems     = WD.register("troll::sinkItems", function() return sinkItemsEnabled end)
 
     local function doSinkItemsStep(dt)
         if not sinkItemsEnabled then return end
@@ -997,7 +985,6 @@ return function(C, R, UI)
 
     local itemsAvoidEnabled = false
     local itemsAvoidConn    = nil
-    local wd_itemsAvoid     = WD.register("troll::itemsAvoid", function() return itemsAvoidEnabled end)
     local lastAvoidKickAt   = {}
     local hopState          = {}
 
@@ -1185,7 +1172,6 @@ return function(C, R, UI)
             running = true
 
             hbConn = Run.Heartbeat:Connect(function(dt)
-                wd_float:tick()
                 if not running then return end
                 for mdl,st in pairs(active) do
                     if mdl and mdl.Parent and st and st.target then
@@ -1202,7 +1188,6 @@ return function(C, R, UI)
             end)
 
             reconcileConn = Run.Heartbeat:Connect(function()
-                wd_reconcile:tick()
                 reconcile()
             end)
         end
@@ -1220,72 +1205,66 @@ return function(C, R, UI)
     tab:Toggle({
         Title = "Enable Player Nudge",
         Value = false,
-            Callback = function(on)
-                playerNudgeEnabled = (on == true)
-                if playerNudgeEnabled then
-                    if not playerNudgeConn then
-                        playerNudgeConn = Run.Heartbeat:Connect(function(dt)
-                            wd_playerNudge:tick()
-                            doPlayerNudgeStep(dt)
-                        end)
-                    end
-                else
-                    if playerNudgeConn then
-                        playerNudgeConn:Disconnect()
-                        playerNudgeConn = nil
-                    end
-                    driftItems      = {}
-                    lastNudgeItemAt = {}
-                    wd_playerNudge:stop()
+        Callback = function(on)
+            playerNudgeEnabled = (on == true)
+            if playerNudgeEnabled then
+                if not playerNudgeConn then
+                    playerNudgeConn = Run.Heartbeat:Connect(function(dt)
+                        doPlayerNudgeStep(dt)
+                    end)
                 end
+            else
+                if playerNudgeConn then
+                    playerNudgeConn:Disconnect()
+                    playerNudgeConn = nil
+                end
+                driftItems      = {}
+                lastNudgeItemAt = {}
             end
-        })
+        end
+    })
 
     tab:Section({ Title = "Items Avoid Players" })
 
     tab:Toggle({
         Title = "Items Avoid Players",
         Value = false,
-            Callback = function(on)
-                itemsAvoidEnabled = (on == true)
-                if itemsAvoidEnabled then
-                    if not itemsAvoidConn then
-                        itemsAvoidConn = Run.Heartbeat:Connect(function(dt)
-                            wd_itemsAvoid:tick()
-                            doItemsAvoidStep(dt)
-                        end)
-                    end
-                else
-                    if itemsAvoidConn then
-                        itemsAvoidConn:Disconnect()
-                        itemsAvoidConn = nil
-                    end
-                    wd_itemsAvoid:stop()
+        Callback = function(on)
+            itemsAvoidEnabled = (on == true)
+            if itemsAvoidEnabled then
+                if not itemsAvoidConn then
+                    itemsAvoidConn = Run.Heartbeat:Connect(function(dt)
+                        doItemsAvoidStep(dt)
+                    end)
+                end
+            else
+                if itemsAvoidConn then
+                    itemsAvoidConn:Disconnect()
+                    itemsAvoidConn = nil
                 end
             end
-        })
+        end
+    })
 
     tab:Section({ Title = "Sink Items" })
 
     tab:Toggle({
         Title = "Sink Items",
         Value = false,
-            Callback = function(on)
-                sinkItemsEnabled = (on == true)
-                if sinkItemsEnabled then
-                    if not sinkItemsConn then
-                        sinkItemsConn = Run.Heartbeat:Connect(function(dt)
-                            wd_sinkItems:tick()
-                            doSinkItemsStep(dt)
-                        end)
-                    end
-                else
-                    if sinkItemsConn then
-                        sinkItemsConn:Disconnect()
-                        sinkItemsConn = nil
-                    end
-                    wd_sinkItems:stop()
+        Callback = function(on)
+            sinkItemsEnabled = (on == true)
+            if sinkItemsEnabled then
+                if not sinkItemsConn then
+                    sinkItemsConn = Run.Heartbeat:Connect(function(dt)
+                        doSinkItemsStep(dt)
+                    end)
+                end
+            else
+                if sinkItemsConn then
+                    sinkItemsConn:Disconnect()
+                    sinkItemsConn = nil
                 end
             end
-        })
+        end
+    })
 end

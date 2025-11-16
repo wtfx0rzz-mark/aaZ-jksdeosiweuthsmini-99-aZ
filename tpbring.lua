@@ -4,12 +4,6 @@ return function(C, R, UI)
     local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
-    local WDModule = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
-    if not WDModule then
-        local defaultRS = game:GetService("ReplicatedStorage")
-        WDModule = defaultRS:WaitForChild("LoopWatchdog")
-    end
-    local WD = require(WDModule)
 
     local lp  = Players.LocalPlayer
     local tab = UI and UI.Tabs and (UI.Tabs.TPBring or UI.Tabs.Bring or UI.Tabs.Auto or UI.Tabs.Main)
@@ -164,8 +158,6 @@ return function(C, R, UI)
     local orbPosVec    = nil
     local inflight     = {}
     local releaseQueue = {}
-    local wd_waveLoop  = WD.register("tpbring::wave", function() return running and CURRENT_MODE ~= nil end)
-    local wd_unstick   = WD.register("tpbring::unstick", function() return running end)
     local releaseAcc   = 0.0
     local activeCount  = 0
 
@@ -821,7 +813,6 @@ return function(C, R, UI)
     do
         local acc = 0
         Run.Heartbeat:Connect(function(dt)
-            wd_unstick:tick()
             if not (running and orbPosVec) then return end
             acc = acc + dt
             if acc < (1 / ORB_UNSTICK_HZ) then return end
@@ -974,8 +965,6 @@ return function(C, R, UI)
 
     local function stopAll()
         running = false
-        wd_waveLoop:stop()
-        wd_unstick:stop()
         if hb then
             hb:Disconnect()
             hb = nil
@@ -1064,10 +1053,8 @@ return function(C, R, UI)
     local PRECLAIM_INTERVAL_S  = 2.5
     local preclaimAcc          = 0
     local preclaimEnabled      = false
-    local wd_preclaim          = WD.register("tpbring::preclaim", function() return preclaimEnabled end)
 
     Run.Heartbeat:Connect(function(dt)
-        wd_preclaim:tick()
         preclaimAcc = preclaimAcc + dt
         if preclaimAcc < PRECLAIM_INTERVAL_S then return end
         preclaimAcc = 0
@@ -1202,7 +1189,6 @@ return function(C, R, UI)
             hb:Disconnect()
         end
         hb = Run.Heartbeat:Connect(function(dt)
-            wd_waveLoop:tick()
             if not running then return end
             wave()
             releaseAcc = releaseAcc + dt
@@ -1354,9 +1340,6 @@ return function(C, R, UI)
         Value = false,
         Callback = function(state)
             preclaimEnabled = state and true or false
-            if not preclaimEnabled then
-                wd_preclaim:stop()
-            end
         end
     })
 
