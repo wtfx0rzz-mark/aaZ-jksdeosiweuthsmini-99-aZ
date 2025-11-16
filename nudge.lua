@@ -8,12 +8,6 @@ return function(C, R, UI)
         local RS       = (C and C.Services and C.Services.RS)       or game:GetService("ReplicatedStorage")
         local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
         local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
-        local WDModule = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
-        if not WDModule then
-            local defaultRS = game:GetService("ReplicatedStorage")
-            WDModule = defaultRS:WaitForChild("LoopWatchdog")
-        end
-        local WD = require(WDModule)
         local lp       = Players.LocalPlayer
 
         local Tabs = (UI and UI.Tabs) or {}
@@ -181,7 +175,6 @@ return function(C, R, UI)
             Enabled     = false,
             MaxPerFrame = 16
         }
-        local wd_autoNudge = WD.register("nudge::auto", function() return AutoNudge.Enabled end)
 
         local function preDrag(model)
             local started = safeStartDrag(model)
@@ -459,9 +452,6 @@ return function(C, R, UI)
             Value = AutoNudge.Enabled,
             Callback = function(on)
                 AutoNudge.Enabled = (on == true)
-                if not AutoNudge.Enabled then
-                    wd_autoNudge:stop()
-                end
             end
         })
 
@@ -474,7 +464,6 @@ return function(C, R, UI)
         end
 
         autoConn = Run.Heartbeat:Connect(function(dt)
-            wd_autoNudge:tick()
             if not AutoNudge.Enabled then return end
             acc += dt
             if acc < 0.2 then return end
