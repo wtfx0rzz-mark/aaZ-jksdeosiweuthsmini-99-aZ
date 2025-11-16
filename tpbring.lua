@@ -114,25 +114,26 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- CORE CONFIG
     ----------------------------------------------------------------
-    local DRAG_SPEED       = 220
-    local ORB_HEIGHT       = 10
-    local MAX_CONCURRENT   = 40
-    local START_STAGGER    = 0.01
-    local STEP_WAIT        = 0.016
+    local DRAG_SPEED              = 220
+    local ORB_HEIGHT              = 10
+    local GROUND_ORB_DROP_HEIGHT  = 6          -- level 4 ground orbs drop height above ground
+    local MAX_CONCURRENT          = 40
+    local START_STAGGER           = 0.01
+    local STEP_WAIT               = 0.016
 
-    local LAND_MIN         = 0.35
-    local LAND_MAX         = 0.85
-    local ARRIVE_EPS_H     = 0.9
-    local STALL_SEC        = 0.6
+    local LAND_MIN                = 0.35
+    local LAND_MAX                = 0.85
+    local ARRIVE_EPS_H            = 0.9
+    local STALL_SEC               = 0.6
 
-    local HOVER_ABOVE_ORB  = 1.2
-    local RELEASE_RATE_HZ  = 16
-    local MAX_RELEASE_PER_TICK = 8
+    local HOVER_ABOVE_ORB         = 1.2
+    local RELEASE_RATE_HZ         = 16
+    local MAX_RELEASE_PER_TICK    = 8
 
-    local STAGE_TIMEOUT_S  = 1.5
-    local ORB_UNSTICK_RAD  = 2.0
-    local ORB_UNSTICK_HZ   = 10
-    local STUCK_TTL        = 6.0
+    local STAGE_TIMEOUT_S         = 1.5
+    local ORB_UNSTICK_RAD         = 2.0
+    local ORB_UNSTICK_HZ          = 10
+    local STUCK_TTL               = 6.0
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -199,6 +200,14 @@ return function(C, R, UI)
     addListToSet(weaponsArmor, allModeSet)
     addListToSet(ammoMisc, allModeSet)
     addListToSet(pelts, allModeSet)
+
+    -- important / rare items to keep pre-dragged in the background
+    local preDragImportantSet = {}
+    addListToSet(weaponsArmor, preDragImportantSet)
+    addListToSet({
+        "Giant Sack","Good Sack",
+        "Blueprint","Forest Gem","Key","Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"
+    }, preDragImportantSet)
 
     local allItemNames = {}
     for name,_ in pairs(allModeSet) do
@@ -367,6 +376,10 @@ return function(C, R, UI)
         return false
     end
 
+    local function isPreDragImportantModel(m)
+        return nameMatches(preDragImportantSet, m)
+    end
+
     local function topModelUnderItems(part, itemsFolder)
         local cur = part
         local lastModel = nil
@@ -432,10 +445,10 @@ return function(C, R, UI)
     -- Orb-mode item mapping (Bring to Orbs)
     ----------------------------------------------------------------
     local CUSTOM_ORB_BASES = {
-        Vector3.new(-27.85, 4.05 + ORB_HEIGHT, 50.82),
-        Vector3.new( -6.68, 4.05 + ORB_HEIGHT, 47.66),
-        Vector3.new( 14.50, 4.05 + ORB_HEIGHT, 44.50),
-        Vector3.new( 35.67, 4.05 + ORB_HEIGHT, 41.33),
+        Vector3.new(-27.85, 4.05 + GROUND_ORB_DROP_HEIGHT, 50.82),
+        Vector3.new( -6.68, 4.05 + GROUND_ORB_DROP_HEIGHT, 47.66),
+        Vector3.new( 14.50, 4.05 + GROUND_ORB_DROP_HEIGHT, 44.50),
+        Vector3.new( 35.67, 4.05 + GROUND_ORB_DROP_HEIGHT, 41.33),
     }
 
     local orbItemSets = {
@@ -580,14 +593,52 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
+    -- startConveyor:
+    --  - Non-orb modes: original drag-based movement for nice pathing.
+    --  - Orb mode: fire drag, teleport to target above ground orb, stage, stop drag, then later release to fall naturally.
     local function startConveyor(m, jobId, destBaseVec)
         if not (running and m and m.Parent) then return end
         local mp = mainPart(m)
         if not mp then return end
+
         local off = landingOffset(m, jobId)
+        local base = destBaseVec or orbPosVec or mp.Position
+
+        -- Lightweight path for level 4 ground orbs
+        if CURRENT_MODE == "orbs" then
+            local tgt = Vector3.new(base.X + off.X, base.Y + HOVER_ABOVE_ORB, base.Z + off.Z)
+
+            pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
+            pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
+
+            local snap = setNoCollide(m)
+            setAnchored(m, true)
+            zeroAssembly(m)
+
+            if startDrag then
+                pcall(function()
+                    startDrag:FireServer(m)
+                end)
+            end
+
+            local rec = { snap = snap, conn = nil, lastD = 0, lastT = os.clock(), staged = false }
+            inflight[m] = rec
+
+            stageAtOrb(m, snap, tgt)
+
+            if stopDrag then
+                pcall(function()
+                    stopDrag:FireServer(m)
+                end)
+            end
+
+            return
+        end
+
+        -- Original drag path for campfire / scrapper / noticeboard
         local function target()
-            local base = destBaseVec or orbPosVec or mp.Position
-            return Vector3.new(base.X + off.X, base.Y + HOVER_ABOVE_ORB, base.Z + off.Z)
+            local baseNow = destBaseVec or orbPosVec or mp.Position
+            return Vector3.new(baseNow.X + off.X, baseNow.Y + HOVER_ABOVE_ORB, baseNow.Z + off.Z)
         end
         pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
         pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
@@ -662,7 +713,7 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- Unstick pass: force-drop anything stuck near orb
+    -- Unstick pass: force-drop anything stuck near orb (camp/scrap)
     ----------------------------------------------------------------
     do
         local acc = 0
@@ -738,32 +789,42 @@ return function(C, R, UI)
 
         for i = 1, #list do
             if not running then break end
-            while running and activeCount >= MAX_CONCURRENT do
-                Run.Heartbeat:Wait()
-            end
 
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                local destBaseVec = nil
-
-                if CURRENT_MODE == "orbs" then
-                    local idx = orbIndexForModel(m)
-                    if idx and CUSTOM_ORB_BASES[idx] then
-                        destBaseVec = CUSTOM_ORB_BASES[idx]
+                -- If we're at concurrency limit in orb-mode, pre-fire drag and skip queuing this wave
+                if CURRENT_MODE == "orbs" and activeCount >= MAX_CONCURRENT then
+                    if startDrag then
+                        pcall(function()
+                            startDrag:FireServer(m)
+                        end)
                     end
                 else
-                    destBaseVec = orbPosVec
-                end
+                    while running and activeCount >= MAX_CONCURRENT do
+                        Run.Heartbeat:Wait()
+                    end
 
-                if destBaseVec then
-                    activeCount += 1
-                    task.spawn(function()
-                        startConveyor(m, jobId, destBaseVec)
-                        task.delay(8, function()
-                            activeCount = math.max(0, activeCount - 1)
+                    local destBaseVec = nil
+
+                    if CURRENT_MODE == "orbs" then
+                        local idx = orbIndexForModel(m)
+                        if idx and CUSTOM_ORB_BASES[idx] then
+                            destBaseVec = CUSTOM_ORB_BASES[idx]
+                        end
+                    else
+                        destBaseVec = orbPosVec
+                    end
+
+                    if destBaseVec then
+                        activeCount += 1
+                        task.spawn(function()
+                            startConveyor(m, jobId, destBaseVec)
+                            task.delay(8, function()
+                                activeCount = math.max(0, activeCount - 1)
+                            end)
                         end)
-                    end)
-                    task.wait(START_STAGGER)
+                        task.wait(START_STAGGER)
+                    end
                 end
             end
         end
@@ -846,6 +907,38 @@ return function(C, R, UI)
         local pos = cf.Position + forward * edgeOffset
         return pos + Vector3.new(0, ORB_HEIGHT + 1, 0)
     end
+
+    ----------------------------------------------------------------
+    -- Background pre-drag for rare / important items far from campfire
+    ----------------------------------------------------------------
+    local PRECLAIM_DISTANCE    = 100
+    local PRECLAIM_INTERVAL_S  = 2.5
+    local preclaimAcc          = 0
+
+    Run.Heartbeat:Connect(function(dt)
+        preclaimAcc = preclaimAcc + dt
+        if preclaimAcc < PRECLAIM_INTERVAL_S then return end
+        preclaimAcc = 0
+
+        if not startDrag then return end
+        local itemsFolder = itemsRootOrNil()
+        if not itemsFolder then return end
+        local campPos = campfireOrbPos()
+        if not campPos then return end
+
+        for _,m in ipairs(itemsFolder:GetChildren()) do
+            if m:IsA("Model") and m.Parent and not isExcludedModel(m) and not hasIceBlockTag(m) then
+                if isPreDragImportantModel(m) then
+                    local mp = mainPart(m)
+                    if mp and (mp.Position - campPos).Magnitude > PRECLAIM_DISTANCE then
+                        pcall(function()
+                            startDrag:FireServer(m)
+                        end)
+                    end
+                end
+            end
+        end
+    end)
 
     ----------------------------------------------------------------
     -- MODE START/STOP
