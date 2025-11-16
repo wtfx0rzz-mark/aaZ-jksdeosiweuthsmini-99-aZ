@@ -460,6 +460,7 @@ return function(C, R, UI)
         return CFrame.new(pos, c.Position)
     end
 
+    private_sendBodiesToCamp = nil
     local function sendBodiesToCamp()
         local bodies = allBodyModels(); if #bodies == 0 then return end
         local cf = campTargetCF(); if not cf then return end
@@ -549,7 +550,7 @@ return function(C, R, UI)
     -- Precision movement controls
     ----------------------------------------------------------------
     local PREC_Enable = false
-    local PREC_Speed  = 1.0 -- studs per second (scaled by dt)
+    local PREC_Speed  = 5.0 -- studs per second
 
     local moveForward = false
     local moveBack    = false
@@ -659,8 +660,8 @@ return function(C, R, UI)
         local frame = Instance.new("Frame")
         frame.Name = "Pad"
         frame.Size = UDim2.new(0, 220, 0, 220)
-        frame.Position = UDim2.new(1, -230, 1, -230)
-        frame.BackgroundTransparency = 0.35
+        frame.Position = UDim2.new(1, -230, 1, -300) -- moved a bit higher
+        frame.BackgroundTransparency = 1             -- remove black box
         frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
         frame.BorderSizePixel = 0
         frame.Parent = gui
@@ -794,10 +795,12 @@ return function(C, R, UI)
             Title    = "Precision Move Speed",
             Min      = 1,
             Max      = 100,
-            Default  = 10,
+            Default  = 5,
             Rounding = 0,
             Callback = function(v)
-                PREC_Speed = math.max(0.01, (tonumber(v) or 10) / 10)
+                local n = tonumber(v) or 5
+                -- Never let it hit 0; clamp to a small but non-zero minimum
+                PREC_Speed = math.clamp(n, 1, 100)
             end
         })
     end
