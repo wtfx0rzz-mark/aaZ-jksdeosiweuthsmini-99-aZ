@@ -4,6 +4,7 @@ return function(C, R, UI)
     local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
     local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
     local CS       = game:GetService("CollectionService")
+    local UIS      = game:GetService("UserInputService")
 
     local lp  = Players.LocalPlayer
     local tabs = UI and UI.Tabs
@@ -29,7 +30,7 @@ return function(C, R, UI)
 
     local function getRemote(...)
         local f = RS:FindFirstChild("RemoteEvents"); if not f then return nil end
-        for i=1,select("#", ...) do
+        for i = 1, select("#", ...) do
             local n = select(i, ...)
             local x = f:FindFirstChild(n)
             if x then return x end
@@ -49,8 +50,8 @@ return function(C, R, UI)
         local origin = root.Position
         for _,d in ipairs(itemsFolder():GetDescendants()) do
             local m = d:IsA("Model") and d
-                  or (d:IsA("BasePart") and d:FindFirstAncestorOfClass("Model"))
-                  or nil
+                or (d:IsA("BasePart") and d:FindFirstAncestorOfClass("Model"))
+                or nil
             if m and m.Parent then
                 local p = mainPart(m)
                 if p and (p.Position - origin).Magnitude <= RADIUS then
@@ -69,11 +70,15 @@ return function(C, R, UI)
                 p.CanTouch = true
                 p.CanQuery = true
                 p.Massless = false
-                p.AssemblyLinearVelocity = Vector3.new()
+                p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
                 p.CollisionGroupId = 0
                 pcall(function() p:SetNetworkOwner(nil) end)
-                pcall(function() if p.SetNetworkOwnershipAuto then p:SetNetworkOwnershipAuto() end end)
+                pcall(function()
+                    if p.SetNetworkOwnershipAuto then
+                        p:SetNetworkOwnershipAuto()
+                    end
+                end)
             end
         end
         for _,pp in ipairs(m:GetDescendants()) do
@@ -231,6 +236,8 @@ return function(C, R, UI)
             end
         end
     end
+
+    private_dummy = nil
 
     local function mineOwnership()
         local list = nearbyItems()
@@ -460,7 +467,6 @@ return function(C, R, UI)
         return CFrame.new(pos, c.Position)
     end
 
-    private_sendBodiesToCamp = nil
     local function sendBodiesToCamp()
         local bodies = allBodyModels(); if #bodies == 0 then return end
         local cf = campTargetCF(); if not cf then return end
@@ -547,10 +553,10 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- Precision movement controls
+    -- Precision movement controls + camera lock
     ----------------------------------------------------------------
     local PREC_Enable = false
-    local PREC_Speed  = 5.0 -- studs per second
+    local PREC_Speed  = 2.0 -- studs/sec, adjusted by custom slider
 
     local moveForward = false
     local moveBack    = false
@@ -561,6 +567,9 @@ return function(C, R, UI)
 
     local moveGui     = nil
     local moveConn    = nil
+
+    local origCamType    = nil
+    local origCamSubject = nil
 
     local function clearMoveFlags()
         moveForward = false
@@ -585,13 +594,30 @@ return function(C, R, UI)
 
     local function ensureMoveHeartbeat()
         if moveConn then return end
+
         moveConn = Run.Heartbeat:Connect(function(dt)
             if not PREC_Enable then return end
-            local root = hrp()
-            if not root then return end
+            local root = hrp(); if not root then return end
 
             local cf = root.CFrame
 
+            -- Camera lock: keep camera straight behind character in 3rd person
+            do
+                local cam = workspace.CurrentCamera
+                if cam then
+                    local lookDir = cf.LookVector
+                    if lookDir.Magnitude < 1e-4 then
+                        lookDir = Vector3.new(0, 0, -1)
+                    end
+                    local rootPos   = root.Position
+                    local camDist   = 12
+                    local camHeight = 5
+                    local camPos    = rootPos - lookDir.Unit * camDist + Vector3.new(0, camHeight, 0)
+                    cam.CFrame      = CFrame.new(camPos, rootPos)
+                end
+            end
+
+            -- Movement (strafe/forward/back/up/down) at PREC_Speed
             local forward = cf.LookVector
             forward = Vector3.new(forward.X, 0, forward.Z)
             if forward.Magnitude < 1e-4 then
@@ -621,7 +647,7 @@ return function(C, R, UI)
             if dir.Magnitude <= 0 then return end
             dir = dir.Unit
 
-            local step = PREC_Speed * dt
+            local step   = PREC_Speed * dt
             local newPos = root.Position + dir * step
 
             local look = cf.LookVector
@@ -657,11 +683,12 @@ return function(C, R, UI)
         gui.ResetOnSpawn = false
         gui.Parent = pg
 
+        -- Movement pad (no black box, slightly higher)
         local frame = Instance.new("Frame")
         frame.Name = "Pad"
         frame.Size = UDim2.new(0, 220, 0, 220)
-        frame.Position = UDim2.new(1, -230, 1, -300) -- moved a bit higher
-        frame.BackgroundTransparency = 1             -- remove black box
+        frame.Position = UDim2.new(1, -230, 1, -300)
+        frame.BackgroundTransparency = 1
         frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
         frame.BorderSizePixel = 0
         frame.Parent = gui
@@ -710,16 +737,161 @@ return function(C, R, UI)
         bindMoveButton(btnLeft,    function(v) moveLeft    = v end)
         bindMoveButton(btnRight,   function(v) moveRight   = v end)
 
+        -- Custom speed slider, under the pad (separate frame)
+        local sliderFrame = Instance.new("Frame")
+        sliderFrame.Name = "SpeedSliderFrame"
+        sliderFrame.Size = UDim2.new(0, 220, 0, 40)
+        sliderFrame.Position = UDim2.new(1, -230, 1, -70) -- directly below pad area
+        sliderFrame.BackgroundTransparency = 1
+        sliderFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+        sliderFrame.BorderSizePixel = 0
+        sliderFrame.Parent = gui
+
+        local label = Instance.new("TextLabel")
+        label.Name = "Label"
+        label.Size = UDim2.new(1, 0, 0, 18)
+        label.Position = UDim2.new(0, 0, 0, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.TextSize = 14
+        label.Font = Enum.Font.SourceSans
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = "Speed: 2.00"
+        label.Parent = sliderFrame
+
+        local bar = Instance.new("Frame")
+        bar.Name = "Bar"
+        bar.Size = UDim2.new(0, 140, 0, 6)
+        bar.Position = UDim2.new(0, 5, 1, -16)
+        bar.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        bar.BorderSizePixel = 0
+        bar.Parent = sliderFrame
+
+        local barCorner = Instance.new("UICorner")
+        barCorner.CornerRadius = UDim.new(0, 3)
+        barCorner.Parent = bar
+
+        local thumb = Instance.new("TextButton")
+        thumb.Name = "Thumb"
+        thumb.Size = UDim2.new(0, 14, 0, 22)
+        thumb.Position = UDim2.new(0, 0, 0.5, -11)
+        thumb.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+        thumb.BorderSizePixel = 0
+        thumb.Text = ""
+        thumb.AutoButtonColor = true
+        thumb.Parent = bar
+
+        local thumbCorner = Instance.new("UICorner")
+        thumbCorner.CornerRadius = UDim.new(0, 7)
+        thumbCorner.Parent = thumb
+
+        local MIN_SPEED = 0.1
+        local MAX_SPEED = 25
+
+        local dragging = false
+        local dragInput = nil
+
+        local function getBarWidth()
+            local w = bar.AbsoluteSize.X
+            if w <= 0 then
+                w = bar.Size.X.Offset
+            end
+            if w <= 0 then
+                w = 140
+            end
+            return w
+        end
+
+        local function applyAlpha(alpha)
+            alpha = math.clamp(alpha, 0, 1)
+            local speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * alpha
+            PREC_Speed = speed
+            label.Text = string.format("Speed: %.2f", speed)
+
+            local w = getBarWidth()
+            local thumbX = alpha * w
+            local halfThumb = thumb.Size.X.Offset / 2
+            thumb.Position = UDim2.new(0, math.floor(thumbX - halfThumb), 0.5, -thumb.Size.Y.Offset/2)
+        end
+
+        local function setFromX(screenX)
+            local barPos = bar.AbsolutePosition.X
+            local w = getBarWidth()
+            local rel = (screenX - barPos) / w
+            applyAlpha(rel)
+        end
+
+        thumb.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragInput = input
+                setFromX(input.Position.X)
+            end
+        end)
+
+        thumb.InputEnded:Connect(function(input)
+            if input == dragInput then
+                dragging = false
+                dragInput = nil
+            end
+        end)
+
+        bar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragInput = input
+                setFromX(input.Position.X)
+            end
+        end)
+
+        UIS.InputChanged:Connect(function(input)
+            if dragging and input == dragInput then
+                setFromX(input.Position.X)
+            end
+        end)
+
+        UIS.InputEnded:Connect(function(input)
+            if input == dragInput then
+                dragging = false
+                dragInput = nil
+            end
+        end)
+
+        -- Initial slider position (~low speed for precision)
+        applyAlpha(0.1) -- ~10% of range
+
         moveGui = gui
         ensureMoveHeartbeat()
     end
 
     local function setPrecisionEnabled(on)
         PREC_Enable = on and true or false
+
+        local cam = workspace.CurrentCamera
         if PREC_Enable then
+            if cam then
+                if not origCamType then
+                    origCamType = cam.CameraType
+                end
+                if not origCamSubject then
+                    origCamSubject = cam.CameraSubject
+                end
+                cam.CameraType = Enum.CameraType.Scriptable
+            end
             createMoveGui()
         else
             destroyMoveGui()
+            if cam then
+                if origCamType then
+                    cam.CameraType = origCamType
+                end
+                if origCamSubject then
+                    cam.CameraSubject = origCamSubject
+                end
+            end
+            origCamType, origCamSubject = nil, nil
         end
     end
 
@@ -781,26 +953,11 @@ return function(C, R, UI)
         tab:Button({
             Title = "Precision Movement Controls: OFF",
             Callback = function(btn)
-                PREC_Enable = not PREC_Enable
+                local newState = not PREC_Enable
                 if btn and btn.SetTitle then
-                    btn:SetTitle("Precision Movement Controls: " .. (PREC_Enable and "ON" or "OFF"))
+                    btn:SetTitle("Precision Movement Controls: " .. (newState and "ON" or "OFF"))
                 end
-                setPrecisionEnabled(PREC_Enable)
-            end
-        })
-    end
-
-    if tab.Slider then
-        tab:Slider({
-            Title    = "Precision Move Speed",
-            Min      = 1,
-            Max      = 100,
-            Default  = 5,
-            Rounding = 0,
-            Callback = function(v)
-                local n = tonumber(v) or 5
-                -- Never let it hit 0; clamp to a small but non-zero minimum
-                PREC_Speed = math.clamp(n, 1, 100)
+                setPrecisionEnabled(newState)
             end
         })
     end
