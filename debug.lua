@@ -678,11 +678,11 @@ return function(C, R, UI)
         gui.ResetOnSpawn = false
         gui.Parent = pg
 
-        -- Movement pad (no black box, slightly higher)
+        -- Movement pad (no black box, higher up)
         local frame = Instance.new("Frame")
         frame.Name = "Pad"
         frame.Size = UDim2.new(0, 220, 0, 220)
-        frame.Position = UDim2.new(1, -230, 1, -300)
+        frame.Position = UDim2.new(1, -230, 1, -380) -- was -300, moved higher
         frame.BackgroundTransparency = 1
         frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
         frame.BorderSizePixel = 0
@@ -732,11 +732,11 @@ return function(C, R, UI)
         bindMoveButton(btnLeft,    function(v) moveLeft    = v end)
         bindMoveButton(btnRight,   function(v) moveRight   = v end)
 
-        -- Custom speed slider, under the pad
+        -- Custom speed slider, under the pad (also moved higher)
         local sliderFrame = Instance.new("Frame")
         sliderFrame.Name = "SpeedSliderFrame"
         sliderFrame.Size = UDim2.new(0, 220, 0, 40)
-        sliderFrame.Position = UDim2.new(1, -230, 1, -70)
+        sliderFrame.Position = UDim2.new(1, -230, 1, -150) -- was -70, moved higher
         sliderFrame.BackgroundTransparency = 1
         sliderFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
         sliderFrame.BorderSizePixel = 0
