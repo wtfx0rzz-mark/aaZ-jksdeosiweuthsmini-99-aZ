@@ -237,8 +237,6 @@ return function(C, R, UI)
         end
     end
 
-    private_dummy = nil
-
     local function mineOwnership()
         local list = nearbyItems()
         for _,m in ipairs(list) do
@@ -553,10 +551,14 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- Precision movement controls + camera lock
+    -- Precision movement controls + camera lock (camera-based)
     ----------------------------------------------------------------
     local PREC_Enable = false
-    local PREC_Speed  = 2.0 -- studs/sec, adjusted by custom slider
+    local PREC_Speed  = 2.0 -- studs/sec, controlled by slider
+
+    local PREC_BaseLook   = nil
+    local PREC_BaseRight  = nil
+    local PREC_CamOffset  = nil
 
     local moveForward = false
     local moveBack    = false
@@ -598,36 +600,29 @@ return function(C, R, UI)
         moveConn = Run.Heartbeat:Connect(function(dt)
             if not PREC_Enable then return end
             local root = hrp(); if not root then return end
+            if not PREC_BaseLook or not PREC_BaseRight or not PREC_CamOffset then return end
 
-            local cf = root.CFrame
+            local rootPos = root.Position
 
-            -- Camera lock: keep camera straight behind character in 3rd person
-            do
-                local cam = workspace.CurrentCamera
-                if cam then
-                    local lookDir = cf.LookVector
-                    if lookDir.Magnitude < 1e-4 then
-                        lookDir = Vector3.new(0, 0, -1)
-                    end
-                    local rootPos   = root.Position
-                    local camDist   = 12
-                    local camHeight = 5
-                    local camPos    = rootPos - lookDir.Unit * camDist + Vector3.new(0, camHeight, 0)
-                    cam.CFrame      = CFrame.new(camPos, rootPos)
-                end
+            -- Camera lock: keep camera in a fixed offset and angle captured at toggle-on
+            local cam = workspace.CurrentCamera
+            if cam then
+                local camPos = rootPos + PREC_CamOffset
+                cam.CFrame = CFrame.new(camPos, camPos + PREC_BaseLook)
             end
 
-            -- Movement (strafe/forward/back/up/down) at PREC_Speed
-            local forward = cf.LookVector
-            forward = Vector3.new(forward.X, 0, forward.Z)
+            -- Movement directions based on camera angle at toggle time
+            local forward3D = PREC_BaseLook
+            local right3D   = PREC_BaseRight
+
+            local forward = Vector3.new(forward3D.X, 0, forward3D.Z)
             if forward.Magnitude < 1e-4 then
                 forward = Vector3.new(0, 0, -1)
             else
                 forward = forward.Unit
             end
 
-            local right = cf.RightVector
-            right = Vector3.new(right.X, 0, right.Z)
+            local right = Vector3.new(right3D.X, 0, right3D.Z)
             if right.Magnitude < 1e-4 then
                 right = Vector3.new(1, 0, 0)
             else
@@ -648,9 +643,9 @@ return function(C, R, UI)
             dir = dir.Unit
 
             local step   = PREC_Speed * dt
-            local newPos = root.Position + dir * step
+            local newPos = rootPos + dir * step
 
-            local look = cf.LookVector
+            local look = PREC_BaseLook or root.CFrame.LookVector
             if look.Magnitude < 1e-4 then
                 look = Vector3.new(0, 0, -1)
             end
@@ -737,11 +732,11 @@ return function(C, R, UI)
         bindMoveButton(btnLeft,    function(v) moveLeft    = v end)
         bindMoveButton(btnRight,   function(v) moveRight   = v end)
 
-        -- Custom speed slider, under the pad (separate frame)
+        -- Custom speed slider, under the pad
         local sliderFrame = Instance.new("Frame")
         sliderFrame.Name = "SpeedSliderFrame"
         sliderFrame.Size = UDim2.new(0, 220, 0, 40)
-        sliderFrame.Position = UDim2.new(1, -230, 1, -70) -- directly below pad area
+        sliderFrame.Position = UDim2.new(1, -230, 1, -70)
         sliderFrame.BackgroundTransparency = 1
         sliderFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
         sliderFrame.BorderSizePixel = 0
@@ -847,7 +842,7 @@ return function(C, R, UI)
         end)
 
         UIS.InputChanged:Connect(function(input)
-            if dragging and input == dragInput then
+            if dragging then
                 setFromX(input.Position.X)
             end
         end)
@@ -867,21 +862,31 @@ return function(C, R, UI)
     end
 
     local function setPrecisionEnabled(on)
-        PREC_Enable = on and true or false
-
         local cam = workspace.CurrentCamera
-        if PREC_Enable then
-            if cam then
+        local root = hrp()
+
+        if on and not PREC_Enable then
+            PREC_Enable = true
+
+            if cam and root then
                 if not origCamType then
                     origCamType = cam.CameraType
                 end
                 if not origCamSubject then
                     origCamSubject = cam.CameraSubject
                 end
+
+                local baseCF = cam.CFrame
+                PREC_BaseLook  = baseCF.LookVector
+                PREC_BaseRight = baseCF.RightVector
+                PREC_CamOffset = baseCF.Position - root.Position
+
                 cam.CameraType = Enum.CameraType.Scriptable
             end
+
             createMoveGui()
-        else
+        elseif (not on) and PREC_Enable then
+            PREC_Enable = false
             destroyMoveGui()
             if cam then
                 if origCamType then
