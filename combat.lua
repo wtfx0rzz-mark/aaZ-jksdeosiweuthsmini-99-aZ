@@ -6,6 +6,12 @@ return function(C, R, UI)
     local RS = C.Services.RS
     local WS = C.Services.WS
     local lp = C.LocalPlayer
+    local WDModule = (RS and RS:FindFirstChild("LoopWatchdog")) or (RS and RS:WaitForChild("LoopWatchdog"))
+    if not WDModule then
+        local defaultRS = game:GetService("ReplicatedStorage")
+        WDModule = defaultRS:WaitForChild("LoopWatchdog")
+    end
+    local WD = require(WDModule)
     local CombatTab = UI.Tabs.Combat
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
@@ -27,6 +33,8 @@ return function(C, R, UI)
     TUNE.VIS_THROUGH_WALLS    = (TUNE.VIS_THROUGH_WALLS ~= false)
 
     local running = { SmallTree = false, Character = false }
+    local wd_charAura = WD.register("combat::characterAura", function() return running.Character end)
+    local wd_treeAura = WD.register("combat::treeAura", function() return running.SmallTree end)
 
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
     local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
@@ -527,6 +535,7 @@ return function(C, R, UI)
         running.Character = true
         task.spawn(function()
             while running.Character do
+                wd_charAura:tick()
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then
@@ -560,7 +569,10 @@ return function(C, R, UI)
             end
         end)
     end
-    local function stopCharacterAura() running.Character = false end
+    local function stopCharacterAura()
+        running.Character = false
+        wd_charAura:stop()
+    end
 
     C.State._treeCursor = C.State._treeCursor or 1
     local function startSmallTreeAura()
@@ -568,6 +580,7 @@ return function(C, R, UI)
         running.SmallTree = true
         task.spawn(function()
             while running.SmallTree do
+                wd_treeAura:tick()
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then
@@ -611,7 +624,10 @@ return function(C, R, UI)
             end
         end)
     end
-    local function stopSmallTreeAura() running.SmallTree = false end
+    local function stopSmallTreeAura()
+        running.SmallTree = false
+        wd_treeAura:stop()
+    end
 
     CombatTab:Toggle({
         Title = "Character Aura",
@@ -661,8 +677,13 @@ return function(C, R, UI)
                 pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
             end
         end
+        local wd_bigTreeCheck = WD.register("combat::bigTreeCheck", function() return true end)
         inv.ChildRemoved:Connect(check)
-        while true do task.wait(2.0) check() end
+        while true do
+            wd_bigTreeCheck:tick()
+            task.wait(2.0)
+            check()
+        end
     end)
 
     CombatTab:Slider({
