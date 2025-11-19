@@ -9,6 +9,8 @@ return function(C, R, UI)
     local CombatTab = UI.Tabs.Combat
 
     C.State  = C.State or { AuraRadius = 150, Toggles = {} }
+    C.State.AuraRadius = C.State.AuraRadius or 150
+    C.State.Toggles = C.State.Toggles or {}
     C.Config = C.Config or {}
 
     local TUNE = C.Config
@@ -41,9 +43,10 @@ return function(C, R, UI)
         local inv = lp and lp:FindFirstChild("Inventory")
         return inv and inv:FindFirstChild(name) or nil
     end
+
     local function hasStrongAxe() return findInInventory("Strong Axe") ~= nil end
-    private = nil
     local function hasChainsaw() return findInInventory("Chainsaw") ~= nil end
+
     local function hasBigTreeTool()
         if hasChainsaw() then return "Chainsaw" end
         if hasStrongAxe() then return "Strong Axe" end
@@ -121,46 +124,6 @@ return function(C, R, UI)
         local pp = m.PrimaryPart
         if pp and pp:IsA("BasePart") then return pp end
         return nil
-    end
-
-    local function isLostChildModelSoft(m)
-        if not (m and m:IsA("Model")) then return false end
-
-        if C.Helpers then
-            if type(C.Helpers.IsLostChild) == "function" then
-                local ok, res = pcall(C.Helpers.IsLostChild, m)
-                if ok and res then return true end
-            end
-            if type(C.Helpers.IsLostChildModel) == "function" then
-                local ok, res = pcall(C.Helpers.IsLostChildModel, m)
-                if ok and res then return true end
-            end
-        end
-
-        local n = m.Name or ""
-        return n:match("^Lost Child") ~= nil
-    end
-
-    local function isTrapIgnoredTarget(m)
-        if not (m and m:IsA("Model")) then
-            return true
-        end
-        if isLostChildModelSoft(m) then
-            return true
-        end
-
-        local name = (m.Name or ""):lower()
-        if name:find("deer", 1, true)
-        or name:find("ram", 1, true)
-        or name:find("owl", 1, true)
-        or name:find("horse", 1, true)
-        or name:find("pelt trader", 1, true)
-        or name:find("furniture trader", 1, true)
-        then
-            return true
-        end
-
-        return false
     end
 
     local function computeImpactCFrame(model, hitPart)
@@ -313,6 +276,7 @@ return function(C, R, UI)
         if inst:IsA("Model") then return inst end
         return inst:FindFirstAncestorOfClass("Model")
     end
+
     local function isCharacterModel(m)
         return m and m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") ~= nil
     end
@@ -451,9 +415,9 @@ return function(C, R, UI)
 
             for _, weapon in ipairs(availableWeapons) do
                 local toolName = weapon.name
-                local cd       = weapon.cd
+                local cd = weapon.cd
                 local lastSwing = lastSwingAtByWeapon[toolName] or 0
-                local now       = os.clock()
+                local now = os.clock()
                 local remaining = cd - (now - lastSwing)
                 if remaining > 0 then
                     task.wait(remaining)
@@ -465,14 +429,14 @@ return function(C, R, UI)
                     local didHit = false
                     local nextTry = math.huge
                     for i = 1, cap do
-                        local mdl  = targetModels[i]
+                        local mdl = targetModels[i]
                         local head = hitPartGetter(mdl)
                         if head then
-                            local ch  = lp.Character
+                            local ch = lp.Character
                             local hrp = ch and ch:FindFirstChild("HumanoidRootPart") or nil
                             local origin = getRayOriginFromChar(ch) or (hrp and hrp.Position) or nil
-                            local dist   = origin and (head.Position - origin).Magnitude or math.huge
-                            local los    = false
+                            local dist = origin and (head.Position - origin).Magnitude or math.huge
+                            local los = false
                             if hrp then
                                 los = visibleFromHRP(hrp, head, tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0, ch)
                             end
@@ -480,7 +444,7 @@ return function(C, R, UI)
                                 local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
                                 if canHit then
                                     local impactCF = computeImpactCFrame(mdl, head)
-                                    local hitId    = nextCharacterHitId()
+                                    local hitId = nextCharacterHitId()
                                     HitTarget(mdl, tool, hitId, impactCF)
                                     markHitWithWeapon(mdl, toolName)
                                     didHit = true
@@ -524,7 +488,7 @@ return function(C, R, UI)
                 local hitPart = hitPartGetter(mdl)
                 if not hitPart then return end
                 local impactCF = impactCFForTree(mdl, hitPart)
-                local hitId    = nextPerTreeHitId(mdl)
+                local hitId = nextPerTreeHitId(mdl)
                 pcall(function()
                     local bucket = attrBucket(mdl)
                     if bucket then bucket:SetAttribute(hitId, true) end
@@ -535,7 +499,20 @@ return function(C, R, UI)
         task.wait(swingDelay)
     end
 
-    local function collectCharactersInRadius(charsFolder, origin, radius)
+    local function isLostChildModel(m)
+        return m and m:IsA("Model") and m.Name:match("^Lost Child") ~= nil
+    end
+
+    local TRAP_EXCLUDE_NAMES = {
+        ["Deer"] = true,
+        ["Ram"] = true,
+        ["Owl"] = true,
+        ["Pelt Trader"] = true,
+        ["Furniture Trader"] = true,
+        ["Horse"] = true,
+    }
+
+    local function collectCharactersInRadius(charsFolder, origin, radius, forTraps)
         local out = {}
         if not charsFolder then return out end
         for _, mdl in ipairs(charsFolder:GetChildren()) do
@@ -543,7 +520,14 @@ return function(C, R, UI)
                 if not mdl:IsA("Model") then break end
                 local n = mdl.Name or ""
                 local nameLower = n:lower()
+
                 if string.find(nameLower, "horse", 1, true) then break end
+
+                if forTraps then
+                    if TRAP_EXCLUDE_NAMES[n] then break end
+                    if isLostChildModel(mdl) then break end
+                end
+
                 local distPart = charDistancePart(mdl)
                 if not distPart then break end
                 if (distPart.Position - origin).Magnitude > radius then break end
@@ -574,7 +558,7 @@ return function(C, R, UI)
                 else
                     local origin = (getRayOriginFromChar(ch) or hrp.Position)
                     local radius = tonumber(C.State.AuraRadius) or 150
-                    local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius)
+                    local targets = collectCharactersInRadius(WS:FindFirstChild("Characters"), origin, radius, false)
                     if #targets > 0 then
                         local hopsChar = tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0
                         local filtered = {}
@@ -582,7 +566,7 @@ return function(C, R, UI)
                             local head = characterHeadPart(mdl)
                             if head then
                                 local dist = (head.Position - origin).Magnitude
-                                local los  = visibleFromHRP(hrp, head, hopsChar, ch)
+                                local los = visibleFromHRP(hrp, head, hopsChar, ch)
                                 if los or dist <= TUNE.CHAR_CLOSE_FAILSAFE then
                                     filtered[#filtered+1] = mdl
                                 end
@@ -600,9 +584,11 @@ return function(C, R, UI)
             end
         end)
     end
+
     local function stopCharacterAura() running.Character = false end
 
     C.State._treeCursor = C.State._treeCursor or 1
+
     local function startSmallTreeAura()
         if running.SmallTree then return end
         running.SmallTree = true
@@ -633,7 +619,7 @@ return function(C, R, UI)
                             local hitPart = bestTreeHitPart(tree)
                             if hitPart then
                                 local dist = (hitPart.Position - origin).Magnitude
-                                local los  = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
+                                local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
                                 if los or dist <= CLOSE_FAILSAFE then
                                     filtered[#filtered+1] = tree
                                 end
@@ -651,6 +637,7 @@ return function(C, R, UI)
             end
         end)
     end
+
     local function stopSmallTreeAura() running.SmallTree = false end
 
     local function trapsRoot()
@@ -659,7 +646,16 @@ return function(C, R, UI)
 
     local TRAP_REMOTES = { StartDrag = nil, StopDrag = nil, SetTrap = nil }
     local trapCache, trapCacheAt = nil, 0
-    local TrapLastUse = setmetatable({}, { __mode = "k" })
+
+    local TRAP_RELOCATE_DIST = 20
+    local TRAP_IDLE_RADIUS = 6
+    local TRAP_IDLE_HEIGHT_ABOVE_GROUND = 1.0
+    local TRAP_CHAR_COOLDOWN = 1.5
+    local TRAP_TRAP_COOLDOWN = 1.0
+
+    local trapIdleAnchorPos = nil
+    local trapLastSetOnChar = setmetatable({}, { __mode = "k" })
+    local trapLastSetTime   = setmetatable({}, { __mode = "k" })
 
     local function resolveTrapRemotes()
         local re = RS:FindFirstChild("RemoteEvents")
@@ -681,23 +677,18 @@ return function(C, R, UI)
         end
     end
 
-    local function groundYAt(position, extraExclude)
-        local origin = position + Vector3.new(0, 30, 0)
-        local dir    = Vector3.new(0, -120, 0)
+    local function trapGroundBelow(pos)
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
-        local exclude = { lp.Character }
-        if extraExclude then
-            for _, inst in ipairs(extraExclude) do
-                exclude[#exclude+1] = inst
-            end
-        end
-        params.FilterDescendantsInstances = exclude
-        local hit = WS:Raycast(origin, dir, params)
-        if hit then
-            return hit.Position.Y
-        end
-        return position.Y
+        local ex = { lp.Character }
+        local charsFolder = WS:FindFirstChild("Characters")
+        if charsFolder then ex[#ex+1] = charsFolder end
+        local items = WS:FindFirstChild("Items")
+        if items then ex[#ex+1] = items end
+        params.FilterDescendantsInstances = ex
+        local origin = pos + Vector3.new(0, 50, 0)
+        local hit = WS:Raycast(origin, Vector3.new(0, -1000, 0), params)
+        return hit and hit.Position or pos
     end
 
     local function moveTrapToCF(trap, cf, setNow)
@@ -749,16 +740,22 @@ return function(C, R, UI)
         local n = #traps
         if n == 0 then return end
 
-        local center = hrp.Position + Vector3.new(0, 8, 0)
-        local radius = 5
+        local center = hrp.Position
+        if trapIdleAnchorPos and (center - trapIdleAnchorPos).Magnitude < TRAP_RELOCATE_DIST then
+            return
+        end
+        trapIdleAnchorPos = center
 
+        local groundCenter = trapGroundBelow(center)
+        center = Vector3.new(groundCenter.X, groundCenter.Y + TRAP_IDLE_HEIGHT_ABOVE_GROUND, groundCenter.Z)
+
+        local radius = TRAP_IDLE_RADIUS
         for i, trap in ipairs(traps) do
             if trap and trap.Parent then
                 local t = (i - 1) / n * math.pi * 2
                 local offset = Vector3.new(math.cos(t) * radius, 0, math.sin(t) * radius)
                 local pos = center + offset
-                local lookAt = Vector3.new(hrp.Position.X, center.Y, hrp.Position.Z)
-                local cf = CFrame.new(pos, lookAt)
+                local cf = CFrame.new(pos, center)
                 moveTrapToCF(trap, cf, false)
             end
         end
@@ -766,32 +763,30 @@ return function(C, R, UI)
 
     local function moveTrapUnderCharacter(trap, mdl)
         if not trap or not mdl or not mdl.Parent then return end
+
+        local now = os.clock()
+        local lastForTrap = trapLastSetTime[trap] or 0
+        if now - lastForTrap < TRAP_TRAP_COOLDOWN then return end
+        local lastForChar = trapLastSetOnChar[mdl] or 0
+        if now - lastForChar < TRAP_CHAR_COOLDOWN then return end
+
         local root = charDistancePart(mdl)
         if not root then return end
 
-        local now = os.clock()
-        local last = TrapLastUse[trap] or 0
-        if now - last < 0.5 then
-            return
-        end
-        TrapLastUse[trap] = now
+        local groundPos = trapGroundBelow(root.Position)
+        local look = root.CFrame.LookVector
+        local standPos = Vector3.new(groundPos.X, groundPos.Y + 0.1, groundPos.Z)
+        local targetCF = CFrame.new(standPos, standPos + look)
 
-        local rootPos = root.Position
-        local gy = groundYAt(rootPos, { trap, mdl })
-
-        if math.abs(gy - rootPos.Y) > 15 then
-            gy = rootPos.Y - 3
+        local rootFolder = trapsRoot()
+        if rootFolder and trap.Parent ~= rootFolder then
+            trap.Parent = rootFolder
         end
 
-        local posY = gy + 0.4
-        local pos = Vector3.new(rootPos.X, posY, rootPos.Z)
-        local forward = root.CFrame.LookVector
-        if forward.Magnitude == 0 then
-            forward = Vector3.new(0, 0, -1)
-        end
-        local cf = CFrame.new(pos, pos + forward)
-
-        moveTrapToCF(trap, cf, true)
+        moveTrapToCF(trap, targetCF, true)
+        trapLastSetTime[trap] = now
+        trapLastSetOnChar[mdl] = now
+        trapIdleAnchorPos = nil
     end
 
     local function startTrapAura()
@@ -805,23 +800,16 @@ return function(C, R, UI)
                 if not hrp then
                     task.wait(0.25)
                 else
-                    local origin      = getRayOriginFromChar(ch) or hrp.Position
-                    local radius      = tonumber(C.State.AuraRadius) or 150
+                    local origin = getRayOriginFromChar(ch) or hrp.Position
+                    local radius = tonumber(C.State.AuraRadius) or 150
                     local charsFolder = WS:FindFirstChild("Characters")
-                    local targets     = collectCharactersInRadius(charsFolder, origin, radius)
-                    local traps       = getAllBearTraps()
+                    local targets = collectCharactersInRadius(charsFolder, origin, radius, true)
+                    local traps = getAllBearTraps()
 
                     if #traps > 0 then
-                        local validTargets = {}
-                        for _, mdl in ipairs(targets) do
-                            if not isTrapIgnoredTarget(mdl) then
-                                validTargets[#validTargets+1] = mdl
-                            end
-                        end
-
-                        if #validTargets > 0 then
+                        if #targets > 0 then
                             for i, trap in ipairs(traps) do
-                                local mdl = validTargets[((i - 1) % #validTargets) + 1]
+                                local mdl = targets[((i - 1) % #targets) + 1]
                                 moveTrapUnderCharacter(trap, mdl)
                             end
                             task.wait(0.25)
@@ -836,6 +824,7 @@ return function(C, R, UI)
             end
         end)
     end
+
     local function stopTrapAura() running.TrapAura = false end
 
     CombatTab:Toggle({
@@ -876,7 +865,7 @@ return function(C, R, UI)
                     C.State.Toggles.BigTreeAura = true
                 else
                     C.State.Toggles.BigTreeAura = false
-                    pcall(function() if bigToggle and bigToggle.Set      then bigToggle:Set(false)      end end)
+                    pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
                     pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
                 end
             else
@@ -891,7 +880,7 @@ return function(C, R, UI)
         local function check()
             if C.State.Toggles.BigTreeAura and not hasBigTreeTool() then
                 C.State.Toggles.BigTreeAura = false
-                pcall(function() if bigToggle and bigToggle.Set      then bigToggle:Set(false)      end end)
+                pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
                 pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
             end
         end
@@ -918,5 +907,5 @@ return function(C, R, UI)
     })
 
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
-    if C.State.Toggles.TrapAura      then startTrapAura()      end
+    if C.State.Toggles.TrapAura then startTrapAura() end
 end
