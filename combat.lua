@@ -422,7 +422,7 @@ return function(C, R, UI)
         { "Cultist King Mace", 1.0 },
         { "Morningstar",       1.0 },
         { "Obsidiron Hammer",  1.0 },
-        { "Infernal Sword",    0.6 },
+        { "Infernal Sword",    0.51 },
         { "Ice Sword",         0.5 },
         { "Laser Sword",       0.5 },
         { "Katana",            0.4 },
@@ -752,8 +752,8 @@ return function(C, R, UI)
         end)
     end
 
-    local trapCooldownSec = 0.75
-    local charCooldownSec = 0.75
+    local trapCooldownSec = 2.0
+    local charCooldownSec = 2.0
     local lastTrapUse = {}
     local lastCharSnap = {}
 
