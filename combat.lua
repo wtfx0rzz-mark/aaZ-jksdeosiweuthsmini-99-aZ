@@ -123,6 +123,30 @@ return function(C, R, UI)
         return nil
     end
 
+    ------------------------------------------------------------------------
+    -- Lost child helpers (for trap exclusion)
+    ------------------------------------------------------------------------
+    local function isLostChildModelSoft(m)
+        if not (m and m:IsA("Model")) then return false end
+
+        -- Prefer shared helpers if traps.lua/auto.lua exported them
+        if C.Helpers then
+            if type(C.Helpers.IsLostChild) == "function" then
+                local ok, res = pcall(C.Helpers.IsLostChild, m)
+                if ok and res then return true end
+            end
+            if type(C.Helpers.IsLostChildModel) == "function" then
+                local ok, res = pcall(C.Helpers.IsLostChildModel, m)
+                if ok and res then return true end
+            end
+        end
+
+        local n = m.Name or ""
+        return n:match("^Lost Child") ~= nil
+    end
+
+    ------------------------------------------------------------------------
+
     local function computeImpactCFrame(model, hitPart)
         if not (model and hitPart and hitPart:IsA("BasePart")) then
             return hitPart and CFrame.new(hitPart.Position) or CFrame.new()
@@ -411,9 +435,9 @@ return function(C, R, UI)
 
             for _, weapon in ipairs(availableWeapons) do
                 local toolName = weapon.name
-                local cd = weapon.cd
+                local cd       = weapon.cd
                 local lastSwing = lastSwingAtByWeapon[toolName] or 0
-                local now = os.clock()
+                local now       = os.clock()
                 local remaining = cd - (now - lastSwing)
                 if remaining > 0 then
                     task.wait(remaining)
@@ -425,14 +449,14 @@ return function(C, R, UI)
                     local didHit = false
                     local nextTry = math.huge
                     for i = 1, cap do
-                        local mdl = targetModels[i]
+                        local mdl  = targetModels[i]
                         local head = hitPartGetter(mdl)
                         if head then
-                            local ch = lp.Character
+                            local ch  = lp.Character
                             local hrp = ch and ch:FindFirstChild("HumanoidRootPart") or nil
                             local origin = getRayOriginFromChar(ch) or (hrp and hrp.Position) or nil
-                            local dist = origin and (head.Position - origin).Magnitude or math.huge
-                            local los = false
+                            local dist   = origin and (head.Position - origin).Magnitude or math.huge
+                            local los    = false
                             if hrp then
                                 los = visibleFromHRP(hrp, head, tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0, ch)
                             end
@@ -440,7 +464,7 @@ return function(C, R, UI)
                                 local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
                                 if canHit then
                                     local impactCF = computeImpactCFrame(mdl, head)
-                                    local hitId = nextCharacterHitId()
+                                    local hitId    = nextCharacterHitId()
                                     HitTarget(mdl, tool, hitId, impactCF)
                                     markHitWithWeapon(mdl, toolName)
                                     didHit = true
@@ -461,6 +485,7 @@ return function(C, R, UI)
             return
         end
 
+        -- Tree wave
         local toolName
         if C.State.Toggles.BigTreeAura then
             local bt = hasBigTreeTool()
@@ -484,7 +509,7 @@ return function(C, R, UI)
                 local hitPart = hitPartGetter(mdl)
                 if not hitPart then return end
                 local impactCF = impactCFForTree(mdl, hitPart)
-                local hitId = nextPerTreeHitId(mdl)
+                local hitId    = nextPerTreeHitId(mdl)
                 pcall(function()
                     local bucket = attrBucket(mdl)
                     if bucket then bucket:SetAttribute(hitId, true) end
@@ -542,7 +567,7 @@ return function(C, R, UI)
                             local head = characterHeadPart(mdl)
                             if head then
                                 local dist = (head.Position - origin).Magnitude
-                                local los = visibleFromHRP(hrp, head, hopsChar, ch)
+                                local los  = visibleFromHRP(hrp, head, hopsChar, ch)
                                 if los or dist <= TUNE.CHAR_CLOSE_FAILSAFE then
                                     filtered[#filtered+1] = mdl
                                 end
@@ -593,7 +618,7 @@ return function(C, R, UI)
                             local hitPart = bestTreeHitPart(tree)
                             if hitPart then
                                 local dist = (hitPart.Position - origin).Magnitude
-                                local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
+                                local los  = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
                                 if los or dist <= CLOSE_FAILSAFE then
                                     filtered[#filtered+1] = tree
                                 end
@@ -612,6 +637,10 @@ return function(C, R, UI)
         end)
     end
     local function stopSmallTreeAura() running.SmallTree = false end
+
+    ------------------------------------------------------------------------
+    -- Trap helpers
+    ------------------------------------------------------------------------
 
     local function trapsRoot()
         return WS:FindFirstChild("Structures") or WS:FindFirstChild("structures")
@@ -637,6 +666,25 @@ return function(C, R, UI)
             TRAP_REMOTES.SetTrap =
                 re:FindFirstChild("RequestSetTrap") or
                 re:FindFirstChild("SetTrap")
+        end
+    end
+
+    -- Anchor helper: used to keep traps floating in a halo, then free them when dropped
+    local function setTrapAnchored(trap, anchored)
+        if not trap then return end
+        local function apply(part)
+            if part:IsA("BasePart") then
+                pcall(function()
+                    part.Anchored = anchored
+                end)
+            end
+        end
+        if trap:IsA("Model") then
+            for _, d in ipairs(trap:GetDescendants()) do
+                apply(d)
+            end
+        else
+            apply(trap)
         end
     end
 
@@ -684,6 +732,7 @@ return function(C, R, UI)
         return trapCache
     end
 
+    -- Halo: traps float around player and are anchored so they don't fall
     local function lockTrapsAroundPlayer(traps, hrp)
         if not hrp then return end
         local n = #traps
@@ -696,8 +745,9 @@ return function(C, R, UI)
                 local t = (i - 1) / n * math.pi * 2
                 local offset = Vector3.new(math.cos(t) * radius, height, math.sin(t) * radius)
                 local pos = center + offset
-                local cf = CFrame.new(pos, center)
+                local cf  = CFrame.new(pos, center)
                 moveTrapToCF(trap, cf, false)
+                setTrapAnchored(trap, true) -- keep trap floating instead of falling
             end
         end
     end
@@ -706,9 +756,17 @@ return function(C, R, UI)
         if not trap or not mdl or not mdl.Parent then return end
         local root = charDistancePart(mdl)
         if not root then return end
+
+        -- When arming a trap under a target, let physics behave normally
+        setTrapAnchored(trap, false)
+
         local targetCF = root.CFrame * CFrame.new(0, -3, 0)
         moveTrapToCF(trap, targetCF, true)
     end
+
+    ------------------------------------------------------------------------
+    -- Trap Aura
+    ------------------------------------------------------------------------
 
     local function startTrapAura()
         if running.TrapAura then return end
@@ -721,20 +779,30 @@ return function(C, R, UI)
                 if not hrp then
                     task.wait(0.25)
                 else
-                    local origin = getRayOriginFromChar(ch) or hrp.Position
-                    local radius = tonumber(C.State.AuraRadius) or 150
+                    local origin      = getRayOriginFromChar(ch) or hrp.Position
+                    local radius      = tonumber(C.State.AuraRadius) or 150
                     local charsFolder = WS:FindFirstChild("Characters")
-                    local targets = collectCharactersInRadius(charsFolder, origin, radius)
-                    local traps = getAllBearTraps()
+                    local targets     = collectCharactersInRadius(charsFolder, origin, radius)
+                    local traps       = getAllBearTraps()
 
                     if #traps > 0 then
-                        if #targets > 0 then
+                        -- Filter out lost children for trap logic
+                        local validTargets = {}
+                        for _, mdl in ipairs(targets) do
+                            if not isLostChildModelSoft(mdl) then
+                                validTargets[#validTargets+1] = mdl
+                            end
+                        end
+
+                        if #validTargets > 0 then
+                            -- Distribute traps across valid enemies
                             for i, trap in ipairs(traps) do
-                                local mdl = targets[((i - 1) % #targets) + 1]
+                                local mdl = validTargets[((i - 1) % #validTargets) + 1]
                                 moveTrapUnderCharacter(trap, mdl)
                             end
                             task.wait(0.25)
                         else
+                            -- No valid targets (only children / none at all) -> halo around player
                             lockTrapsAroundPlayer(traps, hrp)
                             task.wait(0.4)
                         end
@@ -746,6 +814,10 @@ return function(C, R, UI)
         end)
     end
     local function stopTrapAura() running.TrapAura = false end
+
+    ------------------------------------------------------------------------
+    -- UI wiring
+    ------------------------------------------------------------------------
 
     CombatTab:Toggle({
         Title = "Character Aura",
@@ -785,7 +857,7 @@ return function(C, R, UI)
                     C.State.Toggles.BigTreeAura = true
                 else
                     C.State.Toggles.BigTreeAura = false
-                    pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
+                    pcall(function() if bigToggle and bigToggle.Set      then bigToggle:Set(false)      end end)
                     pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
                 end
             else
@@ -800,7 +872,7 @@ return function(C, R, UI)
         local function check()
             if C.State.Toggles.BigTreeAura and not hasBigTreeTool() then
                 C.State.Toggles.BigTreeAura = false
-                pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
+                pcall(function() if bigToggle and bigToggle.Set      then bigToggle:Set(false)      end end)
                 pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
             end
         end
@@ -827,5 +899,5 @@ return function(C, R, UI)
     })
 
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
-    if C.State.Toggles.TrapAura then startTrapAura() end
+    if C.State.Toggles.TrapAura      then startTrapAura()      end
 end
