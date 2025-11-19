@@ -13,6 +13,187 @@ return function(C, R, UI)
     C.State.Toggles = C.State.Toggles or {}
     C.Config = C.Config or {}
 
+    local playerGui = lp:WaitForChild("PlayerGui", 10)
+    local trapLoggerGui, trapLoggerFrame, trapLoggerArea, trapLoggerText
+
+    local function ensureTrapLogger()
+        if trapLoggerGui and trapLoggerGui.Parent then return end
+        if not playerGui then return end
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "TrapLoggerGui"
+        gui.ResetOnSpawn = false
+        gui.Parent = playerGui
+
+        local frame = Instance.new("Frame")
+        frame.Name = "TrapLoggerFrame"
+        frame.Size = UDim2.new(0, 340, 0, 220)
+        frame.Position = UDim2.new(1, -360, 0, 140)
+        frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        frame.BorderSizePixel = 0
+        frame.Active = true
+        frame.Draggable = true
+        frame.Parent = gui
+
+        local titleBar = Instance.new("Frame")
+        titleBar.Name = "TitleBar"
+        titleBar.Size = UDim2.new(1, 0, 0, 24)
+        titleBar.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+        titleBar.BorderSizePixel = 0
+        titleBar.Parent = frame
+
+        local titleLabel = Instance.new("TextLabel")
+        titleLabel.BackgroundTransparency = 1
+        titleLabel.Size = UDim2.new(1, -70, 1, 0)
+        titleLabel.Position = UDim2.new(0, 6, 0, 0)
+        titleLabel.Font = Enum.Font.SourceSansBold
+        titleLabel.TextSize = 14
+        titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+        titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        titleLabel.Text = "Trap Logger"
+        titleLabel.Parent = titleBar
+
+        local minimizeButton = Instance.new("TextButton")
+        minimizeButton.Name = "Minimize"
+        minimizeButton.Size = UDim2.new(0, 24, 1, 0)
+        minimizeButton.Position = UDim2.new(1, -48, 0, 0)
+        minimizeButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        minimizeButton.Text = "-"
+        minimizeButton.Font = Enum.Font.SourceSansBold
+        minimizeButton.TextSize = 14
+        minimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        minimizeButton.Parent = titleBar
+
+        local closeButton = Instance.new("TextButton")
+        closeButton.Name = "Close"
+        closeButton.Size = UDim2.new(0, 24, 1, 0)
+        closeButton.Position = UDim2.new(1, -24, 0, 0)
+        closeButton.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+        closeButton.Text = "X"
+        closeButton.Font = Enum.Font.SourceSansBold
+        closeButton.TextSize = 14
+        closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        closeButton.Parent = titleBar
+
+        local scrolling = Instance.new("ScrollingFrame")
+        scrolling.Name = "LogArea"
+        scrolling.Size = UDim2.new(1, -8, 1, -56)
+        scrolling.Position = UDim2.new(0, 4, 0, 26)
+        scrolling.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        scrolling.BorderSizePixel = 0
+        scrolling.ScrollBarThickness = 6
+        scrolling.CanvasSize = UDim2.new(0, 0, 0, 0)
+        scrolling.Parent = frame
+
+        local label = Instance.new("TextLabel")
+        label.Name = "LogText"
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.new(1, -4, 1, 0)
+        label.Position = UDim2.new(0, 2, 0, 0)
+        label.Font = Enum.Font.Code
+        label.TextSize = 12
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.TextYAlignment = Enum.TextYAlignment.Top
+        label.TextWrapped = true
+        label.TextColor3 = Color3.fromRGB(220, 220, 220)
+        label.Text = ""
+        label.Parent = scrolling
+
+        local buttonBar = Instance.new("Frame")
+        buttonBar.Name = "ButtonBar"
+        buttonBar.Size = UDim2.new(1, 0, 0, 26)
+        buttonBar.Position = UDim2.new(0, 0, 1, -26)
+        buttonBar.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+        buttonBar.BorderSizePixel = 0
+        buttonBar.Parent = frame
+
+        local copyButton = Instance.new("TextButton")
+        copyButton.Name = "Copy"
+        copyButton.Size = UDim2.new(0.5, -2, 1, -4)
+        copyButton.Position = UDim2.new(0, 2, 0, 2)
+        copyButton.BackgroundColor3 = Color3.fromRGB(40, 100, 40)
+        copyButton.Font = Enum.Font.SourceSansBold
+        copyButton.TextSize = 14
+        copyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        copyButton.Text = "Copy"
+        copyButton.Parent = buttonBar
+
+        local clearButton = Instance.new("TextButton")
+        clearButton.Name = "Clear"
+        clearButton.Size = UDim2.new(0.5, -2, 1, -4)
+        clearButton.Position = UDim2.new(0.5, 0, 0, 2)
+        clearButton.BackgroundColor3 = Color3.fromRGB(100, 40, 40)
+        clearButton.Font = Enum.Font.SourceSansBold
+        clearButton.TextSize = 14
+        clearButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        clearButton.Text = "Clear"
+        clearButton.Parent = buttonBar
+
+        local minimized = false
+        minimizeButton.MouseButton1Click:Connect(function()
+            minimized = not minimized
+            if minimized then
+                frame.Size = UDim2.new(0, 340, 0, 24)
+                scrolling.Visible = false
+                buttonBar.Visible = false
+                minimizeButton.Text = "+"
+            else
+                frame.Size = UDim2.new(0, 340, 0, 220)
+                scrolling.Visible = true
+                buttonBar.Visible = true
+                minimizeButton.Text = "-"
+            end
+        end)
+
+        closeButton.MouseButton1Click:Connect(function()
+            gui:Destroy()
+            trapLoggerGui = nil
+            trapLoggerFrame = nil
+            trapLoggerArea = nil
+            trapLoggerText = nil
+        end)
+
+        copyButton.MouseButton1Click:Connect(function()
+            if trapLoggerText and setclipboard then
+                setclipboard(trapLoggerText.Text)
+            end
+        end)
+
+        clearButton.MouseButton1Click:Connect(function()
+            if trapLoggerText then
+                trapLoggerText.Text = ""
+                trapLoggerArea.CanvasSize = UDim2.new(0, 0, 0, 0)
+            end
+        end)
+
+        trapLoggerGui = gui
+        trapLoggerFrame = frame
+        trapLoggerArea = scrolling
+        trapLoggerText = label
+    end
+
+    local function trapLog(message)
+        local ok, err = pcall(function()
+            ensureTrapLogger()
+            if not trapLoggerText or not trapLoggerArea then return end
+            local line = "[" .. string.format("%.3f", tick()) .. "] " .. tostring(message)
+            if trapLoggerText.Text == "" then
+                trapLoggerText.Text = line
+            else
+                trapLoggerText.Text = trapLoggerText.Text .. "\n" .. line
+            end
+            trapLoggerText.Size = UDim2.new(1, -4, 0, trapLoggerText.TextBounds.Y + 4)
+            trapLoggerArea.CanvasSize = UDim2.new(0, 0, 0, trapLoggerText.TextBounds.Y + 8)
+            trapLoggerArea.CanvasPosition = Vector2.new(
+                0,
+                math.max(0, trapLoggerArea.CanvasSize.Y.Offset - trapLoggerArea.AbsoluteWindowSize.Y)
+            )
+        end)
+        if not ok then
+            warn("trapLog error: " .. tostring(err))
+        end
+    end
+
     local TUNE = C.Config
     TUNE.CHOP_SWING_DELAY     = TUNE.CHOP_SWING_DELAY     or 0.50
     TUNE.TREE_NAME            = TUNE.TREE_NAME            or "Small Tree"
@@ -657,6 +838,46 @@ return function(C, R, UI)
     local trapLastSetOnChar = setmetatable({}, { __mode = "k" })
     local trapLastSetTime   = setmetatable({}, { __mode = "k" })
 
+    local monitoredTraps = setmetatable({}, { __mode = "k" })
+    local monitoredChars = setmetatable({}, { __mode = "k" })
+
+    local function monitorTrap(trap)
+        if not trap or monitoredTraps[trap] then return end
+        monitoredTraps[trap] = true
+        trapLog("Monitor trap: " .. tostring(trap:GetFullName()))
+        trap.AncestryChanged:Connect(function(_, parent)
+            local where = parent and parent:GetFullName() or "nil"
+            local inWS = parent and parent:IsDescendantOf(WS) or false
+            if not parent then
+                trapLog("Trap removed from game (Parent=nil): " .. tostring(trap.Name))
+            elseif not inWS then
+                trapLog("Trap moved outside Workspace: " .. tostring(trap.Name) .. " parent=" .. where)
+            else
+                trapLog("Trap ancestry changed: " .. tostring(trap.Name) .. " parent=" .. where)
+            end
+        end)
+    end
+
+    local function monitorTargetChar(mdl)
+        if not mdl or monitoredChars[mdl] then return end
+        monitoredChars[mdl] = true
+        trapLog("Monitor character: " .. tostring(mdl.Name))
+        mdl.AncestryChanged:Connect(function(_, parent)
+            local where = parent and parent:GetFullName() or "nil"
+            if not parent then
+                trapLog("Character removed from game: " .. tostring(mdl.Name))
+            else
+                trapLog("Character ancestry changed: " .. tostring(mdl.Name) .. " parent=" .. where)
+            end
+        end)
+        local hum = mdl:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.Died:Connect(function()
+                trapLog("Character Humanoid.Died: " .. tostring(mdl.Name))
+            end)
+        end
+    end
+
     local function resolveTrapRemotes()
         local re = RS:FindFirstChild("RemoteEvents")
         if not re then return end
@@ -694,8 +915,20 @@ return function(C, R, UI)
     local function moveTrapToCF(trap, cf, setNow)
         if not trap or not trap.Parent or not cf then return end
         resolveTrapRemotes()
+        monitorTrap(trap)
+
+        local oldPos
+        local okPivot, pivot = pcall(function() return trap:GetPivot() end)
+        if okPivot and pivot then
+            oldPos = pivot.Position
+        end
+        trapLog("moveTrapToCF: " .. tostring(trap.Name) ..
+            " from=" .. (oldPos and tostring(oldPos) or "nil") ..
+            " to=" .. tostring(cf.Position) .. " setNow=" .. tostring(setNow))
+
         task.spawn(function()
             if TRAP_REMOTES.StartDrag then
+                trapLog("StartDrag FireServer for trap: " .. tostring(trap.Name))
                 pcall(function() TRAP_REMOTES.StartDrag:FireServer(trap) end)
             end
             task.wait(0.03)
@@ -708,9 +941,11 @@ return function(C, R, UI)
                 end
             end)
             if TRAP_REMOTES.StopDrag then
+                trapLog("StopDrag FireServer for trap: " .. tostring(trap.Name))
                 pcall(function() TRAP_REMOTES.StopDrag:FireServer(trap) end)
             end
             if setNow and TRAP_REMOTES.SetTrap then
+                trapLog("SetTrap FireServer for trap: " .. tostring(trap.Name))
                 pcall(function() TRAP_REMOTES.SetTrap:FireServer(trap) end)
             end
         end)
@@ -725,13 +960,19 @@ return function(C, R, UI)
         trapCache = {}
 
         local root = trapsRoot()
-        if not root then return trapCache end
+        if not root then
+            trapLog("getAllBearTraps: no Structures root found")
+            return trapCache
+        end
 
         for _, d in ipairs(root:GetDescendants()) do
             if d:IsA("Model") and d.Name == "Bear Trap" then
+                trapLog("getAllBearTraps: found trap " .. d:GetFullName())
                 trapCache[#trapCache+1] = d
+                monitorTrap(d)
             end
         end
+        trapLog("getAllBearTraps: total traps=" .. tostring(#trapCache))
         return trapCache
     end
 
@@ -750,6 +991,7 @@ return function(C, R, UI)
         center = Vector3.new(groundCenter.X, groundCenter.Y + TRAP_IDLE_HEIGHT_ABOVE_GROUND, groundCenter.Z)
 
         local radius = TRAP_IDLE_RADIUS
+        trapLog("lockTrapsAroundPlayer: center=" .. tostring(center) .. " traps=" .. tostring(n))
         for i, trap in ipairs(traps) do
             if trap and trap.Parent then
                 local t = (i - 1) / n * math.pi * 2
@@ -766,12 +1008,24 @@ return function(C, R, UI)
 
         local now = os.clock()
         local lastForTrap = trapLastSetTime[trap] or 0
-        if now - lastForTrap < TRAP_TRAP_COOLDOWN then return end
+        if now - lastForTrap < TRAP_TRAP_COOLDOWN then
+            trapLog("moveTrapUnderCharacter: trap cooldown, skipping " .. tostring(trap.Name))
+            return
+        end
         local lastForChar = trapLastSetOnChar[mdl] or 0
-        if now - lastForChar < TRAP_CHAR_COOLDOWN then return end
+        if now - lastForChar < TRAP_CHAR_COOLDOWN then
+            trapLog("moveTrapUnderCharacter: character cooldown, skipping char=" .. tostring(mdl.Name))
+            return
+        end
 
         local root = charDistancePart(mdl)
-        if not root then return end
+        if not root then
+            trapLog("moveTrapUnderCharacter: no root part for char=" .. tostring(mdl.Name))
+            return
+        end
+
+        monitorTrap(trap)
+        monitorTargetChar(mdl)
 
         local groundPos = trapGroundBelow(root.Position)
         local look = root.CFrame.LookVector
@@ -780,8 +1034,13 @@ return function(C, R, UI)
 
         local rootFolder = trapsRoot()
         if rootFolder and trap.Parent ~= rootFolder then
+            trapLog("moveTrapUnderCharacter: reparent trap to Structures: " .. tostring(trap.Name))
             trap.Parent = rootFolder
         end
+
+        trapLog("moveTrapUnderCharacter: moving trap=" .. tostring(trap.Name) ..
+            " under char=" .. tostring(mdl.Name) ..
+            " at=" .. tostring(standPos))
 
         moveTrapToCF(trap, targetCF, true)
         trapLastSetTime[trap] = now
@@ -789,15 +1048,19 @@ return function(C, R, UI)
         trapIdleAnchorPos = nil
     end
 
+    local lastHadTraps = nil
+
     local function startTrapAura()
         if running.TrapAura then return end
         running.TrapAura = true
         task.spawn(function()
             resolveTrapRemotes()
+            trapLog("Trap Aura: started")
             while running.TrapAura do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if not hrp then
+                    trapLog("Trap Aura: no HumanoidRootPart, waiting")
                     task.wait(0.25)
                 else
                     local origin = getRayOriginFromChar(ch) or hrp.Position
@@ -806,8 +1069,19 @@ return function(C, R, UI)
                     local targets = collectCharactersInRadius(charsFolder, origin, radius, true)
                     local traps = getAllBearTraps()
 
-                    if #traps > 0 then
+                    if #traps == 0 then
+                        if lastHadTraps ~= false then
+                            trapLog("Trap Aura: no bear traps found, aura idle")
+                            lastHadTraps = false
+                        end
+                        task.wait(0.4)
+                    else
+                        if lastHadTraps ~= true then
+                            trapLog("Trap Aura: active, traps=" .. tostring(#traps))
+                            lastHadTraps = true
+                        end
                         if #targets > 0 then
+                            trapLog("Trap Aura: targets=" .. tostring(#targets))
                             for i, trap in ipairs(traps) do
                                 local mdl = targets[((i - 1) % #targets) + 1]
                                 moveTrapUnderCharacter(trap, mdl)
@@ -817,15 +1091,16 @@ return function(C, R, UI)
                             lockTrapsAroundPlayer(traps, hrp)
                             task.wait(0.4)
                         end
-                    else
-                        task.wait(0.4)
                     end
                 end
             end
+            trapLog("Trap Aura: stopped")
         end)
     end
 
-    local function stopTrapAura() running.TrapAura = false end
+    local function stopTrapAura()
+        running.TrapAura = false
+    end
 
     CombatTab:Toggle({
         Title = "Character Aura",
