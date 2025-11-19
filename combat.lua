@@ -26,7 +26,7 @@ return function(C, R, UI)
     TUNE.CHAR_CLOSE_FAILSAFE  = TUNE.CHAR_CLOSE_FAILSAFE  or 24
     TUNE.VIS_THROUGH_WALLS    = (TUNE.VIS_THROUGH_WALLS ~= false)
 
-    local running = { SmallTree = false, Character = false }
+    local running = { SmallTree = false, Character = false, TrapAura = false }
 
     local TREE_NAMES = { ["Small Tree"]=true, ["Snowy Small Tree"]=true, ["Small Webbed Tree"]=true }
     local BIG_TREE_NAMES = { TreeBig1=true, TreeBig2=true, TreeBig3=true }
@@ -613,12 +613,155 @@ return function(C, R, UI)
     end
     local function stopSmallTreeAura() running.SmallTree = false end
 
+    local function trapsRoot()
+        return WS:FindFirstChild("Structures") or WS:FindFirstChild("structures")
+    end
+
+    local TRAP_REMOTES = { StartDrag = nil, StopDrag = nil, SetTrap = nil }
+    local trapCache, trapCacheAt = nil, 0
+
+    local function resolveTrapRemotes()
+        local re = RS:FindFirstChild("RemoteEvents")
+        if not re then return end
+        if not TRAP_REMOTES.StartDrag then
+            TRAP_REMOTES.StartDrag =
+                re:FindFirstChild("RequestStartDraggingItem") or
+                re:FindFirstChild("StartDraggingItem")
+        end
+        if not TRAP_REMOTES.StopDrag then
+            TRAP_REMOTES.StopDrag =
+                re:FindFirstChild("RequestStopDraggingItem") or
+                re:FindFirstChild("StopDraggingItem")
+        end
+        if not TRAP_REMOTES.SetTrap then
+            TRAP_REMOTES.SetTrap =
+                re:FindFirstChild("RequestSetTrap") or
+                re:FindFirstChild("SetTrap")
+        end
+    end
+
+    local function moveTrapToCF(trap, cf, setNow)
+        if not trap or not trap.Parent or not cf then return end
+        resolveTrapRemotes()
+        task.spawn(function()
+            if TRAP_REMOTES.StartDrag then
+                pcall(function() TRAP_REMOTES.StartDrag:FireServer(trap) end)
+            end
+            task.wait(0.03)
+            pcall(function()
+                if trap:IsA("Model") then
+                    trap:PivotTo(cf)
+                else
+                    local bp = trap:FindFirstChildWhichIsA("BasePart")
+                    if bp then bp.CFrame = cf end
+                end
+            end)
+            if TRAP_REMOTES.StopDrag then
+                pcall(function() TRAP_REMOTES.StopDrag:FireServer(trap) end)
+            end
+            if setNow and TRAP_REMOTES.SetTrap then
+                pcall(function() TRAP_REMOTES.SetTrap:FireServer(trap) end)
+            end
+        end)
+    end
+
+    local function getAllBearTraps()
+        local now = os.clock()
+        if trapCache and (now - trapCacheAt) < 2.0 then
+            return trapCache
+        end
+        trapCacheAt = now
+        trapCache = {}
+
+        local root = trapsRoot()
+        if not root then return trapCache end
+
+        for _, d in ipairs(root:GetDescendants()) do
+            if d:IsA("Model") and d.Name == "Bear Trap" then
+                trapCache[#trapCache+1] = d
+            end
+        end
+        return trapCache
+    end
+
+    local function lockTrapsAroundPlayer(traps, hrp)
+        if not hrp then return end
+        local n = #traps
+        if n == 0 then return end
+        local center = hrp.Position
+        local radius = 5
+        local height = 10
+        for i, trap in ipairs(traps) do
+            if trap and trap.Parent then
+                local t = (i - 1) / n * math.pi * 2
+                local offset = Vector3.new(math.cos(t) * radius, height, math.sin(t) * radius)
+                local pos = center + offset
+                local cf = CFrame.new(pos, center)
+                moveTrapToCF(trap, cf, false)
+            end
+        end
+    end
+
+    local function moveTrapUnderCharacter(trap, mdl)
+        if not trap or not mdl or not mdl.Parent then return end
+        local root = charDistancePart(mdl)
+        if not root then return end
+        local targetCF = root.CFrame * CFrame.new(0, -3, 0)
+        moveTrapToCF(trap, targetCF, true)
+    end
+
+    local function startTrapAura()
+        if running.TrapAura then return end
+        running.TrapAura = true
+        task.spawn(function()
+            resolveTrapRemotes()
+            while running.TrapAura do
+                local ch = lp.Character or lp.CharacterAdded:Wait()
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if not hrp then
+                    task.wait(0.25)
+                else
+                    local origin = getRayOriginFromChar(ch) or hrp.Position
+                    local radius = tonumber(C.State.AuraRadius) or 150
+                    local charsFolder = WS:FindFirstChild("Characters")
+                    local targets = collectCharactersInRadius(charsFolder, origin, radius)
+                    local traps = getAllBearTraps()
+
+                    if #traps > 0 then
+                        if #targets > 0 then
+                            for i, trap in ipairs(traps) do
+                                local mdl = targets[((i - 1) % #targets) + 1]
+                                moveTrapUnderCharacter(trap, mdl)
+                            end
+                            task.wait(0.25)
+                        else
+                            lockTrapsAroundPlayer(traps, hrp)
+                            task.wait(0.4)
+                        end
+                    else
+                        task.wait(0.4)
+                    end
+                end
+            end
+        end)
+    end
+    local function stopTrapAura() running.TrapAura = false end
+
     CombatTab:Toggle({
         Title = "Character Aura",
         Value = C.State.Toggles.CharacterAura or false,
         Callback = function(on)
             C.State.Toggles.CharacterAura = on
             if on then startCharacterAura() else stopCharacterAura() end
+        end
+    })
+
+    CombatTab:Toggle({
+        Title = "Trap Aura (Bear Traps)",
+        Value = C.State.Toggles.TrapAura or false,
+        Callback = function(on)
+            C.State.Toggles.TrapAura = on
+            if on then startTrapAura() else stopTrapAura() end
         end
     })
 
@@ -662,7 +805,10 @@ return function(C, R, UI)
             end
         end
         inv.ChildRemoved:Connect(check)
-        while true do task.wait(2.0) check() end
+        while true do
+            task.wait(2.0)
+            check()
+        end
     end)
 
     CombatTab:Slider({
@@ -681,4 +827,5 @@ return function(C, R, UI)
     })
 
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
+    if C.State.Toggles.TrapAura then startTrapAura() end
 end
