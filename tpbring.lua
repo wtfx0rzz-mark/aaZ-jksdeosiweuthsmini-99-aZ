@@ -145,6 +145,11 @@ return function(C, R, UI)
     local ORB_UNSTICK_HZ          = 10
     local STUCK_TTL               = 6.0
 
+    -- Periodic catch-up: every 60s pause waves for 15s and clean floaters
+    local RESYNC_INTERVAL             = 60    -- seconds of normal running
+    local RESYNC_DURATION             = 15    -- seconds of catch-up window
+    local RESYNC_MAX_RELEASE_PER_TICK = 2     -- drop 1–2 at a time during catch-up
+
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
     local DONE_ATTR  = "OrbDelivered"
@@ -163,6 +168,10 @@ return function(C, R, UI)
     local unstickConn  = nil
     local preclaimConn = nil
     local waveAcc      = 0.0
+
+    local resyncTimer     = 0
+    local inResync        = false
+    local resyncRemaining = 0
 
     ----------------------------------------------------------------
     -- ITEM DEFINITIONS
@@ -479,6 +488,8 @@ return function(C, R, UI)
         end
         return true
     end
+
+    private_selectedSet = nil
 
     local function currentSelectedSet()
         if CURRENT_MODE == "fuel" then
@@ -810,6 +821,77 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
+    -- Aggressive float-fix during periodic resync
+    ----------------------------------------------------------------
+    local function resyncFloaters()
+        local itemsFolder = itemsRootOrNil()
+        if not itemsFolder then return end
+
+        local centers = {}
+        if CURRENT_MODE == "orbs" then
+            for i = 1, 4 do
+                if orbEnabled[i] and CUSTOM_ORB_BASES[i] then
+                    centers[#centers+1] = CUSTOM_ORB_BASES[i]
+                end
+            end
+        else
+            if orbPosVec then
+                centers[#centers+1] = orbPosVec
+            end
+        end
+        if #centers == 0 then return end
+
+        local ORB_RESYNC_RAD = ORB_UNSTICK_RAD * 2
+
+        local function nearAnyCenter(pos)
+            for _,c in ipairs(centers) do
+                if (pos - c).Magnitude <= ORB_RESYNC_RAD then
+                    return true
+                end
+            end
+            return false
+        end
+
+        local seen = {}
+        for _,m in ipairs(itemsFolder:GetChildren()) do
+            if m:IsA("Model") and not seen[m] then
+                local mp = mainPart(m)
+                if mp and nearAnyCenter(mp.Position) then
+                    seen[m] = true
+                    local parts = allParts(m)
+                    local looksStuck = false
+                    for _,p in ipairs(parts) do
+                        if p.Anchored or not p.CanCollide then
+                            looksStuck = true
+                            break
+                        end
+                    end
+                    if not looksStuck then
+                        if inflight[m] or m:GetAttribute(INFLT_ATTR) or m:GetAttribute(JOB_ATTR) then
+                            looksStuck = true
+                        end
+                    end
+                    if looksStuck then
+                        local alreadyQueued = false
+                        for _,rec in ipairs(releaseQueue) do
+                            if rec.model == m then
+                                alreadyQueued = true
+                                break
+                            end
+                        end
+                        if not alreadyQueued then
+                            table.insert(releaseQueue, {
+                                model = m,
+                                pos   = mp.Position
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    ----------------------------------------------------------------
     -- Unstick pass using raycasts from player position
     ----------------------------------------------------------------
     local function setUnstickEnabled(on)
@@ -980,6 +1062,10 @@ return function(C, R, UI)
         end
 
         setUnstickEnabled(false)
+
+        resyncTimer     = 0
+        inResync        = false
+        resyncRemaining = 0
 
         for i = #releaseQueue, 1, -1 do
             local rec = releaseQueue[i]
@@ -1199,6 +1285,9 @@ return function(C, R, UI)
         releaseQueue = {}
         releaseAcc   = 0
         waveAcc      = 0
+        resyncTimer     = 0
+        inResync        = false
+        resyncRemaining = 0
 
         if hb then
             hb:Disconnect()
@@ -1214,15 +1303,38 @@ return function(C, R, UI)
         hb = Run.Heartbeat:Connect(function(dt)
             if not running then return end
 
-            waveAcc = waveAcc + dt
-            if waveAcc >= STEP_WAIT then
-                waveAcc = waveAcc - STEP_WAIT
-                wave()
+            -- periodic catch-up window scheduler
+            resyncTimer = resyncTimer + dt
+            if not inResync and resyncTimer >= RESYNC_INTERVAL then
+                inResync        = true
+                resyncRemaining = RESYNC_DURATION
+                resyncTimer     = 0
+            end
+            if inResync then
+                resyncRemaining = resyncRemaining - dt
+                if resyncRemaining <= 0 then
+                    inResync        = false
+                    resyncRemaining = 0
+                end
             end
 
+            -- main wave driver (paused during resync to let physics catch up)
+            if not inResync then
+                waveAcc = waveAcc + dt
+                if waveAcc >= STEP_WAIT then
+                    waveAcc = waveAcc - STEP_WAIT
+                    wave()
+                end
+            else
+                -- during catch-up, aggressively de-stick floaters near the orb(s)
+                resyncFloaters()
+            end
+
+            -- controlled release of staged items
             releaseAcc = releaseAcc + dt
-            local interval = 1 / RELEASE_RATE_HZ
-            local toRelease = math.min(MAX_RELEASE_PER_TICK, math.floor(releaseAcc / interval))
+            local interval      = 1 / RELEASE_RATE_HZ
+            local maxPerTick    = inResync and RESYNC_MAX_RELEASE_PER_TICK or MAX_RELEASE_PER_TICK
+            local toRelease     = math.min(maxPerTick, math.floor(releaseAcc / interval))
             if toRelease > 0 then
                 releaseAcc = releaseAcc - toRelease * interval
                 for i = 1, toRelease do
@@ -1231,6 +1343,7 @@ return function(C, R, UI)
                     releaseOne(rec)
                 end
             end
+
             flushStaleStaged()
         end)
     end
