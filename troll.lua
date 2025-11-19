@@ -52,7 +52,6 @@ return function(C, R, UI)
         HazardTopPad      = 6.0,
         HazardRadPad      = 2.0,
 
-        -- New: extra chaos when near campfire/scrapper so logs don't sit still
         HazardChaosAmpXZ  = 4.0,
         HazardChaosAmpY   = 6.0,
         HazardChaosFreq   = 3.0
@@ -74,16 +73,13 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
-    -- Player Nudge config
     local PLAYER_NUDGE_RANGE    = 300
     local PLAYER_NUDGE_UP       = 20
     local PLAYER_NUDGE_AWAY     = 50
     local PLAYER_NUDGE_COOLDOWN = 0.10
 
-    -- Sink Items config
     local SINK_Y_TARGET         = -500
 
-    -- Items Avoid Players config
     local AVOID_ITEMS_RANGE     = 200
     local AVOID_NEAR_DIST       = 15
     local AVOID_STOP_DIST       = 30
@@ -92,7 +88,6 @@ return function(C, R, UI)
     local HOP_UP_VEL            = 35
     local HOP_EXTRA_SPEED       = 10
 
-    -- Player-nudge drift parameters
     local DRIFT_HEIGHT      = 10
     local DRIFT_MAX_HEIGHT  = 400
     local DRIFT_MAX_TIME    = 10
@@ -196,11 +191,12 @@ return function(C, R, UI)
         return nil
     end
 
-    local REM = { StartDrag=nil, StopDrag=nil }
+    local REM = { StartDrag = nil, StopDrag = nil, SetTrap = nil }
 
     local function resolveRemotes()
         REM.StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem")
         REM.StopDrag  = getRemote("StopDraggingItem","RequestStopDraggingItem")
+        REM.SetTrap   = getRemote("RequestSetTrap","SetTrap")
     end
 
     resolveRemotes()
@@ -216,6 +212,16 @@ return function(C, R, UI)
     local function safeStopDrag(model)
         if REM.StopDrag and model and model.Parent then
             pcall(function() REM.StopDrag:FireServer(model) end)
+            return true
+        end
+        return false
+    end
+
+    local function safeSetTrap(model)
+        if REM.SetTrap and model and model.Parent then
+            pcall(function()
+                REM.SetTrap:FireServer(model)
+            end)
             return true
         end
         return false
@@ -337,7 +343,6 @@ return function(C, R, UI)
         return list
     end
 
-    -- CHANGED: now adds time-based jitter so logs don't sit still near camp/scrap
     local function projectOutOfHazards(pos)
         local hs = hazardInfo()
         if #hs == 0 then return pos end
@@ -390,6 +395,22 @@ return function(C, R, UI)
 
     local function itemsRoot()
         return WS:FindFirstChild("Items") or WS:FindFirstChild("items")
+    end
+
+    local function trapsRoot()
+        return WS:FindFirstChild("Structures") or WS:FindFirstChild("structures")
+    end
+
+    local function getAllBearTraps()
+        local root = trapsRoot()
+        local out = {}
+        if not root then return out end
+        for _,d in ipairs(root:GetDescendants()) do
+            if d:IsA("Model") and d.Name == "Bear Trap" then
+                out[#out+1] = d
+            end
+        end
+        return out
     end
 
     ---------------------------------------------------------------------
@@ -1098,6 +1119,56 @@ return function(C, R, UI)
     end
 
     ---------------------------------------------------------------------
+    -- BEAR TRAPS: SEND TO PLAYERS
+    ---------------------------------------------------------------------
+
+    local function sendTrapsToPlayers()
+        resolveRemotes()
+        local traps = getAllBearTraps()
+        if #traps == 0 then
+            return
+        end
+
+        local pTargets = selectedPlayersList(selectedSet)
+        if #pTargets == 0 then
+            return
+        end
+
+        local assignments = {}
+        for i, trap in ipairs(traps) do
+            local idx = ((i - 1) % #pTargets) + 1
+            local tgt = pTargets[idx]
+            if tgt then
+                assignments[tgt] = assignments[tgt] or {}
+                table.insert(assignments[tgt], trap)
+            end
+        end
+
+        for _, tgt in ipairs(pTargets) do
+            local list = assignments[tgt]
+            if list and #list > 0 then
+                local root = hrp(tgt)
+                if root then
+                    for _, trap in ipairs(list) do
+                        if trap and trap.Parent then
+                            task.spawn(function()
+                                if not trap or not trap.Parent then return end
+                                safeStartDrag(trap)
+
+                                local targetCF = root.CFrame * CFrame.new(0, -3, 0)
+                                setPivot(trap, targetCF)
+
+                                safeStopDrag(trap)
+                                safeSetTrap(trap)
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    ---------------------------------------------------------------------
     -- UI WIRING
     ---------------------------------------------------------------------
 
@@ -1265,6 +1336,15 @@ return function(C, R, UI)
                     sinkItemsConn = nil
                 end
             end
+        end
+    })
+
+    tab:Section({ Title = "Bear Traps" })
+
+    tab:Button({
+        Title = "Send Traps",
+        Callback = function()
+            sendTrapsToPlayers()
         end
     })
 end
