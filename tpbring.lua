@@ -171,7 +171,7 @@ return function(C, R, UI)
         "Tyre","Bolt","Broken Fan","Broken Microwave","Sheet Metal","Old Radio","Washing Machine","Old Car Engine",
         "UFO Junk","UFO Component"
     }
-    local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel","Chair"}
+    local fuelItems = {"Log","Coal","Fuel Canister","Oil Barrel"}
     local foodItems = {
         "Morsel","Cooked Morsel","Steak","Cooked Steak","Ribs","Cooked Ribs","Cake","Berry","Carrot",
         "Chilli","Stew","Pumpkin","Hearty Stew","Corn","BBQ ribs","Apple","Mackerel"
@@ -192,7 +192,7 @@ return function(C, R, UI)
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
     for _,n in ipairs(junkItems) do junkSet[n] = true end
     cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
-    scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
+    scrapAlso["Log"] = true;
 
     local fuelModeSet = { ["Coal"] = true, ["Fuel Canister"] = true, ["Oil Barrel"] = true }
     local scrapModeSet = {}
