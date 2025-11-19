@@ -129,7 +129,6 @@ return function(C, R, UI)
     local function isLostChildModelSoft(m)
         if not (m and m:IsA("Model")) then return false end
 
-        -- Prefer shared helpers if traps.lua/auto.lua exported them
         if C.Helpers then
             if type(C.Helpers.IsLostChild) == "function" then
                 local ok, res = pcall(C.Helpers.IsLostChild, m)
@@ -669,25 +668,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Anchor helper: used to keep traps floating in a halo, then free them when dropped
-    local function setTrapAnchored(trap, anchored)
-        if not trap then return end
-        local function apply(part)
-            if part:IsA("BasePart") then
-                pcall(function()
-                    part.Anchored = anchored
-                end)
-            end
-        end
-        if trap:IsA("Model") then
-            for _, d in ipairs(trap:GetDescendants()) do
-                apply(d)
-            end
-        else
-            apply(trap)
-        end
-    end
-
     local function moveTrapToCF(trap, cf, setNow)
         if not trap or not trap.Parent or not cf then return end
         resolveTrapRemotes()
@@ -732,7 +712,6 @@ return function(C, R, UI)
         return trapCache
     end
 
-    -- Halo: traps float around player and are anchored so they don't fall
     local function lockTrapsAroundPlayer(traps, hrp)
         if not hrp then return end
         local n = #traps
@@ -746,8 +725,8 @@ return function(C, R, UI)
                 local offset = Vector3.new(math.cos(t) * radius, height, math.sin(t) * radius)
                 local pos = center + offset
                 local cf  = CFrame.new(pos, center)
+                -- keep setNow = false here: halo mode (do not arm them automatically)
                 moveTrapToCF(trap, cf, false)
-                setTrapAnchored(trap, true) -- keep trap floating instead of falling
             end
         end
     end
@@ -756,11 +735,8 @@ return function(C, R, UI)
         if not trap or not mdl or not mdl.Parent then return end
         local root = charDistancePart(mdl)
         if not root then return end
-
-        -- When arming a trap under a target, let physics behave normally
-        setTrapAnchored(trap, false)
-
         local targetCF = root.CFrame * CFrame.new(0, -3, 0)
+        -- setNow = true here: arm/snap trap immediately under the target
         moveTrapToCF(trap, targetCF, true)
     end
 
