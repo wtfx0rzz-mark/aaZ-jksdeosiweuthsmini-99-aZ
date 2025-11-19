@@ -123,9 +123,6 @@ return function(C, R, UI)
         return nil
     end
 
-    ------------------------------------------------------------------------
-    -- Lost child + trap ignore helpers
-    ------------------------------------------------------------------------
     local function isLostChildModelSoft(m)
         if not (m and m:IsA("Model")) then return false end
 
@@ -153,9 +150,6 @@ return function(C, R, UI)
         end
 
         local name = (m.Name or ""):lower()
-
-        -- Exclude fauna and traders from trap aura:
-        -- Deer, Ram, Owl, Pelt Trader, Furniture Trader, Horse
         if name:find("deer", 1, true)
         or name:find("ram", 1, true)
         or name:find("owl", 1, true)
@@ -168,8 +162,6 @@ return function(C, R, UI)
 
         return false
     end
-
-    ------------------------------------------------------------------------
 
     local function computeImpactCFrame(model, hitPart)
         if not (model and hitPart and hitPart:IsA("BasePart")) then
@@ -509,7 +501,6 @@ return function(C, R, UI)
             return
         end
 
-        -- Tree wave
         local toolName
         if C.State.Toggles.BigTreeAura then
             local bt = hasBigTreeTool()
@@ -662,17 +653,13 @@ return function(C, R, UI)
     end
     local function stopSmallTreeAura() running.SmallTree = false end
 
-    ------------------------------------------------------------------------
-    -- Trap helpers
-    ------------------------------------------------------------------------
-
     local function trapsRoot()
         return WS:FindFirstChild("Structures") or WS:FindFirstChild("structures")
     end
 
     local TRAP_REMOTES = { StartDrag = nil, StopDrag = nil, SetTrap = nil }
     local trapCache, trapCacheAt = nil, 0
-    local TrapLastUse = setmetatable({}, { __mode = "k" }) -- per-trap rate limit
+    local TrapLastUse = setmetatable({}, { __mode = "k" })
 
     local function resolveTrapRemotes()
         local re = RS:FindFirstChild("RemoteEvents")
@@ -694,7 +681,6 @@ return function(C, R, UI)
         end
     end
 
-    -- Find ground Y at a given horizontal position, keeping trap near terrain
     local function groundYAt(position, extraExclude)
         local origin = position + Vector3.new(0, 30, 0)
         local dir    = Vector3.new(0, -120, 0)
@@ -763,18 +749,17 @@ return function(C, R, UI)
         local n = #traps
         if n == 0 then return end
 
-        local center = hrp.Position
-        local baseY  = groundYAt(center, traps)
+        local center = hrp.Position + Vector3.new(0, 8, 0)
         local radius = 5
-        local yOffset = 0.25 -- stay close to ground while traveling
 
         for i, trap in ipairs(traps) do
             if trap and trap.Parent then
                 local t = (i - 1) / n * math.pi * 2
-                local offsetXZ = Vector3.new(math.cos(t) * radius, 0, math.sin(t) * radius)
-                local pos = Vector3.new(center.X, baseY + yOffset, center.Z) + offsetXZ
-                local cf  = CFrame.new(pos, center)
-                moveTrapToCF(trap, cf, false) -- halo mode: do not arm them
+                local offset = Vector3.new(math.cos(t) * radius, 0, math.sin(t) * radius)
+                local pos = center + offset
+                local lookAt = Vector3.new(hrp.Position.X, center.Y, hrp.Position.Z)
+                local cf = CFrame.new(pos, lookAt)
+                moveTrapToCF(trap, cf, false)
             end
         end
     end
@@ -784,7 +769,6 @@ return function(C, R, UI)
         local root = charDistancePart(mdl)
         if not root then return end
 
-        -- Per-trap rate limit to reduce weird despawns / spam use
         local now = os.clock()
         local last = TrapLastUse[trap] or 0
         if now - last < 0.5 then
@@ -793,21 +777,22 @@ return function(C, R, UI)
         TrapLastUse[trap] = now
 
         local rootPos = root.Position
-        local groundY = groundYAt(rootPos, { trap, mdl })
-        local pos     = Vector3.new(rootPos.X, groundY + 0.05, rootPos.Z)
+        local gy = groundYAt(rootPos, { trap, mdl })
+
+        if math.abs(gy - rootPos.Y) > 15 then
+            gy = rootPos.Y - 3
+        end
+
+        local posY = gy + 0.4
+        local pos = Vector3.new(rootPos.X, posY, rootPos.Z)
         local forward = root.CFrame.LookVector
         if forward.Magnitude == 0 then
             forward = Vector3.new(0, 0, -1)
         end
         local cf = CFrame.new(pos, pos + forward)
 
-        -- setNow = true here: arm/snap trap immediately under the target
         moveTrapToCF(trap, cf, true)
     end
-
-    ------------------------------------------------------------------------
-    -- Trap Aura
-    ------------------------------------------------------------------------
 
     local function startTrapAura()
         if running.TrapAura then return end
@@ -827,7 +812,6 @@ return function(C, R, UI)
                     local traps       = getAllBearTraps()
 
                     if #traps > 0 then
-                        -- Filter out children, deer, ram, owl, traders, horse, etc.
                         local validTargets = {}
                         for _, mdl in ipairs(targets) do
                             if not isTrapIgnoredTarget(mdl) then
@@ -836,14 +820,12 @@ return function(C, R, UI)
                         end
 
                         if #validTargets > 0 then
-                            -- Distribute traps across valid enemies
                             for i, trap in ipairs(traps) do
                                 local mdl = validTargets[((i - 1) % #validTargets) + 1]
                                 moveTrapUnderCharacter(trap, mdl)
                             end
                             task.wait(0.25)
                         else
-                            -- No valid targets (only ignored ones / none at all) -> halo around player
                             lockTrapsAroundPlayer(traps, hrp)
                             task.wait(0.4)
                         end
@@ -855,10 +837,6 @@ return function(C, R, UI)
         end)
     end
     local function stopTrapAura() running.TrapAura = false end
-
-    ------------------------------------------------------------------------
-    -- UI wiring
-    ------------------------------------------------------------------------
 
     CombatTab:Toggle({
         Title = "Character Aura",
