@@ -124,7 +124,7 @@ return function(C, R, UI)
     end
 
     ------------------------------------------------------------------------
-    -- Lost child helpers (for trap exclusion)
+    -- Lost child + trap ignore helpers
     ------------------------------------------------------------------------
     local function isLostChildModelSoft(m)
         if not (m and m:IsA("Model")) then return false end
@@ -142,6 +142,31 @@ return function(C, R, UI)
 
         local n = m.Name or ""
         return n:match("^Lost Child") ~= nil
+    end
+
+    local function isTrapIgnoredTarget(m)
+        if not (m and m:IsA("Model")) then
+            return true
+        end
+        if isLostChildModelSoft(m) then
+            return true
+        end
+
+        local name = (m.Name or ""):lower()
+
+        -- Exclude fauna and traders from trap aura:
+        -- Deer, Ram, Owl, Pelt Trader, Furniture Trader, Horse
+        if name:find("deer", 1, true)
+        or name:find("ram", 1, true)
+        or name:find("owl", 1, true)
+        or name:find("horse", 1, true)
+        or name:find("pelt trader", 1, true)
+        or name:find("furniture trader", 1, true)
+        then
+            return true
+        end
+
+        return false
     end
 
     ------------------------------------------------------------------------
@@ -647,6 +672,7 @@ return function(C, R, UI)
 
     local TRAP_REMOTES = { StartDrag = nil, StopDrag = nil, SetTrap = nil }
     local trapCache, trapCacheAt = nil, 0
+    local TrapLastUse = setmetatable({}, { __mode = "k" }) -- per-trap rate limit
 
     local function resolveTrapRemotes()
         local re = RS:FindFirstChild("RemoteEvents")
@@ -666,6 +692,26 @@ return function(C, R, UI)
                 re:FindFirstChild("RequestSetTrap") or
                 re:FindFirstChild("SetTrap")
         end
+    end
+
+    -- Find ground Y at a given horizontal position, keeping trap near terrain
+    local function groundYAt(position, extraExclude)
+        local origin = position + Vector3.new(0, 30, 0)
+        local dir    = Vector3.new(0, -120, 0)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local exclude = { lp.Character }
+        if extraExclude then
+            for _, inst in ipairs(extraExclude) do
+                exclude[#exclude+1] = inst
+            end
+        end
+        params.FilterDescendantsInstances = exclude
+        local hit = WS:Raycast(origin, dir, params)
+        if hit then
+            return hit.Position.Y
+        end
+        return position.Y
     end
 
     local function moveTrapToCF(trap, cf, setNow)
@@ -716,17 +762,19 @@ return function(C, R, UI)
         if not hrp then return end
         local n = #traps
         if n == 0 then return end
+
         local center = hrp.Position
+        local baseY  = groundYAt(center, traps)
         local radius = 5
-        local height = 10
+        local yOffset = 0.25 -- stay close to ground while traveling
+
         for i, trap in ipairs(traps) do
             if trap and trap.Parent then
                 local t = (i - 1) / n * math.pi * 2
-                local offset = Vector3.new(math.cos(t) * radius, height, math.sin(t) * radius)
-                local pos = center + offset
+                local offsetXZ = Vector3.new(math.cos(t) * radius, 0, math.sin(t) * radius)
+                local pos = Vector3.new(center.X, baseY + yOffset, center.Z) + offsetXZ
                 local cf  = CFrame.new(pos, center)
-                -- keep setNow = false here: halo mode (do not arm them automatically)
-                moveTrapToCF(trap, cf, false)
+                moveTrapToCF(trap, cf, false) -- halo mode: do not arm them
             end
         end
     end
@@ -735,9 +783,26 @@ return function(C, R, UI)
         if not trap or not mdl or not mdl.Parent then return end
         local root = charDistancePart(mdl)
         if not root then return end
-        local targetCF = root.CFrame * CFrame.new(0, -3, 0)
+
+        -- Per-trap rate limit to reduce weird despawns / spam use
+        local now = os.clock()
+        local last = TrapLastUse[trap] or 0
+        if now - last < 0.5 then
+            return
+        end
+        TrapLastUse[trap] = now
+
+        local rootPos = root.Position
+        local groundY = groundYAt(rootPos, { trap, mdl })
+        local pos     = Vector3.new(rootPos.X, groundY + 0.05, rootPos.Z)
+        local forward = root.CFrame.LookVector
+        if forward.Magnitude == 0 then
+            forward = Vector3.new(0, 0, -1)
+        end
+        local cf = CFrame.new(pos, pos + forward)
+
         -- setNow = true here: arm/snap trap immediately under the target
-        moveTrapToCF(trap, targetCF, true)
+        moveTrapToCF(trap, cf, true)
     end
 
     ------------------------------------------------------------------------
@@ -762,10 +827,10 @@ return function(C, R, UI)
                     local traps       = getAllBearTraps()
 
                     if #traps > 0 then
-                        -- Filter out lost children for trap logic
+                        -- Filter out children, deer, ram, owl, traders, horse, etc.
                         local validTargets = {}
                         for _, mdl in ipairs(targets) do
-                            if not isLostChildModelSoft(mdl) then
+                            if not isTrapIgnoredTarget(mdl) then
                                 validTargets[#validTargets+1] = mdl
                             end
                         end
@@ -778,7 +843,7 @@ return function(C, R, UI)
                             end
                             task.wait(0.25)
                         else
-                            -- No valid targets (only children / none at all) -> halo around player
+                            -- No valid targets (only ignored ones / none at all) -> halo around player
                             lockTrapsAroundPlayer(traps, hrp)
                             task.wait(0.4)
                         end
