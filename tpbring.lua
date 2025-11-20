@@ -642,9 +642,8 @@ return function(C, R, UI)
 
         local center = tgt or orbPosVec or (mainPart(m) and mainPart(m).Position)
         if center then
-            local lineIndex = #releaseQueue
-            local offset = Vector3.new(lineIndex * DROP_LINE_SPACING, 0, 0)
-            local pos = center + offset + Vector3.new(0, HOVER_ABOVE_ORB, 0)
+            local stackIndex = #releaseQueue
+            local pos = center + Vector3.new(0, HOVER_ABOVE_ORB + stackIndex * DROP_VERTICAL_OFFSET, 0)
             setPivot(m, CFrame.new(pos))
             tgt = pos
         else
@@ -684,9 +683,7 @@ return function(C, R, UI)
         end
 
         if basePos then
-            dropIndex = (dropIndex % MAX_LINED_ITEMS) + 1
-            local offset = Vector3.new((dropIndex - 1) * DROP_LINE_SPACING, 0, 0)
-            local dropPos = basePos + offset + Vector3.new(0, DROP_VERTICAL_OFFSET, 0)
+            local dropPos = basePos + Vector3.new(0, DROP_VERTICAL_OFFSET, 0)
             setPivot(m, CFrame.new(dropPos))
         end
 
