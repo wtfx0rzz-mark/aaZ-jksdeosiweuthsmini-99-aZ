@@ -168,6 +168,7 @@ return function(C, R, UI)
     local preclaimConn = nil
     local waveAcc      = 0.0
     local dropIndex    = 0
+    local finalized    = {}  -- models that have been fully dropped this run
 
     ----------------------------------------------------------------
     -- ITEM DEFINITIONS
@@ -457,6 +458,12 @@ return function(C, R, UI)
 
     local function canPick(m, selectedSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
+
+        -- Never pick up something we've already fully dropped this run
+        if finalized[m] then
+            return false
+        end
+
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
         if isExcludedModel(m) or isUnderLogWall(m) or hasIceBlockTag(m) then return false end
@@ -477,7 +484,6 @@ return function(C, R, UI)
         local info = inflight[m]
         local age  = tIn and (os.clock() - tIn) or nil
 
-        local treatAsStuck = false
         if tIn and jIn and tostring(jIn) ~= tostring(jobId) and age and age < STUCK_TTL then
             return false
         end
@@ -716,6 +722,9 @@ return function(C, R, UI)
             m:SetAttribute(JOB_ATTR, nil)
             m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
         end)
+
+        -- Mark as permanently done for this run so wave() never picks it again
+        finalized[m] = true
         inflight[m] = nil
     end
 
@@ -933,6 +942,9 @@ return function(C, R, UI)
                             end
                         end)
                     end
+
+                    -- Also treat as finalized so wave() never re-grabs it
+                    finalized[m] = true
                 end
 
                 for _,dir in ipairs(directions) do
@@ -1035,6 +1047,7 @@ return function(C, R, UI)
             setCollideFromSnapshot(rec and rec.snap or snapshotCollide(m))
             zeroAssembly(m)
             inflight[m] = nil
+            finalized[m] = true
         end
 
         activeCount = 0
@@ -1190,6 +1203,7 @@ return function(C, R, UI)
         stopAll()
         CURRENT_MODE = mode
         CURRENT_RUN_ID = tostring(os.clock())
+        finalized = {}  -- reset per run
 
         if mode == "fuel" or mode == "scrap" or mode == "all" then
             local pos, color
