@@ -128,10 +128,10 @@ return function(C, R, UI)
     local START_DRAG_DELAY       = 0.10  -- wait after startDrag
     local TELEPORT_SETTLE_DELAY  = 0.10  -- wait after teleport, before stopDrag
 
-    local CAMPFIRE_DROP_Y_OFFSET = 8
-    local SCRAPPER_DROP_Y_OFFSET = 8
-    local NOTICE_DROP_Y_OFFSET   = 6
-    local ORB_DROP_Y_OFFSET      = 6
+    local CAMPFIRE_DROP_Y_OFFSET = 20
+    local SCRAPPER_DROP_Y_OFFSET = 12
+    local NOTICE_DROP_Y_OFFSET   = 40
+    local ORB_DROP_Y_OFFSET      = 8
 
     local DROP_JITTER_RADIUS     = 1.5   -- horizontal random jitter around target
 
