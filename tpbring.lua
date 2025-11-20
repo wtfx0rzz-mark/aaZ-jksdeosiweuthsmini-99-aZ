@@ -138,12 +138,16 @@ return function(C, R, UI)
 
     local HOVER_ABOVE_ORB         = 1.2
     local RELEASE_RATE_HZ         = 16
-    local MAX_RELEASE_PER_TICK    = 8
+    local MAX_RELEASE_PER_TICK    = 1
 
     local STAGE_TIMEOUT_S         = 1.5
     local ORB_UNSTICK_RAD         = 2.0
     local ORB_UNSTICK_HZ          = 10
     local STUCK_TTL               = 6.0
+
+    local MAX_LINED_ITEMS         = 20
+    local DROP_LINE_SPACING       = 3.0
+    local DROP_VERTICAL_OFFSET    = 8.0
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -163,6 +167,7 @@ return function(C, R, UI)
     local unstickConn  = nil
     local preclaimConn = nil
     local waveAcc      = 0.0
+    local dropIndex    = 0
 
     ----------------------------------------------------------------
     -- ITEM DEFINITIONS
@@ -222,7 +227,6 @@ return function(C, R, UI)
 
     local preDragImportantSet = {}
     addListToSet(weaponsArmor, preDragImportantSet)
-
     addListToSet({
         "Giant Sack","Good Sack",
         "Blueprint","Forest Gem","Key","Flashlight","Strong Flashlight","Taming flute","Cultist Gem","Tusk","Infernal Sack"
@@ -470,7 +474,11 @@ return function(C, R, UI)
 
         local tIn = m:GetAttribute(INFLT_ATTR)
         local jIn = m:GetAttribute(JOB_ATTR)
-        if tIn and jIn and tostring(jIn) ~= tostring(jobId) and os.clock() - tIn < STUCK_TTL then
+        local info = inflight[m]
+        local age  = tIn and (os.clock() - tIn) or nil
+
+        local treatAsStuck = false
+        if tIn and jIn and tostring(jIn) ~= tostring(jobId) and age and age < STUCK_TTL then
             return false
         end
 
@@ -631,7 +639,18 @@ return function(C, R, UI)
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
         end
-        setPivot(m, CFrame.new(tgt))
+
+        local center = tgt or orbPosVec or (mainPart(m) and mainPart(m).Position)
+        if center then
+            local lineIndex = #releaseQueue
+            local offset = Vector3.new(lineIndex * DROP_LINE_SPACING, 0, 0)
+            local pos = center + offset + Vector3.new(0, HOVER_ABOVE_ORB, 0)
+            setPivot(m, CFrame.new(pos))
+            tgt = pos
+        else
+            setPivot(m, CFrame.new(tgt))
+        end
+
         inflight[m].staged   = true
         inflight[m].stagedAt = os.clock()
         inflight[m].snap     = snap
@@ -653,6 +672,24 @@ return function(C, R, UI)
         if not (m and m.Parent) then return end
         local info = inflight[m]
         local snap = info and info.snap or snapshotCollide(m)
+
+        local mp2 = mainPart(m)
+        local basePos = nil
+        if rec and rec.pos then
+            basePos = rec.pos
+        elseif orbPosVec then
+            basePos = orbPosVec
+        elseif mp2 then
+            basePos = mp2.Position
+        end
+
+        if basePos then
+            dropIndex = (dropIndex % MAX_LINED_ITEMS) + 1
+            local offset = Vector3.new((dropIndex - 1) * DROP_LINE_SPACING, 0, 0)
+            local dropPos = basePos + offset + Vector3.new(0, DROP_VERTICAL_OFFSET, 0)
+            setPivot(m, CFrame.new(dropPos))
+        end
+
         setAnchored(m, false)
         zeroAssembly(m)
         setCollideFromSnapshot(snap)
@@ -667,7 +704,7 @@ return function(C, R, UI)
             end)
         end
 
-        local mp2 = mainPart(m)
+        mp2 = mainPart(m)
         if mp2 and stopDrag and isPreDragImportantModel(m) then
             local campPos = campfireOrbPos()
             if campPos and (mp2.Position - campPos).Magnitude <= 30 then
@@ -932,6 +969,7 @@ return function(C, R, UI)
 
         for i = 1, #list do
             if not running then break end
+            if #releaseQueue >= MAX_LINED_ITEMS then break end
 
             local m = list[i]
             if m and m.Parent and not inflight[m] then
@@ -1199,6 +1237,7 @@ return function(C, R, UI)
         releaseQueue = {}
         releaseAcc   = 0
         waveAcc      = 0
+        dropIndex    = 0
 
         if hb then
             hb:Disconnect()
