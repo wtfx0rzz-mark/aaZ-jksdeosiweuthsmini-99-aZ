@@ -130,8 +130,8 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- CORE CONFIG (sequential pipeline)
     ----------------------------------------------------------------
-    local HOVER_ABOVE_TARGET        = 6       -- studs above target before drop
-    local ITEM_DELAY_BETWEEN        = 0.08    -- delay between individual items
+    local HOVER_ABOVE_TARGET        = 8       -- studs above target before drop
+    local ITEM_DELAY_BETWEEN        = 0.35    -- delay between individual items
     local EMPTY_SWEEP_WAIT          = 0.5     -- delay when nothing to process
     local DEST_MISSING_WAIT         = 1.0     -- delay when campfire/scrapper not found
 
@@ -436,16 +436,15 @@ return function(C, R, UI)
         if isExcludedModel(m) or isUnderLogWall(m) or hasIceBlockTag(m) then return false end
 
         local done = m:GetAttribute(DONE_ATTR)
+
+        -- For ORB mode, permanently skip items we've already delivered
         if CURRENT_MODE == "orbs" then
             if done ~= nil then
                 return false
             end
-        else
-            if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
-                return false
-            end
         end
 
+        -- Basic in-flight sanity; don't grab items another job is actively holding
         local tIn = m:GetAttribute(INFLT_ATTR)
         local jIn = m:GetAttribute(JOB_ATTR)
         if tIn and jIn and tostring(jIn) ~= tostring(jobId) then
@@ -760,11 +759,18 @@ return function(C, R, UI)
         setCollideFromSnapshot(snap)
         zeroAssembly(m)
 
-        -- Mark delivered
+        -- Clear in-flight + mark delivery semantics
         pcall(function()
             m:SetAttribute(INFLT_ATTR, nil)
             m:SetAttribute(JOB_ATTR, nil)
-            m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
+
+            if CURRENT_MODE == "orbs" then
+                -- In orbs mode, never handle this again
+                m:SetAttribute(DONE_ATTR, true)
+            else
+                -- In fuel/scrap/all modes, allow re-use later
+                m:SetAttribute(DONE_ATTR, nil)
+            end
         end)
     end
 
@@ -774,15 +780,14 @@ return function(C, R, UI)
     local modeLoopThread = nil
 
     local function stopAll()
-        running      = false
-        CURRENT_MODE = nil
+        running        = false
+        CURRENT_MODE   = nil
         CURRENT_RUN_ID = nil
         destroyOrb()
     end
 
     local function startLoopForMode(mode)
         if modeLoopThread then
-            -- old loop will see running == false / mode mismatch and exit
             modeLoopThread = nil
         end
 
@@ -879,7 +884,6 @@ return function(C, R, UI)
             end
             spawnOrbAt(pos, Color3.fromRGB(100,200,255))
         elseif mode == "orbs" then
-            -- No central orb for orbs-mode; items go to CUSTOM_ORB_BASES
             destroyOrb()
         else
             stopAll()
