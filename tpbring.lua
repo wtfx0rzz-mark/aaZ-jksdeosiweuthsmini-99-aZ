@@ -145,10 +145,10 @@ return function(C, R, UI)
     local ORB_UNSTICK_HZ          = 10
     local STUCK_TTL               = 6.0
 
-    -- Periodic catch-up: every 60s pause waves for 15s and clean floaters
-    local RESYNC_INTERVAL             = 60    -- seconds of normal running
-    local RESYNC_DURATION             = 15    -- seconds of catch-up window
-    local RESYNC_MAX_RELEASE_PER_TICK = 2     -- drop 1–2 at a time during catch-up
+    -- Periodic catch-up: every 3 minutes pause waves for 20s and clean floaters
+    local RESYNC_INTERVAL             = 180   -- seconds of normal running
+    local RESYNC_DURATION             = 20    -- seconds of catch-up window
+    local RESYNC_MAX_RELEASE_PER_TICK = 2     -- very gentle release during catch-up
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -159,8 +159,13 @@ return function(C, R, UI)
 
     local running      = false
     local hb           = nil
-    local orb          = nil
-    local orbPosVec    = nil
+
+    -- Main orb (over campfire/scrapper/notice)
+    local orb, orbPosVec = nil, nil
+
+    -- Stage orb (10 studs away, staging point)
+    local orbStage, orbStagePosVec = nil, nil
+
     local inflight     = {}
     local releaseQueue = {}
     local releaseAcc   = 0.0
@@ -172,6 +177,9 @@ return function(C, R, UI)
     local resyncTimer     = 0
     local inResync        = false
     local resyncRemaining = 0
+
+    -- Only one item at a time may travel from stage orb -> main orb
+    local stageBusy       = false
 
     ----------------------------------------------------------------
     -- ITEM DEFINITIONS
@@ -589,33 +597,59 @@ return function(C, R, UI)
     ----------------------------------------------------------------
     -- Orb + conveyor logic
     ----------------------------------------------------------------
-    local function spawnOrbAt(pos, color)
+    local function destroyOrb()
         if orb then
             pcall(function() orb:Destroy() end)
         end
+        if orbStage then
+            pcall(function() orbStage:Destroy() end)
+        end
+        orb = nil
+        orbPosVec = nil
+        orbStage = nil
+        orbStagePosVec = nil
+    end
+
+    local function spawnOrbAt(mainPos, color, stagePos)
+        destroyOrb()
+
+        -- main orb (over campfire/scrapper/notice)
+        local mainWorld = mainPos + Vector3.new(0, ORB_HEIGHT, 0)
         local o = Instance.new("Part")
-        o.Name = "tp_orb_fixed"
+        o.Name = "tp_orb_fixed_main"
         o.Shape = Enum.PartType.Ball
         o.Size = Vector3.new(1.5,1.5,1.5)
         o.Material = Enum.Material.Neon
         o.Color = color or Color3.fromRGB(80,180,255)
         o.Anchored, o.CanCollide, o.CanTouch, o.CanQuery = true,false,false,false
-        o.CFrame = CFrame.new(pos + Vector3.new(0, ORB_HEIGHT, 0))
+        o.CFrame = CFrame.new(mainWorld)
         o.Parent = WS
         local l = Instance.new("PointLight")
         l.Range = 16
         l.Brightness = 2.5
         l.Parent = o
         orb = o
-        orbPosVec = orb.Position
-    end
+        orbPosVec = o.Position
 
-    local function destroyOrb()
-        if orb then
-            pcall(function() orb:Destroy() end)
+        -- stage orb (10 studs away), if requested
+        if stagePos then
+            local stageWorld = stagePos + Vector3.new(0, ORB_HEIGHT, 0)
+            local s = Instance.new("Part")
+            s.Name = "tp_orb_fixed_stage"
+            s.Shape = Enum.PartType.Ball
+            s.Size = Vector3.new(1.5,1.5,1.5)
+            s.Material = Enum.Material.Neon
+            s.Color = Color3.fromRGB(255,255,255)
+            s.Anchored, s.CanCollide, s.CanTouch, s.CanQuery = true,false,false,false
+            s.CFrame = CFrame.new(stageWorld)
+            s.Parent = WS
+            local l2 = Instance.new("PointLight")
+            l2.Range = 12
+            l2.Brightness = 1.5
+            l2.Parent = s
+            orbStage = s
+            orbStagePosVec = s.Position
         end
-        orb = nil
-        orbPosVec = nil
     end
 
     local function hash01(s)
@@ -635,7 +669,13 @@ return function(C, R, UI)
         return Vector3.new(math.cos(ang)*rad, 0, math.sin(ang)*rad)
     end
 
-    local function stageAtOrb(m, snap, tgt)
+    local function stageAtOrb(m, snap, tgt, phase)
+        local info = inflight[m]
+        if not info then
+            info = {}
+            inflight[m] = info
+        end
+
         setAnchored(m, true)
         for _,p in ipairs(allParts(m)) do
             p.CanCollide = false
@@ -643,10 +683,18 @@ return function(C, R, UI)
             p.AssemblyAngularVelocity = Vector3.new()
         end
         setPivot(m, CFrame.new(tgt))
-        inflight[m].staged   = true
-        inflight[m].stagedAt = os.clock()
-        inflight[m].snap     = snap
-        table.insert(releaseQueue, {model=m, pos=tgt})
+
+        info.staged      = true
+        info.stagedAt    = os.clock()
+        info.snap        = snap
+        info.stagePhase  = phase or "final"
+
+        -- arriving at the main orb in final phase frees the "stageBusy" gate
+        if (CURRENT_MODE == "fuel" or CURRENT_MODE == "scrap" or CURRENT_MODE == "all") and orbStagePosVec and info.stagePhase == "final" then
+            stageBusy = false
+        end
+
+        table.insert(releaseQueue, {model=m, pos=tgt, phase=info.stagePhase})
     end
 
     function campfireOrbPos()
@@ -662,8 +710,75 @@ return function(C, R, UI)
     local function releaseOne(rec)
         local m = rec and rec.model
         if not (m and m.Parent) then return end
-        local info = inflight[m]
-        local snap = info and info.snap or snapshotCollide(m)
+        local info  = inflight[m]
+        local phase = info and info.stagePhase or rec.phase or "final"
+
+        -- Stage -> Main orb hop (one item at a time)
+        if (CURRENT_MODE == "fuel" or CURRENT_MODE == "scrap" or CURRENT_MODE == "all")
+            and orbStagePosVec and orbPosVec
+            and phase == "stage"
+        then
+            -- if another item is already doing stage->main, requeue this one
+            if stageBusy then
+                table.insert(releaseQueue, rec)
+                return
+            end
+
+            stageBusy = true
+
+            if info then
+                info.staged   = false
+                info.stagedAt = nil
+            end
+
+            local job2 = tostring(os.clock())
+            pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
+            pcall(function() m:SetAttribute(JOB_ATTR, job2) end)
+
+            -- second leg goes from stage area to main orb (final phase)
+            local snap = info and info.snap or snapshotCollide(m)
+            -- let startConveyor own the new inflight record
+            inflight[m] = nil
+            -- second leg (final)
+            local _ = startDrag -- just to keep intent clear
+            local function safeStart()
+                -- use orbPosVec as base for final landing
+                local destBaseVec = orbPosVec
+                if destBaseVec then
+                    -- start second conveyor with "final" phase
+                    -- this will call stageAtOrb again and then we genuinely drop
+                    startConveyor(m, job2, destBaseVec, "final")
+                else
+                    -- fallback: if no main orb, just drop now
+                    local snap2 = snap or snapshotCollide(m)
+                    setAnchored(m, false)
+                    zeroAssembly(m)
+                    setCollideFromSnapshot(snap2)
+                    for _,p in ipairs(allParts(m)) do
+                        p.AssemblyAngularVelocity = Vector3.new()
+                        p.AssemblyLinearVelocity  = Vector3.new()
+                        pcall(function() p:SetNetworkOwner(nil) end)
+                        pcall(function()
+                            if p.SetNetworkOwnershipAuto then
+                                p:SetNetworkOwnershipAuto()
+                            end
+                        end)
+                    end
+                    pcall(function()
+                        m:SetAttribute(INFLT_ATTR, nil)
+                        m:SetAttribute(JOB_ATTR, nil)
+                        m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
+                    end)
+                    inflight[m] = nil
+                    stageBusy = false
+                end
+            end
+            safeStart()
+            return
+        end
+
+        -- Final drop from main orb (or generic drop)
+        local snap = (info and info.snap) or snapshotCollide(m)
         setAnchored(m, false)
         zeroAssembly(m)
         setCollideFromSnapshot(snap)
@@ -696,7 +811,8 @@ return function(C, R, UI)
         inflight[m] = nil
     end
 
-    local function startConveyor(m, jobId, destBaseVec)
+    -- startConveyor now takes a "phase" for stage vs final
+    local function startConveyor(m, jobId, destBaseVec, phase)
         if not (running and m and m.Parent) then return end
         local mp = mainPart(m)
         if not mp then return end
@@ -720,10 +836,10 @@ return function(C, R, UI)
                 end)
             end
 
-            local rec = { snap = snap, conn = nil, lastD = 0, lastT = os.clock(), staged = false }
+            local rec = { snap = snap, conn = nil, lastD = 0, lastT = os.clock(), staged = false, stagePhase = "final" }
             inflight[m] = rec
 
-            stageAtOrb(m, snap, tgt)
+            stageAtOrb(m, snap, tgt, "final")
 
             if stopDrag then
                 pcall(function()
@@ -746,7 +862,7 @@ return function(C, R, UI)
         if startDrag then
             pcall(function() startDrag:FireServer(m) end)
         end
-        local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false }
+        local rec = { snap = snap, conn = nil, lastD = math.huge, lastT = os.clock(), staged = false, stagePhase = phase or "final" }
         inflight[m] = rec
 
         rec.conn = Run.Heartbeat:Connect(function(dt)
@@ -777,7 +893,7 @@ return function(C, R, UI)
                 if stopDrag then
                     pcall(function() stopDrag:FireServer(m) end)
                 end
-                stageAtOrb(m, snap, tgt)
+                stageAtOrb(m, snap, tgt, rec.stagePhase or phase or "final")
                 if rec.conn then
                     rec.conn:Disconnect()
                 end
@@ -814,7 +930,11 @@ return function(C, R, UI)
                     end
                 end
                 if not queued then
-                    table.insert(releaseQueue, {model=m, pos=mainPart(m) and mainPart(m).Position or orbPosVec})
+                    table.insert(releaseQueue, {
+                        model = m,
+                        pos   = mainPart(m) and mainPart(m).Position or orbPosVec,
+                        phase = info.stagePhase or "final"
+                    })
                 end
             end
         end
@@ -837,6 +957,9 @@ return function(C, R, UI)
         else
             if orbPosVec then
                 centers[#centers+1] = orbPosVec
+            end
+            if orbStagePosVec then
+                centers[#centers+1] = orbStagePosVec
             end
         end
         if #centers == 0 then return end
@@ -882,7 +1005,8 @@ return function(C, R, UI)
                         if not alreadyQueued then
                             table.insert(releaseQueue, {
                                 model = m,
-                                pos   = mp.Position
+                                pos   = mp.Position,
+                                phase = (inflight[m] and inflight[m].stagePhase) or "final"
                             })
                         end
                     end
@@ -1028,7 +1152,7 @@ return function(C, R, UI)
                         Run.Heartbeat:Wait()
                     end
 
-                    local destBaseVec = nil
+                    local destBaseVec, phase = nil, "final"
 
                     if CURRENT_MODE == "orbs" then
                         local idx = orbIndexForModel(m)
@@ -1036,13 +1160,25 @@ return function(C, R, UI)
                             destBaseVec = CUSTOM_ORB_BASES[idx]
                         end
                     else
-                        destBaseVec = orbPosVec
+                        -- fuel/scrap/all: first leg goes to stage orb if present
+                        if CURRENT_MODE == "fuel" or CURRENT_MODE == "scrap" or CURRENT_MODE == "all" then
+                            if orbStagePosVec then
+                                destBaseVec = orbStagePosVec
+                                phase       = "stage"
+                            else
+                                destBaseVec = orbPosVec
+                                phase       = "final"
+                            end
+                        else
+                            destBaseVec = orbPosVec
+                            phase       = "final"
+                        end
                     end
 
                     if destBaseVec then
                         activeCount = activeCount + 1
                         task.spawn(function()
-                            startConveyor(m, jobId, destBaseVec)
+                            startConveyor(m, jobId, destBaseVec, phase)
                             task.delay(8, function()
                                 activeCount = math.max(0, activeCount - 1)
                             end)
@@ -1066,6 +1202,7 @@ return function(C, R, UI)
         resyncTimer     = 0
         inResync        = false
         resyncRemaining = 0
+        stageBusy       = false
 
         for i = #releaseQueue, 1, -1 do
             local rec = releaseQueue[i]
@@ -1131,6 +1268,38 @@ return function(C, R, UI)
         local edgeOffset = (mp.Size.Z * 0.5) + 1.0
         local pos = cf.Position + forward * edgeOffset
         return pos + Vector3.new(0, ORB_HEIGHT + 1, 0)
+    end
+
+    -- Stage orb positions (10 studs away from main)
+    local function computeCampfireStagePos(campPos)
+        local scrPos = scrapperOrbPos()
+        if scrPos then
+            local dir = scrPos - campPos
+            local flat = Vector3.new(dir.X, 0, dir.Z)
+            if flat.Magnitude > 1e-3 then
+                local away = -flat.Unit
+                return campPos + away * 10
+            end
+        end
+        return campPos + Vector3.new(10, 0, 0)
+    end
+
+    local function computeScrapperStagePos(scrPos)
+        local campPos = campfireOrbPos()
+        if campPos then
+            local dir = campPos - scrPos
+            local flat = Vector3.new(dir.X, 0, dir.Z)
+            if flat.Magnitude > 1e-3 then
+                local away = -flat.Unit
+                return scrPos + away * 10
+            end
+        end
+        return scrPos + Vector3.new(10, 0, 0)
+    end
+
+    local function computeNoticeStagePos(noticePos)
+        -- Simple sideways offset; doesn't need to be perfect
+        return noticePos + Vector3.new(10, 0, 0)
     end
 
     ----------------------------------------------------------------
@@ -1243,17 +1412,26 @@ return function(C, R, UI)
         CURRENT_RUN_ID = tostring(os.clock())
 
         if mode == "fuel" or mode == "scrap" or mode == "all" then
-            local pos, color
+            local pos, color, stagePos
 
             if mode == "fuel" then
                 pos   = campfireOrbPos()
                 color = Color3.fromRGB(255,200,50)
+                if pos then
+                    stagePos = computeCampfireStagePos(pos)
+                end
             elseif mode == "scrap" then
                 pos   = scrapperOrbPos()
                 color = Color3.fromRGB(120,255,160)
+                if pos then
+                    stagePos = computeScrapperStagePos(pos)
+                end
             elseif mode == "all" then
                 pos   = noticeOrbPos()
                 color = Color3.fromRGB(100,200,255)
+                if pos then
+                    stagePos = computeNoticeStagePos(pos)
+                end
             end
 
             if not pos then
@@ -1261,7 +1439,7 @@ return function(C, R, UI)
                 return
             end
 
-            spawnOrbAt(pos, color)
+            spawnOrbAt(pos, color, stagePos)
         elseif mode == "orbs" then
             local any = false
             for i = 1, 4 do
@@ -1275,19 +1453,21 @@ return function(C, R, UI)
                 return
             end
             destroyOrb()
-            orbPosVec = nil
+            orbPosVec      = nil
+            orbStagePosVec = nil
         else
             CURRENT_MODE = nil
             return
         end
 
-        running = true
-        releaseQueue = {}
-        releaseAcc   = 0
-        waveAcc      = 0
-        resyncTimer     = 0
-        inResync        = false
-        resyncRemaining = 0
+        running          = true
+        releaseQueue     = {}
+        releaseAcc       = 0
+        waveAcc          = 0
+        resyncTimer      = 0
+        inResync         = false
+        resyncRemaining  = 0
+        stageBusy        = false
 
         if hb then
             hb:Disconnect()
@@ -1303,7 +1483,7 @@ return function(C, R, UI)
         hb = Run.Heartbeat:Connect(function(dt)
             if not running then return end
 
-            -- periodic catch-up window scheduler
+            -- periodic catch-up window scheduler (every 3 minutes for 20s)
             resyncTimer = resyncTimer + dt
             if not inResync and resyncTimer >= RESYNC_INTERVAL then
                 inResync        = true
@@ -1326,15 +1506,15 @@ return function(C, R, UI)
                     wave()
                 end
             else
-                -- during catch-up, aggressively de-stick floaters near the orb(s)
+                -- during catch-up, aggressively de-stick floaters near orb(s)
                 resyncFloaters()
             end
 
             -- controlled release of staged items
             releaseAcc = releaseAcc + dt
-            local interval      = 1 / RELEASE_RATE_HZ
-            local maxPerTick    = inResync and RESYNC_MAX_RELEASE_PER_TICK or MAX_RELEASE_PER_TICK
-            local toRelease     = math.min(maxPerTick, math.floor(releaseAcc / interval))
+            local interval   = 1 / RELEASE_RATE_HZ
+            local maxPerTick = inResync and RESYNC_MAX_RELEASE_PER_TICK or MAX_RELEASE_PER_TICK
+            local toRelease  = math.min(maxPerTick, math.floor(releaseAcc / interval))
             if toRelease > 0 then
                 releaseAcc = releaseAcc - toRelease * interval
                 for i = 1, toRelease do
@@ -1489,23 +1669,33 @@ return function(C, R, UI)
     Players.LocalPlayer.CharacterAdded:Connect(function()
         if running and CURRENT_MODE then
             if CURRENT_MODE == "fuel" or CURRENT_MODE == "scrap" or CURRENT_MODE == "all" then
-                local pos
+                local pos, color, stagePos
                 if CURRENT_MODE == "fuel" then
-                    pos = campfireOrbPos()
+                    pos   = campfireOrbPos()
+                    color = Color3.fromRGB(255,200,50)
+                    if pos then
+                        stagePos = computeCampfireStagePos(pos)
+                    end
                 elseif CURRENT_MODE == "scrap" then
-                    pos = scrapperOrbPos()
+                    pos   = scrapperOrbPos()
+                    color = Color3.fromRGB(120,255,160)
+                    if pos then
+                        stagePos = computeScrapperStagePos(pos)
+                    end
                 elseif CURRENT_MODE == "all" then
-                    pos = noticeOrbPos()
+                    pos   = noticeOrbPos()
+                    color = Color3.fromRGB(100,200,255)
+                    if pos then
+                        stagePos = computeNoticeStagePos(pos)
+                    end
                 end
                 if pos then
-                    local color = (CURRENT_MODE == "fuel" and Color3.fromRGB(255,200,50))
-                                  or (CURRENT_MODE == "scrap" and Color3.fromRGB(120,255,160))
-                                  or Color3.fromRGB(100,200,255)
-                    spawnOrbAt(pos, color)
+                    spawnOrbAt(pos, color, stagePos)
                 end
             elseif CURRENT_MODE == "orbs" then
                 destroyOrb()
-                orbPosVec = nil
+                orbPosVec      = nil
+                orbStagePosVec = nil
             end
         end
     end)
