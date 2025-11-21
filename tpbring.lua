@@ -169,6 +169,7 @@ return function(C, R, UI)
     local waveAcc      = 0.0
     local dropIndex    = 0
     local finalized    = {}  -- models that have been fully dropped this run
+    local fruitNudged  = {}  -- fruits pre-nudged this run
 
     ----------------------------------------------------------------
     -- ITEM DEFINITIONS
@@ -327,7 +328,7 @@ return function(C, R, UI)
         local cur = m and m.Parent
         while cur and cur ~= WS do
             local nm = (cur.Name or ""):lower()
-            if nm:find("tree",1,true) then return true end
+            if nm:find("tree",1,true) or nm:find("bush",1,true) then return true end
             if cur == itemsRootOrNil() then break end
             cur = cur.Parent
         end
@@ -344,6 +345,12 @@ return function(C, R, UI)
         local l  = nm:lower()
 
         if nm == "Apple" and selectedSet["Apple"] then
+            if itemsFolder and m.Parent ~= itemsFolder then return false end
+            if isInsideTree(m) then return false end
+            return true
+        end
+
+        if nm == "Berry" and selectedSet["Berry"] then
             if itemsFolder and m.Parent ~= itemsFolder then return false end
             if isInsideTree(m) then return false end
             return true
@@ -431,6 +438,11 @@ return function(C, R, UI)
         return nameMatches(preDragImportantSet, m)
     end
 
+    local function isFruitModel(m)
+        local nm = m and m.Name or ""
+        return nm == "Apple" or nm == "Berry"
+    end
+
     local function topModelUnderItems(part, itemsFolder)
         local cur = part
         local lastModel = nil
@@ -454,6 +466,78 @@ return function(C, R, UI)
             return m
         end
         return nil
+    end
+
+    -- Strong pre-nudge for apples and berries to knock them off bushes/trees
+    local function fruitPreNudge(m)
+        if not isFruitModel(m) then return end
+        if not (m and m.Parent) then return end
+        if fruitNudged[m] then return end
+
+        local mp = mainPart(m)
+        if not mp then return end
+
+        fruitNudged[m] = true
+
+        task.spawn(function()
+            if startDrag then
+                pcall(function()
+                    startDrag:FireServer(m)
+                end)
+            end
+
+            for _,p in ipairs(allParts(m)) do
+                pcall(function()
+                    p:SetNetworkOwner(lp)
+                end)
+                p.AssemblyLinearVelocity  = Vector3.new()
+                p.AssemblyAngularVelocity = Vector3.new()
+            end
+
+            local mass = math.max(mp:GetMass(), 1)
+            local dir = Vector3.new((math.random() - 0.5) * 2, 0, (math.random() - 0.5) * 2)
+            if dir.Magnitude < 0.2 then
+                dir = Vector3.new(1, 0, 0)
+            else
+                dir = dir.Unit
+            end
+
+            local horizStrength = 120
+            local upStrength    = 80
+
+            pcall(function()
+                mp:ApplyImpulse(dir * horizStrength * mass + Vector3.new(0, upStrength * mass, 0))
+            end)
+
+            pcall(function()
+                mp:ApplyAngularImpulse(Vector3.new(
+                    (math.random() - 0.5) * 300,
+                    (math.random() - 0.5) * 300,
+                    (math.random() - 0.5) * 300
+                ) * mass)
+            end)
+
+            task.delay(0.18, function()
+                if stopDrag then
+                    pcall(function()
+                        stopDrag:FireServer(m)
+                    end)
+                end
+            end)
+
+            task.delay(0.9, function()
+                for _,p in ipairs(allParts(m)) do
+                    pcall(function()
+                        p:SetNetworkOwner(nil)
+                    end)
+                    pcall(function()
+                        if p.SetNetworkOwnershipAuto then
+                            p:SetNetworkOwnershipAuto()
+                        end
+                    end)
+                end
+            end)
+        end)
     end
 
     local function canPick(m, selectedSet, jobId)
@@ -707,6 +791,25 @@ return function(C, R, UI)
             end)
         end
 
+        -- For ground orbs, give a small shove away from the orb center so items don't hover in a clump
+        if CURRENT_MODE == "orbs" and rec and rec.pos then
+            local mp3 = mainPart(m)
+            if mp3 then
+                local center = rec.pos
+                local away = Vector3.new(mp3.Position.X - center.X, 0, mp3.Position.Z - center.Z)
+                if away.Magnitude < 0.1 then
+                    away = Vector3.new(1, 0, 0)
+                else
+                    away = away.Unit
+                end
+                local mass = math.max(mp3:GetMass(), 1)
+                local horizStrength = 80
+                pcall(function()
+                    mp3:ApplyImpulse(away * horizStrength * mass)
+                end)
+            end
+        end
+
         mp2 = mainPart(m)
         if mp2 and stopDrag and isPreDragImportantModel(m) then
             local campPos = campfireOrbPos()
@@ -733,6 +836,11 @@ return function(C, R, UI)
         local mp = mainPart(m)
         if not mp then return end
 
+        -- Strong pre-nudge for apples and berries so we don't drag bushes/trees
+        if isFruitModel(m) then
+            fruitPreNudge(m)
+        end
+
         local off  = landingOffset(m, jobId)
         local base = destBaseVec or orbPosVec or mp.Position
 
@@ -747,9 +855,7 @@ return function(C, R, UI)
             zeroAssembly(m)
 
             if startDrag then
-                pcall(function()
-                    startDrag:FireServer(m)
-                end)
+                pcall(function() startDrag:FireServer(m) end)
             end
 
             local rec = { snap = snap, conn = nil, lastD = 0, lastT = os.clock(), staged = false }
@@ -758,9 +864,7 @@ return function(C, R, UI)
             stageAtOrb(m, snap, tgt)
 
             if stopDrag then
-                pcall(function()
-                    stopDrag:FireServer(m)
-                end)
+                pcall(function() stopDrag:FireServer(m) end)
             end
 
             return
@@ -1201,9 +1305,10 @@ return function(C, R, UI)
         end
 
         stopAll()
-        CURRENT_MODE = mode
+        CURRENT_MODE   = mode
         CURRENT_RUN_ID = tostring(os.clock())
-        finalized = {}  -- reset per run
+        finalized      = {}
+        fruitNudged    = {}
 
         if mode == "fuel" or mode == "scrap" or mode == "all" then
             local pos, color
