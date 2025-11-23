@@ -149,6 +149,9 @@ return function(C, R, UI)
     local DROP_LINE_SPACING       = 3.0
     local DROP_VERTICAL_OFFSET    = 8.0
 
+    local MAX_DIST_DEFAULT        = 500      -- campfire/scrapper/noticeboard radius
+    local MAX_DIST_ORBS           = 50       -- ground orbs radius
+
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
     local DONE_ATTR  = "OrbDelivered"
@@ -599,6 +602,40 @@ return function(C, R, UI)
         Vector3.new( 35.67, 4.05 + GROUND_ORB_DROP_HEIGHT, 41.33),
     }
 
+    -- Ground raycasted bases for orbs
+    local orbGroundBases = { nil, nil, nil, nil }
+
+    local function computeOrbGroundBase(index)
+        local base = CUSTOM_ORB_BASES[index]
+        if not base then return nil end
+
+        local origin = base + Vector3.new(0, 60, 0)
+        local dir    = Vector3.new(0, -200, 0)
+
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Blacklist
+        local ignore = {}
+        local itemsFolder = itemsRootOrNil()
+        if itemsFolder then table.insert(ignore, itemsFolder) end
+        local ch = lp.Character
+        if ch then table.insert(ignore, ch) end
+        rp.FilterDescendantsInstances = ignore
+        rp.IgnoreWater = true
+
+        local result = WS:Raycast(origin, dir, rp)
+        if result and result.Position then
+            return result.Position
+        end
+        return base
+    end
+
+    local function getOrbBasePosition(index)
+        if not orbGroundBases[index] then
+            orbGroundBases[index] = computeOrbGroundBase(index)
+        end
+        return orbGroundBases[index]
+    end
+
     local orbItemSets = {
         {},
         {},
@@ -606,7 +643,8 @@ return function(C, R, UI)
         {},
     }
 
-    local orbEnabled = { true, true, true, true }
+    -- Default OFF now
+    local orbEnabled = { false, false, false, false }
 
     local orbUnionSet = {}
 
@@ -639,12 +677,16 @@ return function(C, R, UI)
     }
 
     ----------------------------------------------------------------
-    -- Generic candidate collector
+    -- Generic candidate collector (with distance limits)
     ----------------------------------------------------------------
-    local function collectCandidatesFromSet(selectedSet, jobId)
+    local function collectCandidatesFromSet(selectedSet, jobId, maxDist)
         if not selectedSet then return {} end
         local itemsFolder = itemsRootOrNil()
         if not itemsFolder then return {} end
+
+        local root = hrp()
+        if not root then return {} end
+        local rootPos = root.Position
 
         local uniq, out = {}, {}
         for _,d in ipairs(itemsFolder:GetDescendants()) do
@@ -657,8 +699,14 @@ return function(C, R, UI)
                 m = nearestSelectedModelFromPart(d, selectedSet)
             end
             if m and not uniq[m] and canPick(m, selectedSet, jobId) then
-                uniq[m] = true
-                out[#out+1] = m
+                local mp = mainPart(m)
+                if mp then
+                    local dist = (mp.Position - rootPos).Magnitude
+                    if (not maxDist) or dist <= maxDist then
+                        uniq[m] = true
+                        out[#out+1] = m
+                    end
+                end
             end
         end
         return out
@@ -666,11 +714,11 @@ return function(C, R, UI)
 
     local function getCandidatesForCurrent(jobId)
         local selectedSet = currentSelectedSet()
-        return collectCandidatesFromSet(selectedSet, jobId)
+        return collectCandidatesFromSet(selectedSet, jobId, MAX_DIST_DEFAULT)
     end
 
     local function getCandidatesForOrbs(jobId)
-        return collectCandidatesFromSet(orbUnionSet, jobId)
+        return collectCandidatesFromSet(orbUnionSet, jobId, MAX_DIST_ORBS)
     end
 
     ----------------------------------------------------------------
@@ -864,7 +912,9 @@ return function(C, R, UI)
             stageAtOrb(m, snap, tgt)
 
             if stopDrag then
-                pcall(function() stopDrag:FireServer(m) end)
+                pcall(function()
+                    stopDrag:FireServer(m)
+                end)
             end
 
             return
@@ -957,6 +1007,33 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
+    -- Teleport-to-ground helper for misbehaving items
+    ----------------------------------------------------------------
+    local function teleportModelToGround(m)
+        local mp = mainPart(m)
+        if not (mp and mp.Parent) then return end
+
+        local origin = mp.Position + Vector3.new(0, 30, 0)
+        local dir    = Vector3.new(0, -300, 0)
+
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Blacklist
+        local ignore = { m }
+        local itemsFolder = itemsRootOrNil()
+        if itemsFolder then table.insert(ignore, itemsFolder) end
+        local ch = lp.Character
+        if ch then table.insert(ignore, ch) end
+        rp.FilterDescendantsInstances = ignore
+        rp.IgnoreWater = true
+
+        local result = WS:Raycast(origin, dir, rp)
+        if result and result.Position then
+            local gpos = result.Position + Vector3.new(0, 1.5, 0)
+            setPivot(m, CFrame.new(gpos))
+        end
+    end
+
+    ----------------------------------------------------------------
     -- Unstick pass using raycasts from player position
     ----------------------------------------------------------------
     local function setUnstickEnabled(on)
@@ -1034,6 +1111,10 @@ return function(C, R, UI)
                         m:SetAttribute(JOB_ATTR, nil)
                         m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
                     end)
+
+                    -- Teleport misbehaving items down to ground instead of leaving them hovering
+                    teleportModelToGround(m)
+
                     for _,p in ipairs(allParts(m)) do
                         p.Anchored = false
                         p.AssemblyAngularVelocity = Vector3.new()
@@ -1101,8 +1182,11 @@ return function(C, R, UI)
 
                     if CURRENT_MODE == "orbs" then
                         local idx = orbIndexForModel(m)
-                        if idx and CUSTOM_ORB_BASES[idx] then
-                            destBaseVec = CUSTOM_ORB_BASES[idx]
+                        if idx then
+                            local base = getOrbBasePosition(idx)
+                            if base then
+                                destBaseVec = base
+                            end
                         end
                     else
                         destBaseVec = orbPosVec
@@ -1344,6 +1428,7 @@ return function(C, R, UI)
             end
             destroyOrb()
             orbPosVec = nil
+            orbGroundBases = { nil, nil, nil, nil }
         else
             CURRENT_MODE = nil
             return
@@ -1467,7 +1552,7 @@ return function(C, R, UI)
 
     tab:Toggle({
         Title = "Orb 1 Enabled",
-        Value = true,
+        Value = false,
         Callback = function(state)
             orbEnabled[1] = state and true or false
             recomputeOrbUnionSet()
@@ -1476,7 +1561,7 @@ return function(C, R, UI)
 
     tab:Toggle({
         Title = "Orb 2 Enabled",
-        Value = true,
+        Value = false,
         Callback = function(state)
             orbEnabled[2] = state and true or false
             recomputeOrbUnionSet()
@@ -1485,7 +1570,7 @@ return function(C, R, UI)
 
     tab:Toggle({
         Title = "Orb 3 Enabled",
-        Value = true,
+        Value = false,
         Callback = function(state)
             orbEnabled[3] = state and true or false
             recomputeOrbUnionSet()
@@ -1494,7 +1579,7 @@ return function(C, R, UI)
 
     tab:Toggle({
         Title = "Orb 4 Enabled",
-        Value = true,
+        Value = false,
         Callback = function(state)
             orbEnabled[4] = state and true or false
             recomputeOrbUnionSet()
@@ -1548,6 +1633,7 @@ return function(C, R, UI)
             elseif CURRENT_MODE == "orbs" then
                 destroyOrb()
                 orbPosVec = nil
+                orbGroundBases = { nil, nil, nil, nil }
             end
         end
     end)
