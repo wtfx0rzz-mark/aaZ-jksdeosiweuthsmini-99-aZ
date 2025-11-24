@@ -149,8 +149,9 @@ return function(C, R, UI)
     local DROP_LINE_SPACING       = 3.0
     local DROP_VERTICAL_OFFSET    = 8.0
 
-    local MAX_DIST_DEFAULT        = 500      -- campfire/scrapper/noticeboard radius
-    local MAX_DIST_ORBS           = 50       -- ground orbs radius
+    local MAX_DIST_DEFAULT        = 500        -- campfire/scrapper/noticeboard radius
+    local MAX_DIST_ORBS_DEFAULT   = 50         -- ground orbs radius (default)
+    local maxDistOrbs             = MAX_DIST_ORBS_DEFAULT
 
     local INFLT_ATTR = "OrbInFlightAt"
     local JOB_ATTR   = "OrbJob"
@@ -718,7 +719,7 @@ return function(C, R, UI)
     end
 
     local function getCandidatesForOrbs(jobId)
-        return collectCandidatesFromSet(orbUnionSet, jobId, MAX_DIST_ORBS)
+        return collectCandidatesFromSet(orbUnionSet, jobId, maxDistOrbs)
     end
 
     ----------------------------------------------------------------
@@ -903,7 +904,9 @@ return function(C, R, UI)
             zeroAssembly(m)
 
             if startDrag then
-                pcall(function() startDrag:FireServer(m) end)
+                pcall(function()
+                    startDrag:FireServer(m)
+                end)
             end
 
             local rec = { snap = snap, conn = nil, lastD = 0, lastT = os.clock(), staged = false }
@@ -1583,6 +1586,18 @@ return function(C, R, UI)
         Callback = function(state)
             orbEnabled[4] = state and true or false
             recomputeOrbUnionSet()
+        end
+    })
+
+    -- New: Ground orb distance slider (default 50)
+    tab:Slider({
+        Title   = "Ground Orb Search Radius",
+        Min     = 10,
+        Max     = 250,
+        Default = MAX_DIST_ORBS_DEFAULT,
+        Callback = function(value)
+            local v = tonumber(value) or MAX_DIST_ORBS_DEFAULT
+            maxDistOrbs = math.clamp(v, 10, 250)
         end
     })
 
