@@ -1533,6 +1533,10 @@ return function(C, R, UI)
             AllowNone = true,
             Callback = function(selection)
                 local set = {}
+                if type(selection) == "table" and not selection[1] and selection.Value then
+                    -- Some UIs pass { Value = {...} }
+                    selection = selection.Value
+                end
                 if type(selection) == "table" then
                     for _,name in ipairs(selection) do
                         if name then
@@ -1589,14 +1593,32 @@ return function(C, R, UI)
         end
     })
 
-    -- New: Ground orb distance slider (default 50)
+    -- Fixed: Ground orb distance slider (default 50) with safe callback
     tab:Slider({
         Title   = "Ground Orb Search Radius",
         Min     = 10,
         Max     = 250,
         Default = MAX_DIST_ORBS_DEFAULT,
         Callback = function(value)
-            local v = tonumber(value) or MAX_DIST_ORBS_DEFAULT
+            local v
+
+            if type(value) == "number" then
+                v = value
+            elseif type(value) == "table" then
+                -- Handle patterns like { Value = number } or {Current = number}
+                if type(value.Value) == "number" then
+                    v = value.Value
+                elseif type(value.Current) == "number" then
+                    v = value.Current
+                elseif type(value[1]) == "number" then
+                    v = value[1]
+                end
+            end
+
+            if type(v) ~= "number" then
+                v = MAX_DIST_ORBS_DEFAULT
+            end
+
             maxDistOrbs = math.clamp(v, 10, 250)
         end
     })
