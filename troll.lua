@@ -73,19 +73,17 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
-    -- Player nudge (float from players)
-    local PLAYER_NUDGE_RANGE      = 80   -- only act when selected players are fairly close
-    local PLAYER_NUDGE_DROP_DIST  = 100  -- release items once this far from nearest selected player
+    local PLAYER_NUDGE_RANGE      = 80
+    local PLAYER_NUDGE_DROP_DIST  = 100
     local PLAYER_NUDGE_UP         = 20
     local PLAYER_NUDGE_AWAY       = 50
     local PLAYER_NUDGE_COOLDOWN   = 0.10
 
     local SINK_Y_TARGET           = -500
 
-    -- Items avoid (hop away) – slightly expanded distances (+2 studs)
     local AVOID_ITEMS_RANGE     = 200
-    local AVOID_NEAR_DIST       = 17    -- was 15
-    local AVOID_STOP_DIST       = 32    -- was 30
+    local AVOID_NEAR_DIST       = 17
+    local AVOID_STOP_DIST       = 32
     local AVOID_KICK_COOLDOWN   = 0.20
     local HOP_INTERVAL          = 0.40
     local HOP_UP_VEL            = 35
@@ -94,6 +92,14 @@ return function(C, R, UI)
     local DRIFT_HEIGHT      = 10
     local DRIFT_MAX_HEIGHT  = 400
     local DRIFT_MAX_TIME    = 10
+
+    ---------------------------------------------------------------------
+    -- PLAYER FLING STATE
+    ---------------------------------------------------------------------
+
+    local flingEnabled      = false
+    local flingPower        = 10000
+    local flingLoopStarted  = false
 
     ---------------------------------------------------------------------
     -- HELPERS
@@ -414,6 +420,44 @@ return function(C, R, UI)
             end
         end
         return out
+    end
+
+    ---------------------------------------------------------------------
+    -- PLAYER FLING LOOP
+    ---------------------------------------------------------------------
+
+    local function ensureFlingLoop()
+        if flingLoopStarted then return end
+        flingLoopStarted = true
+
+        task.spawn(function()
+            local c, root, vel
+            local movel = 0.1
+            while true do
+                Run.Heartbeat:Wait()
+                if flingEnabled then
+                    while flingEnabled and not (c and c.Parent and root and root.Parent) do
+                        Run.Heartbeat:Wait()
+                        c = lp.Character
+                        root = c and c:FindFirstChild("HumanoidRootPart")
+                    end
+
+                    if flingEnabled and root and root.Parent then
+                        vel = root.Velocity
+                        root.Velocity = vel * flingPower + Vector3.new(0, flingPower, 0)
+                        Run.RenderStepped:Wait()
+                        if flingEnabled and c and c.Parent and root and root.Parent then
+                            root.Velocity = vel
+                        end
+                        Run.Stepped:Wait()
+                        if flingEnabled and c and c.Parent and root and root.Parent then
+                            root.Velocity = vel + Vector3.new(0, movel, 0)
+                            movel = -movel
+                        end
+                    end
+                end
+            end
+        end)
     end
 
     ---------------------------------------------------------------------
@@ -871,7 +915,6 @@ return function(C, R, UI)
 
         local now = os.clock()
 
-        -- Start nudging items that are close to any selected player
         for _, desc in ipairs(rootFolder:GetDescendants()) do
             if desc:IsA("BasePart") then
                 local mdl = desc:FindFirstAncestorOfClass("Model") or desc
@@ -935,7 +978,6 @@ return function(C, R, UI)
             end
         end
 
-        -- Maintain float while near; drop once far enough
         local now2 = os.clock()
         for mdl, info in pairs(driftItems) do
             if not mdl or not mdl.Parent then
@@ -961,7 +1003,6 @@ return function(C, R, UI)
                         end
                     end
 
-                    -- If no nearby selected players or item has moved far enough away, stop controlling it (let it drop)
                     if nearestDist == math.huge or nearestDist >= PLAYER_NUDGE_DROP_DIST then
                         driftItems[mdl] = nil
                     else
@@ -980,7 +1021,6 @@ return function(C, R, UI)
 
                         mp.AssemblyLinearVelocity = dir * speed
 
-                        -- safety stop: don't control forever
                         if h > DRIFT_MAX_HEIGHT or age > DRIFT_MAX_TIME then
                             driftItems[mdl] = nil
                         end
@@ -1366,6 +1406,36 @@ return function(C, R, UI)
         Title = "Send Traps",
         Callback = function()
             sendTrapsToPlayers()
+        end
+    })
+
+    tab:Section({ Title = "Fling Players" })
+
+    tab:Slider({
+        Title = "Fling Power",
+        Value = { Min = 5000, Max = 55000, Default = 10000 },
+        Callback = function(v)
+            local n
+            if type(v) == "table" then
+                n = v.Value or v.Current or v.Default
+            else
+                n = v
+            end
+            n = tonumber(n)
+            if n then
+                flingPower = math.clamp(math.floor(n + 0.5), 5000, 55000)
+            end
+        end
+    })
+
+    tab:Toggle({
+        Title = "Fling Players",
+        Value = false,
+        Callback = function(on)
+            flingEnabled = (on == true)
+            if flingEnabled then
+                ensureFlingLoop()
+            end
         end
     })
 end
