@@ -73,16 +73,19 @@ return function(C, R, UI)
 
     local REASSIGN_IF_LOST_S = 2.0
 
-    local PLAYER_NUDGE_RANGE    = 300
-    local PLAYER_NUDGE_UP       = 20
-    local PLAYER_NUDGE_AWAY     = 50
-    local PLAYER_NUDGE_COOLDOWN = 0.10
+    -- Player nudge (float from players)
+    local PLAYER_NUDGE_RANGE      = 80   -- only act when selected players are fairly close
+    local PLAYER_NUDGE_DROP_DIST  = 100  -- release items once this far from nearest selected player
+    local PLAYER_NUDGE_UP         = 20
+    local PLAYER_NUDGE_AWAY       = 50
+    local PLAYER_NUDGE_COOLDOWN   = 0.10
 
-    local SINK_Y_TARGET         = -500
+    local SINK_Y_TARGET           = -500
 
+    -- Items avoid (hop away) – slightly expanded distances (+2 studs)
     local AVOID_ITEMS_RANGE     = 200
-    local AVOID_NEAR_DIST       = 15
-    local AVOID_STOP_DIST       = 30
+    local AVOID_NEAR_DIST       = 17    -- was 15
+    local AVOID_STOP_DIST       = 32    -- was 30
     local AVOID_KICK_COOLDOWN   = 0.20
     local HOP_INTERVAL          = 0.40
     local HOP_UP_VEL            = 35
@@ -848,7 +851,7 @@ return function(C, R, UI)
     task.delay(INITIAL_POPULATE_DELAY, buildPlayerDropdownOnce)
 
     ---------------------------------------------------------------------
-    -- PLAYER NUDGE
+    -- PLAYER NUDGE (Items float from players)
     ---------------------------------------------------------------------
 
     local playerNudgeEnabled = false
@@ -868,6 +871,7 @@ return function(C, R, UI)
 
         local now = os.clock()
 
+        -- Start nudging items that are close to any selected player
         for _, desc in ipairs(rootFolder:GetDescendants()) do
             if desc:IsA("BasePart") then
                 local mdl = desc:FindFirstAncestorOfClass("Model") or desc
@@ -931,6 +935,7 @@ return function(C, R, UI)
             end
         end
 
+        -- Maintain float while near; drop once far enough
         local now2 = os.clock()
         for mdl, info in pairs(driftItems) do
             if not mdl or not mdl.Parent then
@@ -945,24 +950,40 @@ return function(C, R, UI)
                     local h    = pos.Y - baseY
                     local age  = now2 - (info.start or now2)
 
-                    local dir = info.dirXZ + Vector3.new(0, 1.0, 0)
-                    if dir.Magnitude < 1e-3 then
-                        dir = Vector3.new(0, 1, 0)
-                    end
-                    dir = dir.Unit
-
-                    local speed
-                    if h < DRIFT_HEIGHT then
-                        speed = 35
-                    else
-                        speed = 45 + age * 15
+                    local nearestDist = math.huge
+                    for _, tgt in ipairs(pTargets) do
+                        local root2 = hrp(tgt)
+                        if root2 then
+                            local d = (pos - root2.Position).Magnitude
+                            if d < nearestDist then
+                                nearestDist = d
+                            end
+                        end
                     end
 
-                    mp.AssemblyLinearVelocity = dir * speed
-
-                    if h > DRIFT_MAX_HEIGHT or age > DRIFT_MAX_TIME then
-                        mp.CFrame = CFrame.new(pos.X, SINK_Y_TARGET, pos.Z)
+                    -- If no nearby selected players or item has moved far enough away, stop controlling it (let it drop)
+                    if nearestDist == math.huge or nearestDist >= PLAYER_NUDGE_DROP_DIST then
                         driftItems[mdl] = nil
+                    else
+                        local dir = info.dirXZ + Vector3.new(0, 1.0, 0)
+                        if dir.Magnitude < 1e-3 then
+                            dir = Vector3.new(0, 1, 0)
+                        end
+                        dir = dir.Unit
+
+                        local speed
+                        if h < DRIFT_HEIGHT then
+                            speed = 35
+                        else
+                            speed = 45 + age * 15
+                        end
+
+                        mp.AssemblyLinearVelocity = dir * speed
+
+                        -- safety stop: don't control forever
+                        if h > DRIFT_MAX_HEIGHT or age > DRIFT_MAX_TIME then
+                            driftItems[mdl] = nil
+                        end
                     end
                 end
             end
@@ -1001,7 +1022,7 @@ return function(C, R, UI)
     end
 
     ---------------------------------------------------------------------
-    -- ITEMS AVOID PLAYERS
+    -- ITEMS AVOID PLAYERS (hop away)
     ---------------------------------------------------------------------
 
     local itemsAvoidEnabled = false
@@ -1155,7 +1176,7 @@ return function(C, R, UI)
                                 if not trap or not trap.Parent then return end
                                 safeStartDrag(trap)
 
-                                local targetCF = root.CFrame * CFrame.new(0, -3, 0)
+                                local targetCF = root.CFrame * CFrame.new(0, -2, 0)
                                 setPivot(trap, targetCF)
 
                                 safeStopDrag(trap)
@@ -1271,10 +1292,10 @@ return function(C, R, UI)
         end
     })
 
-    tab:Section({ Title = "Player Nudge" })
+    tab:Section({ Title = "Items Float From Players" })
 
     tab:Toggle({
-        Title = "Enable Player Nudge",
+        Title = "Items Float From Players",
         Value = false,
         Callback = function(on)
             playerNudgeEnabled = (on == true)
