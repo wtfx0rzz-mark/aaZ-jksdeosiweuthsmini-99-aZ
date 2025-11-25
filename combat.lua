@@ -472,55 +472,72 @@ return function(C, R, UI)
                 return
             end
 
+            local now = os.clock()
+            local earliestReady = math.huge
+            local anyHit = false
+
             for _, weapon in ipairs(availableWeapons) do
                 local toolName = weapon.name
-                local cd = weapon.cd
+                local cd       = weapon.cd
                 local lastSwing = lastSwingAtByWeapon[toolName] or 0
-                local now = os.clock()
-                local remaining = cd - (now - lastSwing)
-                if remaining > 0 then
-                    task.wait(remaining)
-                    now = os.clock()
-                end
-                local tool = ensureEquipped(toolName)
-                if tool then
-                    local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
-                    local didHit = false
-                    local nextTry = math.huge
-                    for i = 1, cap do
-                        local mdl = targetModels[i]
-                        local head = hitPartGetter(mdl)
-                        if head then
-                            local ch = lp.Character
-                            local hrp = ch and ch:FindFirstChild("HumanoidRootPart") or nil
-                            local origin = getRayOriginFromChar(ch) or (hrp and hrp.Position) or nil
-                            local dist = origin and (head.Position - origin).Magnitude or math.huge
-                            local los = false
-                            if hrp then
-                                los = visibleFromHRP(hrp, head, tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0, ch)
-                            end
-                            if los or dist <= TUNE.CHAR_CLOSE_FAILSAFE then
-                                local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
-                                if canHit then
-                                    local impactCF = computeImpactCFrame(mdl, head)
-                                    local hitId = nextCharacterHitId()
-                                    HitTarget(mdl, tool, hitId, impactCF)
-                                    markHitWithWeapon(mdl, toolName)
-                                    didHit = true
-                                    task.wait(TUNE.CHAR_HIT_STEP_WAIT)
-                                elseif waitFor and waitFor < nextTry then
-                                    nextTry = waitFor
+                local since = now - lastSwing
+
+                if since < cd then
+                    local remaining = cd - since
+                    if remaining < earliestReady then
+                        earliestReady = remaining
+                    end
+                else
+                    local tool = ensureEquipped(toolName)
+                    if tool then
+                        local cap = math.min(#targetModels, TUNE.CHAR_MAX_PER_WAVE)
+                        local didHitWithThis = false
+                        local nextTry = math.huge
+
+                        for i = 1, cap do
+                            local mdl = targetModels[i]
+                            local head = hitPartGetter(mdl)
+                            if head then
+                                local ch = lp.Character
+                                local hrp = ch and ch:FindFirstChild("HumanoidRootPart") or nil
+                                local origin = getRayOriginFromChar(ch) or (hrp and hrp.Position) or nil
+                                local dist = origin and (head.Position - origin).Magnitude or math.huge
+                                local los = false
+                                if hrp then
+                                    los = visibleFromHRP(hrp, head, tonumber(TUNE.RAY_MAX_HOPS_CHAR) or 0, ch)
+                                end
+                                if los or dist <= TUNE.CHAR_CLOSE_FAILSAFE then
+                                    local canHit, waitFor = canHitWithWeapon(mdl, toolName, cd)
+                                    if canHit then
+                                        local impactCF = computeImpactCFrame(mdl, head)
+                                        local hitId = nextCharacterHitId()
+                                        HitTarget(mdl, tool, hitId, impactCF)
+                                        markHitWithWeapon(mdl, toolName)
+                                        didHitWithThis = true
+                                        anyHit = true
+                                        task.wait(TUNE.CHAR_HIT_STEP_WAIT)
+                                    elseif waitFor and waitFor < nextTry then
+                                        nextTry = waitFor
+                                    end
                                 end
                             end
                         end
-                    end
-                    if didHit then
-                        lastSwingAtByWeapon[toolName] = os.clock()
-                    elseif nextTry < math.huge then
-                        task.wait(math.max(0.01, nextTry))
+
+                        if didHitWithThis then
+                            lastSwingAtByWeapon[toolName] = os.clock()
+                        elseif nextTry < math.huge then
+                            if nextTry < earliestReady then
+                                earliestReady = nextTry
+                            end
+                        end
                     end
                 end
             end
+
+            if not anyHit and earliestReady < math.huge then
+                task.wait(math.max(0.01, earliestReady))
+            end
+
             return
         end
 
