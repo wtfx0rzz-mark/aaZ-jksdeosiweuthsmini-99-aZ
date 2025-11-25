@@ -1593,33 +1593,23 @@ return function(C, R, UI)
         end
     })
 
-    -- Fixed: Ground orb distance slider (default 50) with safe callback
+    ----------------------------------------------------------------
+    -- FIXED: Ground orb distance slider using same API as CombatTab
+    ----------------------------------------------------------------
     tab:Slider({
-        Title   = "Ground Orb Search Radius",
-        Min     = 10,
-        Max     = 250,
-        Default = MAX_DIST_ORBS_DEFAULT,
-        Callback = function(value)
-            local v
-
-            if type(value) == "number" then
-                v = value
-            elseif type(value) == "table" then
-                -- Handle patterns like { Value = number } or {Current = number}
-                if type(value.Value) == "number" then
-                    v = value.Value
-                elseif type(value.Current) == "number" then
-                    v = value.Current
-                elseif type(value[1]) == "number" then
-                    v = value[1]
-                end
+        Title = "Ground Orb Search Radius",
+        Value = { Min = 10, Max = 250, Default = MAX_DIST_ORBS_DEFAULT },
+        Callback = function(v)
+            local nv = v
+            if type(v) == "table" then
+                nv = v.Value or v.Current or v.CurrentValue or v.Default or v.min or v.max or v[1]
             end
-
-            if type(v) ~= "number" then
-                v = MAX_DIST_ORBS_DEFAULT
+            nv = tonumber(nv)
+            if nv then
+                maxDistOrbs = math.clamp(nv, 10, 250)
+            else
+                maxDistOrbs = MAX_DIST_ORBS_DEFAULT
             end
-
-            maxDistOrbs = math.clamp(v, 10, 250)
         end
     })
 
