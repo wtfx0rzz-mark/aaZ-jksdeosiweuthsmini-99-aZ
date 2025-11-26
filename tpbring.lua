@@ -472,7 +472,6 @@ return function(C, R, UI)
         return nil
     end
 
-    -- Strong pre-nudge for apples and berries to knock them off bushes/trees
     local function fruitPreNudge(m)
         if not isFruitModel(m) then return end
         if not (m and m.Parent) then return end
@@ -808,6 +807,44 @@ return function(C, R, UI)
         return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
     end
 
+    local function scrapperOrbPos()
+        local scr = WS:FindFirstChild("Map")
+                    and WS.Map:FindFirstChild("Campground")
+                    and WS.Map.Campground:FindFirstChild("Scrapper")
+        if not scr then return nil end
+        local mp = mainPart(scr)
+        local cf = (mp and mp.CFrame) or scr:GetPivot()
+        return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
+    end
+
+    local function noticeOrbPos()
+        local map = WS:FindFirstChild("Map")
+        if not map then return nil end
+        local camp = map:FindFirstChild("Campground")
+        if not camp then return nil end
+        local board = camp:FindFirstChild("NoticeBoard")
+        if not board then
+            for _,d in ipairs(camp:GetDescendants()) do
+                if d:IsA("Model") and d.Name == "NoticeBoard" then
+                    board = d
+                    break
+                end
+            end
+        end
+        if not board then return nil end
+
+        local mp = mainPart(board)
+        if not mp then
+            local cf = board:GetPivot()
+            return cf.Position + Vector3.new(0, ORB_HEIGHT + 4, 0)
+        end
+        local cf = mp.CFrame
+        local forward = cf.LookVector
+        local edgeOffset = (mp.Size.Z * 0.5) + 1.0
+        local pos = cf.Position + forward * edgeOffset
+        return pos + Vector3.new(0, ORB_HEIGHT + 1, 0)
+    end
+
     local function releaseOne(rec)
         local m = rec and rec.model
         if not (m and m.Parent) then return end
@@ -869,7 +906,6 @@ return function(C, R, UI)
         local base = destBaseVec or orbPosVec or mp.Position
 
         if CURRENT_MODE == "orbs" then
-            -- not used any more for orbs; handled by teleportItemToOrb
             return
         end
 
@@ -1079,6 +1115,11 @@ return function(C, R, UI)
                     if not m or seen[m] then return end
                     seen[m] = true
 
+                    local done = m:GetAttribute(DONE_ATTR)
+                    if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
+                        return
+                    end
+
                     local mp = mainPart(m)
                     if not mp then return end
                     if (mp.Position - orbPosVec).Magnitude > ORB_UNSTICK_RAD then
@@ -1162,13 +1203,10 @@ return function(C, R, UI)
         for i = 1, #list do
             if not running then break end
             if #releaseQueue >= MAX_LINED_ITEMS then break end
+            if activeCount >= MAX_CONCURRENT then break end
 
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                while running and activeCount >= MAX_CONCURRENT do
-                    Run.Heartbeat:Wait()
-                end
-
                 local destBaseVec = orbPosVec
                 if destBaseVec then
                     activeCount = activeCount + 1
@@ -1217,47 +1255,6 @@ return function(C, R, UI)
 
         activeCount = 0
         destroyOrb()
-    end
-
-    ----------------------------------------------------------------
-    -- DESTINATION HELPERS
-    ----------------------------------------------------------------
-    local function scrapperOrbPos()
-        local scr = WS:FindFirstChild("Map")
-                    and WS.Map:FindFirstChild("Campground")
-                    and WS.Map.Campground:FindFirstChild("Scrapper")
-        if not scr then return nil end
-        local mp = mainPart(scr)
-        local cf = (mp and mp.CFrame) or scr:GetPivot()
-        return cf.Position + Vector3.new(0, ORB_HEIGHT + 10, 0)
-    end
-
-    local function noticeOrbPos()
-        local map = WS:FindFirstChild("Map")
-        if not map then return nil end
-        local camp = map:FindFirstChild("Campground")
-        if not camp then return nil end
-        local board = camp:FindFirstChild("NoticeBoard")
-        if not board then
-            for _,d in ipairs(camp:GetDescendants()) do
-                if d:IsA("Model") and d.Name == "NoticeBoard" then
-                    board = d
-                    break
-                end
-            end
-        end
-        if not board then return nil end
-
-        local mp = mainPart(board)
-        if not mp then
-            local cf = board:GetPivot()
-            return cf.Position + Vector3.new(0, ORB_HEIGHT + 4, 0)
-        end
-        local cf = mp.CFrame
-        local forward = cf.LookVector
-        local edgeOffset = (mp.Size.Z * 0.5) + 1.0
-        local pos = cf.Position + forward * edgeOffset
-        return pos + Vector3.new(0, ORB_HEIGHT + 1, 0)
     end
 
     ----------------------------------------------------------------
