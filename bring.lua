@@ -11,6 +11,7 @@ return function(C, R, UI)
 
     local AMOUNT_TO_BRING       = 1000
     local CONVEYOR_MAX_ACTIVE   = 10
+    local LIMIT_PER_NAME        = false
     local COLLIDE_OFF_SEC       = 0.22
     local DROP_ABOVE_HEAD_STUDS = 10
     local FALLBACK_UP           = 5
@@ -117,6 +118,23 @@ return function(C, R, UI)
         end
         local p = mainPart(m)
         return (p and p.Size.Y) or 2
+    end
+
+    local function requestMoreStreamingAround(posList)
+        if not (WS and WS.StreamingEnabled) then return end
+        local seen = {}
+        for _,pos in ipairs(posList) do
+            if typeof(pos) == "Vector3" then
+                local key = math.floor(pos.X/64).."|"..math.floor(pos.Z/64)
+                if not seen[key] then
+                    seen[key] = true
+                    pcall(function()
+                        WS:RequestStreamAroundAsync(pos)
+                    end)
+                end
+            end
+        end
+        task.wait(0.12)
     end
 
     local function getRemote(...)
@@ -389,7 +407,7 @@ return function(C, R, UI)
     local VERTICAL_MULT = 1.35
     local STEP_WAIT     = 0.03
     local STUCK_TTL     = 6.0
-    local ORB_PICK_RADIUS = 40
+    local ORB_PICK_RADIUS = 60
 
     local function setPivot(model, cf)
         if model:IsA("Model") then
@@ -483,7 +501,6 @@ return function(C, R, UI)
         return false
     end
 
-    -- UPDATED: Apple + Berry now both require being detached items under Items (not embedded in trees/bushes)
     local function nameMatches(selectedSet, m)
         local itemsFolder = itemsRootOrNil()
         if itemsFolder and not m:IsDescendantOf(itemsFolder) then return false end
@@ -599,8 +616,8 @@ return function(C, R, UI)
         zeroAssembly(model)
 
         local DRAG_SPEED, VERTICAL_MULT, STEP_WAIT = 18, 1.35, 0.03
-        local function setPivot(model, cf)
-            if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
+        local function setPivotLocal(model0, cf)
+            if model0:IsA("Model") then model0:PivotTo(cf) else local p=mainPart(model0); if p then p.CFrame=cf end end
         end
         while model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
@@ -610,7 +627,7 @@ return function(C, R, UI)
             if math.abs(dy) <= 0.4 then break end
             local stepY = math.sign(dy) * math.min(DRAG_SPEED * VERTICAL_MULT * STEP_WAIT, math.abs(dy))
             local newPos = Vector3.new(pos.X, pos.Y + stepY, pos.Z)
-            setPivot(model, CFrame.new(newPos, newPos + lookDir))
+            setPivotLocal(model, CFrame.new(newPos, newPos + lookDir))
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
@@ -627,7 +644,7 @@ return function(C, R, UI)
             local step = math.min(DRAG_SPEED * STEP_WAIT, dist)
             local dir = delta.Unit
             local newPos = Vector3.new(pos.X, riserY, pos.Z) + dir * step
-            setPivot(model, CFrame.new(newPos, newPos + dir))
+            setPivotLocal(model, CFrame.new(newPos, newPos + dir))
             for _,p in ipairs(getAllParts(model)) do
                 p.AssemblyLinearVelocity  = Vector3.new()
                 p.AssemblyAngularVelocity = Vector3.new()
@@ -645,7 +662,9 @@ return function(C, R, UI)
         for _,m in ipairs(picked) do
             local nm = m.Name or ""
             cnt[nm] = (cnt[nm] or 0) + 1
-            if cnt[nm] <= AMOUNT_TO_BRING then out[#out+1] = m end
+            if (not LIMIT_PER_NAME) or cnt[nm] <= AMOUNT_TO_BRING then
+                out[#out+1] = m
+            end
         end
         picked = out
 
@@ -673,20 +692,29 @@ return function(C, R, UI)
 
     local function runConveyorJob(centerPos, orbPos, targets, jobId)
         local t0 = os.clock()
+        local emptyPasses = 0
         while true do
             if os.clock() - t0 >= JOB_HARD_TIMEOUT_S then break end
             local moved = runConveyorWave(centerPos, orbPos, targets, jobId)
-            if moved == 0 then break end
+            if moved == 0 then
+                emptyPasses += 1
+                if emptyPasses >= 2 then break end
+                requestMoreStreamingAround({ centerPos, orbPos })
+                task.wait(0.2)
+            else
+                emptyPasses = 0
+            end
         end
     end
 
     local function burnNearby()
         local camp = CAMPFIRE_PATH; if not camp then return end
         local root = hrp(); if not root then return end
+        local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
+        requestMoreStreamingAround({ root.Position, campCF.Position })
         local jobId = ("%d-%d"):format(os.time(), math.random(1,1e6))
         local orb2 = makeOrb(root.CFrame, "orb2")
-        local campCenter = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
-        local orb1 = makeOrb(campCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
+        local orb1 = makeOrb(campCF + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
         local targets = mergedSet(fuelSet, cookSet)
         runConveyorJob(orb2.Position, orb1.Position, targets, jobId)
         if orb1 then orb1:Destroy() end
@@ -695,10 +723,11 @@ return function(C, R, UI)
     local function scrapNearby()
         local scr = SCRAPPER_PATH; if not scr then return end
         local root = hrp(); if not root then return end
+        local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
+        requestMoreStreamingAround({ root.Position, scrCF.Position })
         local jobId = ("%d-%d"):format(os.time(), math.random(1,1e6))
         local orb2 = makeOrb(root.CFrame, "orb2")
-        local scrCenter = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot())
-        local orb1 = makeOrb(scrCenter + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
+        local orb1 = makeOrb(scrCF + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
         local targets = mergedSet(junkSet, scrapAlso)
         runConveyorJob(orb2.Position, orb1.Position, targets, jobId)
         if orb1 then orb1:Destroy() end
@@ -728,6 +757,11 @@ return function(C, R, UI)
             local perNameCount, seenModel, queue = {}, {}, {}
             local itemsFolder = itemsRootOrNil(); if not itemsFolder then return end
 
+            local root = hrp()
+            if root then
+                requestMoreStreamingAround({ root.Position })
+            end
+
             for _,d in ipairs(itemsFolder:GetDescendants()) do
                 local m = nil
                 if d:IsA("Model") then
@@ -741,7 +775,7 @@ return function(C, R, UI)
                         local nm = m.Name
                         if not (nm == "Log" and isWallVariant(m)) then
                             perNameCount[nm] = (perNameCount[nm] or 0) + 1
-                            if perNameCount[nm] <= AMOUNT_TO_BRING then
+                            if (not LIMIT_PER_NAME) or perNameCount[nm] <= AMOUNT_TO_BRING then
                                 local mp = mainPart(m)
                                 if mp then queue[#queue+1] = m end
                             end
