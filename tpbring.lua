@@ -172,7 +172,7 @@ return function(C, R, UI)
     local preclaimConn = nil
     local waveAcc      = 0.0
     local dropIndex    = 0
-    local finalized    = {}  -- models that have been fully dropped this run
+    local finalized    = {}  -- models that have been fully processed this run
     local fruitNudged  = {}  -- fruits pre-nudged this run
 
     ----------------------------------------------------------------
@@ -544,10 +544,22 @@ return function(C, R, UI)
         end)
     end
 
+    local function markDoneThisRun(m)
+        if not (m and m.Parent) then return end
+        pcall(function()
+            m:SetAttribute(INFLT_ATTR, nil)
+            m:SetAttribute(JOB_ATTR, nil)
+            if CURRENT_RUN_ID then
+                m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
+            end
+        end)
+        finalized[m] = true
+        inflight[m] = nil
+    end
+
     local function canPick(m, selectedSet, jobId)
         if not (m and m.Parent and m:IsA("Model")) then return false end
 
-        -- Never pick up something we've already fully dropped this run
         if finalized[m] then
             return false
         end
@@ -557,14 +569,8 @@ return function(C, R, UI)
         if isExcludedModel(m) or isUnderLogWall(m) or hasIceBlockTag(m) then return false end
 
         local done = m:GetAttribute(DONE_ATTR)
-        if CURRENT_MODE == "orbs" then
-            if done ~= nil then
-                return false
-            end
-        else
-            if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
-                return false
-            end
+        if done and CURRENT_RUN_ID and tostring(done) == tostring(CURRENT_RUN_ID) then
+            return false
         end
 
         local tIn = m:GetAttribute(INFLT_ATTR)
@@ -603,7 +609,6 @@ return function(C, R, UI)
         Vector3.new( 35.67, 4.05 + GROUND_ORB_DROP_HEIGHT, 41.33),
     }
 
-    -- Ground raycasted bases for orbs
     local orbGroundBases = { nil, nil, nil, nil }
 
     local function computeOrbGroundBase(index)
@@ -644,9 +649,7 @@ return function(C, R, UI)
         {},
     }
 
-    -- Default OFF now
     local orbEnabled = { false, false, false, false }
-
     local orbUnionSet = {}
 
     local function recomputeOrbUnionSet()
@@ -723,7 +726,7 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
-    -- Orb + conveyor logic
+    -- Orb + conveyor support for non-orb modes
     ----------------------------------------------------------------
     local function spawnOrbAt(pos, color)
         if orb then
@@ -795,7 +798,7 @@ return function(C, R, UI)
         table.insert(releaseQueue, {model=m, pos=tgt})
     end
 
-    function campfireOrbPos()
+    local function campfireOrbPos()
         local fire = WS:FindFirstChild("Map")
                      and WS.Map:FindFirstChild("Campground")
                      and WS.Map.Campground:FindFirstChild("MainFire")
@@ -840,25 +843,6 @@ return function(C, R, UI)
             end)
         end
 
-        -- For ground orbs, give a small shove away from the orb center so items don't hover in a clump
-        if CURRENT_MODE == "orbs" and rec and rec.pos then
-            local mp3 = mainPart(m)
-            if mp3 then
-                local center = rec.pos
-                local away = Vector3.new(mp3.Position.X - center.X, 0, mp3.Position.Z - center.Z)
-                if away.Magnitude < 0.1 then
-                    away = Vector3.new(1, 0, 0)
-                else
-                    away = away.Unit
-                end
-                local mass = math.max(mp3:GetMass(), 1)
-                local horizStrength = 80
-                pcall(function()
-                    mp3:ApplyImpulse(away * horizStrength * mass)
-                end)
-            end
-        end
-
         mp2 = mainPart(m)
         if mp2 and stopDrag and isPreDragImportantModel(m) then
             local campPos = campfireOrbPos()
@@ -869,15 +853,7 @@ return function(C, R, UI)
             end
         end
 
-        pcall(function()
-            m:SetAttribute(INFLT_ATTR, nil)
-            m:SetAttribute(JOB_ATTR, nil)
-            m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
-        end)
-
-        -- Mark as permanently done for this run so wave() never picks it again
-        finalized[m] = true
-        inflight[m] = nil
+        markDoneThisRun(m)
     end
 
     local function startConveyor(m, jobId, destBaseVec)
@@ -885,7 +861,6 @@ return function(C, R, UI)
         local mp = mainPart(m)
         if not mp then return end
 
-        -- Strong pre-nudge for apples and berries so we don't drag bushes/trees
         if isFruitModel(m) then
             fruitPreNudge(m)
         end
@@ -894,32 +869,7 @@ return function(C, R, UI)
         local base = destBaseVec or orbPosVec or mp.Position
 
         if CURRENT_MODE == "orbs" then
-            local tgt = Vector3.new(base.X + off.X, base.Y + HOVER_ABOVE_ORB, base.Z + off.Z)
-
-            pcall(function() m:SetAttribute(INFLT_ATTR, os.clock()) end)
-            pcall(function() m:SetAttribute(JOB_ATTR, jobId) end)
-
-            local snap = setNoCollide(m)
-            setAnchored(m, true)
-            zeroAssembly(m)
-
-            if startDrag then
-                pcall(function()
-                    startDrag:FireServer(m)
-                end)
-            end
-
-            local rec = { snap = snap, conn = nil, lastD = 0, lastT = os.clock(), staged = false }
-            inflight[m] = rec
-
-            stageAtOrb(m, snap, tgt)
-
-            if stopDrag then
-                pcall(function()
-                    stopDrag:FireServer(m)
-                end)
-            end
-
+            -- not used any more for orbs; handled by teleportItemToOrb
             return
         end
 
@@ -1037,6 +987,49 @@ return function(C, R, UI)
     end
 
     ----------------------------------------------------------------
+    -- Teleport directly to orb pads (orb mode)
+    ----------------------------------------------------------------
+    local function teleportItemToOrb(m, basePos, jobId)
+        if not (m and m.Parent and basePos) then return end
+
+        if isFruitModel(m) then
+            fruitPreNudge(m)
+        end
+
+        local mp = mainPart(m)
+        if not mp then return end
+
+        pcall(function()
+            m:SetAttribute(INFLT_ATTR, os.clock())
+            m:SetAttribute(JOB_ATTR, jobId)
+        end)
+
+        local off = landingOffset(m, jobId)
+        local target = basePos + Vector3.new(off.X, HOVER_ABOVE_ORB, off.Z)
+
+        local snap = setNoCollide(m)
+        setAnchored(m, false)
+        zeroAssembly(m)
+        setPivot(m, CFrame.new(target))
+
+        setCollideFromSnapshot(snap)
+        zeroAssembly(m)
+        for _,p in ipairs(allParts(m)) do
+            p.Anchored = false
+            p.AssemblyAngularVelocity = Vector3.new()
+            p.AssemblyLinearVelocity  = Vector3.new()
+            pcall(function() p:SetNetworkOwner(nil) end)
+            pcall(function()
+                if p.SetNetworkOwnershipAuto then
+                    p:SetNetworkOwnershipAuto()
+                end
+            end)
+        end
+
+        markDoneThisRun(m)
+    end
+
+    ----------------------------------------------------------------
     -- Unstick pass using raycasts from player position
     ----------------------------------------------------------------
     local function setUnstickEnabled(on)
@@ -1108,14 +1101,7 @@ return function(C, R, UI)
 
                     if not treatAsStuck then return end
 
-                    inflight[m] = nil
-                    pcall(function()
-                        m:SetAttribute(INFLT_ATTR, nil)
-                        m:SetAttribute(JOB_ATTR, nil)
-                        m:SetAttribute(DONE_ATTR, CURRENT_RUN_ID)
-                    end)
-
-                    -- Teleport misbehaving items down to ground instead of leaving them hovering
+                    markDoneThisRun(m)
                     teleportModelToGround(m)
 
                     for _,p in ipairs(allParts(m)) do
@@ -1130,9 +1116,6 @@ return function(C, R, UI)
                             end
                         end)
                     end
-
-                    -- Also treat as finalized so wave() never re-grabs it
-                    finalized[m] = true
                 end
 
                 for _,dir in ipairs(directions) do
@@ -1157,54 +1140,45 @@ return function(C, R, UI)
         if not CURRENT_MODE then return end
         local jobId = tostring(os.clock())
 
-        local list
         if CURRENT_MODE == "orbs" then
-            list = getCandidatesForOrbs(jobId)
-        else
-            list = getCandidatesForCurrent(jobId)
+            local list = getCandidatesForOrbs(jobId)
+            for i = 1, #list do
+                if not running then break end
+                local m = list[i]
+                if m and m.Parent then
+                    local idx = orbIndexForModel(m)
+                    if idx then
+                        local base = getOrbBasePosition(idx)
+                        if base then
+                            teleportItemToOrb(m, base, jobId)
+                        end
+                    end
+                end
+            end
+            return
         end
 
+        local list = getCandidatesForCurrent(jobId)
         for i = 1, #list do
             if not running then break end
             if #releaseQueue >= MAX_LINED_ITEMS then break end
 
             local m = list[i]
             if m and m.Parent and not inflight[m] then
-                if CURRENT_MODE == "orbs" and activeCount >= MAX_CONCURRENT then
-                    if startDrag then
-                        pcall(function()
-                            startDrag:FireServer(m)
+                while running and activeCount >= MAX_CONCURRENT do
+                    Run.Heartbeat:Wait()
+                end
+
+                local destBaseVec = orbPosVec
+                if destBaseVec then
+                    activeCount = activeCount + 1
+                    task.spawn(function()
+                        startConveyor(m, jobId, destBaseVec)
+                        task.delay(8, function()
+                            activeCount = math.max(0, activeCount - 1)
                         end)
-                    end
-                else
-                    while running and activeCount >= MAX_CONCURRENT do
-                        Run.Heartbeat:Wait()
-                    end
-
-                    local destBaseVec = nil
-
-                    if CURRENT_MODE == "orbs" then
-                        local idx = orbIndexForModel(m)
-                        if idx then
-                            local base = getOrbBasePosition(idx)
-                            if base then
-                                destBaseVec = base
-                            end
-                        end
-                    else
-                        destBaseVec = orbPosVec
-                    end
-
-                    if destBaseVec then
-                        activeCount = activeCount + 1
-                        task.spawn(function()
-                            startConveyor(m, jobId, destBaseVec)
-                            task.delay(8, function()
-                                activeCount = math.max(0, activeCount - 1)
-                            end)
-                        end)
-                        task.wait(START_STAGGER)
-                    end
+                    end)
+                    task.wait(START_STAGGER)
                 end
             end
         end
@@ -1534,7 +1508,6 @@ return function(C, R, UI)
             Callback = function(selection)
                 local set = {}
                 if type(selection) == "table" and not selection[1] and selection.Value then
-                    -- Some UIs pass { Value = {...} }
                     selection = selection.Value
                 end
                 if type(selection) == "table" then
@@ -1593,9 +1566,6 @@ return function(C, R, UI)
         end
     })
 
-    ----------------------------------------------------------------
-    -- FIXED: Ground orb distance slider using same API as CombatTab
-    ----------------------------------------------------------------
     tab:Slider({
         Title = "Ground Orb Search Radius",
         Value = { Min = 10, Max = 250, Default = MAX_DIST_ORBS_DEFAULT },
