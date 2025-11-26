@@ -97,9 +97,9 @@ return function(C, R, UI)
     -- PLAYER FLING STATE
     ---------------------------------------------------------------------
 
-    local flingEnabled = false
-    local flingPower   = 10000
-    local flingConn    = nil
+    local flingEnabled      = false
+    local flingPower        = 10000
+    local flingLoopStarted  = false
 
     ---------------------------------------------------------------------
     -- HELPERS
@@ -423,41 +423,40 @@ return function(C, R, UI)
     end
 
     ---------------------------------------------------------------------
-    -- PLAYER FLING LOOP (connection-based, clean start/stop)
+    -- PLAYER FLING LOOP
     ---------------------------------------------------------------------
 
-    local function stopFling()
-        flingEnabled = false
-        if flingConn then
-            flingConn:Disconnect()
-            flingConn = nil
-        end
-        local c = lp.Character
-        local root = c and c:FindFirstChild("HumanoidRootPart")
-        if root then
-            root.AssemblyLinearVelocity  = Vector3.new()
-            root.AssemblyAngularVelocity = Vector3.new()
-        end
-    end
+    local function ensureFlingLoop()
+        if flingLoopStarted then return end
+        flingLoopStarted = true
 
-    local function startFling()
-        stopFling() -- ensure clean state
-        flingEnabled = true
+        task.spawn(function()
+            local c, root, vel
+            local movel = 0.1
+            while true do
+                Run.Heartbeat:Wait()
+                if flingEnabled then
+                    while flingEnabled and not (c and c.Parent and root and root.Parent) do
+                        Run.Heartbeat:Wait()
+                        c = lp.Character
+                        root = c and c:FindFirstChild("HumanoidRootPart")
+                    end
 
-        flingConn = Run.Heartbeat:Connect(function()
-            if not flingEnabled then
-                return
+                    if flingEnabled and root and root.Parent then
+                        vel = root.Velocity
+                        root.Velocity = vel * flingPower + Vector3.new(0, flingPower, 0)
+                        Run.RenderStepped:Wait()
+                        if flingEnabled and c and c.Parent and root and root.Parent then
+                            root.Velocity = vel
+                        end
+                        Run.Stepped:Wait()
+                        if flingEnabled and c and c.Parent and root and root.Parent then
+                            root.Velocity = vel + Vector3.new(0, movel, 0)
+                            movel = -movel
+                        end
+                    end
+                end
             end
-
-            local c = lp.Character
-            local root = c and c:FindFirstChild("HumanoidRootPart")
-            if not (root and root.Parent) then
-                return
-            end
-
-            -- Spin-based fling: strong angular velocity around Y
-            local spin = flingPower
-            root.AssemblyAngularVelocity = Vector3.new(0, spin, 0)
         end)
     end
 
@@ -870,9 +869,6 @@ return function(C, R, UI)
         activeList  = {}
         activeByUid = {}
         countByUid  = {}
-
-        -- Also stop fling when we hard-stop everything
-        stopFling()
     end
 
     ---------------------------------------------------------------------
@@ -1160,7 +1156,7 @@ return function(C, R, UI)
                                 end
 
                                 if horizSpeed > 0 or upSpeed > 0 then
-                                    local vel2 = dir * horizSpeed + Vector3.new(0, upSpeed, 0)
+                                    local vel = dir * horizSpeed + Vector3.new(0, upSpeed, 0)
                                     hopState[mdl] = { lastHopAt = now }
 
                                     task.spawn(function()
@@ -1168,7 +1164,7 @@ return function(C, R, UI)
                                         task.wait(0.03)
                                         local mp2 = mainPart(mdl)
                                         if mp2 then
-                                            mp2.AssemblyLinearVelocity = vel2
+                                            mp2.AssemblyLinearVelocity = vel
                                         end
                                         finallyStopDrag(mdl)
                                     end)
@@ -1436,10 +1432,9 @@ return function(C, R, UI)
         Title = "Fling Players",
         Value = false,
         Callback = function(on)
-            if on then
-                startFling()
-            else
-                stopFling()
+            flingEnabled = (on == true)
+            if flingEnabled then
+                ensureFlingLoop()
             end
         end
     })
