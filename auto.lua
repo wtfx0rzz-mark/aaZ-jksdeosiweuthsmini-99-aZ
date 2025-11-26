@@ -1542,9 +1542,180 @@ return function(C, R, UI)
             })
         end
 
+        ----------------------------------------------------------------
+        -- Auto replant saplings (immediate on spawn)
+        ----------------------------------------------------------------
+        local autoReplantOn   = false
+        local autoReplantConn = nil
+
+        local function autoReplantCalcPos(m)
+            local mp
+            if mainPart2 then
+                mp = mainPart2(m)
+            end
+            if not mp and mainPart then
+                mp = mainPart(m)
+            end
+            if not mp then return nil end
+
+            local center = mp.Position
+            local ground = groundBelow3 and groundBelow3(center) or center
+            local y = math.min(ground.Y, center.Y - (mp.Size.Y * 0.5)) - 0.15
+
+            return Vector3.new(center.X, y, center.Z)
+        end
+
+        local function plantModelAtExactPosition(m, pos)
+            local plantRF = getRemote and getRemote("RequestPlantItem")
+            if not (plantRF and m and m.Parent and pos) then return end
+
+            local startDrag = getRemote("RequestStartDraggingItem")
+            local stopDrag  = getRemote("StopDraggingItem")
+
+            if startDrag then
+                pcall(function() startDrag:FireServer(m) end)
+                pcall(function() startDrag:FireServer(Instance.new("Model")) end)
+            end
+
+            local INTERACTION_DELAY = 0
+            if INTERACTION_DELAY > 0 then
+                task.wait(INTERACTION_DELAY)
+            else
+                Run.Heartbeat:Wait()
+            end
+
+            local ok = pcall(function()
+                if plantRF:IsA("RemoteFunction") then
+                    return plantRF:InvokeServer(m, pos)
+                else
+                    plantRF:FireServer(m, pos)
+                    return true
+                end
+            end)
+
+            if not ok then
+                local dummy = Instance.new("Model")
+                pcall(function()
+                    if plantRF:IsA("RemoteFunction") then
+                        return plantRF:InvokeServer(dummy, pos)
+                    else
+                        plantRF:FireServer(dummy, pos)
+                    end
+                end)
+            end
+
+            if INTERACTION_DELAY > 0 then
+                task.wait(INTERACTION_DELAY)
+            else
+                Run.Heartbeat:Wait()
+            end
+
+            if stopDrag then
+                pcall(function() stopDrag:FireServer(m) end)
+                pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
+            end
+        end
+
+        local function autoReplantPlantModel(m)
+            local pos = autoReplantCalcPos(m)
+            if not pos then return end
+            plantModelAtExactPosition(m, pos)
+        end
+
+        local function handleNewSapling(child)
+            if not (autoReplantOn and child and child:IsA("Model") and child.Name == "Sapling") then
+                return
+            end
+            task.spawn(function()
+                task.wait(0.1)
+                if child and child.Parent then
+                    autoReplantPlantModel(child)
+                end
+            end)
+        end
+
+        local function enableAutoReplant()
+            if autoReplantOn then return end
+            autoReplantOn = true
+            local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
+            if items and not autoReplantConn then
+                autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
+            end
+        end
+
+        local function disableAutoReplant()
+            autoReplantOn = false
+            if autoReplantConn then
+                autoReplantConn:Disconnect()
+                autoReplantConn = nil
+            end
+        end
+
+        ----------------------------------------------------------------
+        -- Circle-plant saplings in air at current position
+        ----------------------------------------------------------------
+        local CIRCLE_SAPLINGS_PER_RING = 20
+        local CIRCLE_RADIUS            = 4.0
+        local CIRCLE_HEIGHT_STEP       = 10.0
+
+        local function actionCirclePlantSaplingsAtPosition()
+            local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
+            if not items then return end
+
+            local saplings = {}
+            for _,m in ipairs(items:GetChildren()) do
+                if m:IsA("Model") and m.Name == "Sapling" then
+                    saplings[#saplings+1] = m
+                end
+            end
+            if #saplings == 0 then return end
+
+            local root = hrp()
+            if not root then return end
+            local origin = root.Position
+
+            for i, m in ipairs(saplings) do
+                if m and m.Parent then
+                    local idx       = i - 1
+                    local ringIndex = math.floor(idx / CIRCLE_SAPLINGS_PER_RING)
+                    local angleIdx  = idx % CIRCLE_SAPLINGS_PER_RING
+                    local theta     = (2 * math.pi / CIRCLE_SAPLINGS_PER_RING) * angleIdx
+
+                    local y = origin.Y + ringIndex * CIRCLE_HEIGHT_STEP
+                    local x = origin.X + math.cos(theta) * CIRCLE_RADIUS
+                    local z = origin.Z + math.sin(theta) * CIRCLE_RADIUS
+                    local pos = Vector3.new(x, y, z)
+
+                    plantModelAtExactPosition(m, pos)
+                end
+            end
+        end
+
+        ----------------------------------------------------------------
+        -- Saplings UI
+        ----------------------------------------------------------------
         tab:Section({ Title = "Saplings" })
         tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
         tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
+
+        tab:Toggle({
+            Title = "Auto Replant Saplings",
+            Value = false,
+            Callback = function(state)
+                if state then
+                    enableAutoReplant()
+                else
+                    disableAutoReplant()
+                end
+            end
+        })
+
+        tab:Button({
+            Title = "Auto Plant Saplings (Circles Here)",
+            Callback = function()
+                actionCirclePlantSaplingsAtPosition()
+            end
+        })
 
         local function enableLoadDefenseSafe()
             local f = nil
@@ -1571,6 +1742,13 @@ return function(C, R, UI)
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if coinOn and not coinConn then enableCoin() end
             if chestFinderOn and enableChestFinder then enableChestFinder() end
+
+            if autoReplantOn and not autoReplantConn then
+                local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
+                if items then
+                    autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
+                end
+            end
         end)
     end
     local ok, err = pcall(run)
