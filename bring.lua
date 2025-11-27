@@ -14,8 +14,8 @@ return function(C, R, UI)
     local LIMIT_PER_NAME        = false
     local COLLIDE_OFF_SEC       = 0.22
     local DROP_ABOVE_HEAD_STUDS = 10
-    local FALLBACK_UP           = 5
-    local FALLBACK_AHEAD        = 2
+    local FALLBACK_UP           = 4
+    local FALLBACK_AHEAD        = 5
     local ORB_OFFSET_Y          = 20
     local CLUSTER_RADIUS_MIN    = 0.75
     local CLUSTER_RADIUS_STEP   = 0.04
