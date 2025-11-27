@@ -21,6 +21,10 @@ return function(C, R, UI)
     local CLUSTER_RADIUS_STEP   = 0.04
     local CLUSTER_RADIUS_MAX    = 2.25
 
+    -- Air-drop sprinkle tuning (for Bring → Ground)
+    local AIR_DROP_WAVE_AMPLITUDE = 1.0
+    local AIR_DROP_WAVE_FREQUENCY = 1.3
+
     local CAMPFIRE_PATH = workspace.Map.Campground.MainFire
     local SCRAPPER_PATH = workspace.Map.Campground.Scrapper
 
@@ -201,14 +205,24 @@ return function(C, R, UI)
         local above = mp.CFrame + Vector3.new(0, FALLBACK_UP, 0)
         local snap = setCollide(model, false)
         zeroAssembly(model)
-        if model:IsA("Model") then model:PivotTo(above) else local p=mainPart(model); if p then p.CFrame=above end end
-        for _,p in ipairs(getAllParts(model)) do p.AssemblyLinearVelocity = Vector3.new(0,-8,0) end
+        if model:IsA("Model") then
+            model:PivotTo(above)
+        else
+            local p=mainPart(model); if p then p.CFrame=above end
+        end
+        for _,p in ipairs(getAllParts(model)) do
+            p.AssemblyLinearVelocity = Vector3.new(0,-8,0)
+        end
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
     local function moveModel(model, cf)
         local snap = setCollide(model, false)
         zeroAssembly(model)
-        if model:IsA("Model") then model:PivotTo(cf) else local p=mainPart(model); if p then p.CFrame=cf end end
+        if model:IsA("Model") then
+            model:PivotTo(cf)
+        else
+            local p=mainPart(model); if p then p.CFrame=cf end
+        end
         setCollide(model, true, snap)
     end
 
@@ -331,28 +345,26 @@ return function(C, R, UI)
         local r = math.min(CLUSTER_RADIUS_MIN + CLUSTER_RADIUS_STEP * (i - 1), CLUSTER_RADIUS_MAX)
         return Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
     end
+
+    -- Air spawn in front of player; let gravity handle the fall.
     local function groundCFAroundPlayer(model)
         local root = hrp(); if not root then return nil end
         local head = headPart()
-        local basePos = head and head.Position or root.Position
-        local mp = mainPart(model); if not mp then return nil end
-        local offset = ringOffset()
-        local castFrom = basePos + offset
+        local mp   = mainPart(model); if not mp then return nil end
 
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local itemsFolder = WS:FindFirstChild("Items")
-        if itemsFolder then
-            params.FilterDescendantsInstances = { lp.Character, model, itemsFolder }
-        else
-            params.FilterDescendantsInstances = { lp.Character, model }
-        end
+        local basePos = head and head.Position or (root.Position + Vector3.new(0, 4, 0))
+        local look    = root.CFrame.LookVector
 
-        local res = WS:Raycast(castFrom, Vector3.new(0, -2000, 0), params)
-        local y = res and res.Position.Y or (root.Position.Y - 3)
-        local h = (mp.Size.Y > 0) and (mp.Size.Y * 0.5 + 0.05) or 0.6
-        local pos = Vector3.new(castFrom.X, y + h, castFrom.Z)
-        local look = root.CFrame.LookVector
+        local offset  = ringOffset()
+        local waveY   = math.sin(dropCounter * AIR_DROP_WAVE_FREQUENCY) * AIR_DROP_WAVE_AMPLITUDE
+
+        -- In front of player, up in the air, scattered with a small wave for the "sprinkle" effect.
+        local pos = basePos
+            + look * FALLBACK_AHEAD
+            + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0)
+            + Vector3.new(offset.X, 0, offset.Z)
+            + Vector3.new(0, waveY, 0)
+
         return CFrame.lookAt(pos, pos + look)
     end
 
@@ -615,9 +627,12 @@ return function(C, R, UI)
         local snapOrig = setCollide(model, false)
         zeroAssembly(model)
 
-        local DRAG_SPEED, VERTICAL_MULT, STEP_WAIT = 18, 1.35, 0.03
         local function setPivotLocal(model0, cf)
-            if model0:IsA("Model") then model0:PivotTo(cf) else local p=mainPart(model0); if p then p.CFrame=cf end end
+            if model0:IsA("Model") then
+                model0:PivotTo(cf)
+            else
+                local p = mainPart(model0); if p then p.CFrame = cf end
+            end
         end
         while model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
