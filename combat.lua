@@ -426,6 +426,7 @@ return function(C, R, UI)
         { "Ice Sword",         0.5 },
         { "Laser Sword",       0.5 },
         { "Katana",            0.4 },
+        { "Scythe",            0.7 },
         { "Trident",           0.6 },
         { "Poison Spear",      0.5 },
         { "Spear",             0.5 },
