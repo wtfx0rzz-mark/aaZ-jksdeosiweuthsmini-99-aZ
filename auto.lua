@@ -10,6 +10,8 @@ return function(C, R, UI)
         local VIM      = game:GetService("VirtualInputManager")
 
         local lp = Players.LocalPlayer
+        local UID_OPEN_KEY = tostring(lp.UserId) .. "Opened"
+
         local Tabs = (UI and UI.Tabs) or {}
         local tab  = Tabs.Auto
         if not tab then return end
@@ -78,7 +80,9 @@ return function(C, R, UI)
             if not ch then return {} end
             local t = {}
             for _,d in ipairs(ch:GetDescendants()) do
-                if d:IsA("BasePart") then t[d] = d.CanCollide end
+                if d:IsA("BasePart") then
+                    t[d] = d.CanCollide
+                end
             end
             return t
         end
@@ -91,7 +95,9 @@ return function(C, R, UI)
                 end
             else
                 for _,d in ipairs(ch:GetDescendants()) do
-                    if d:IsA("BasePart") then d.CanCollide = false end
+                    if d:IsA("BasePart") then
+                        d.CanCollide = false
+                    end
                 end
             end
         end
@@ -136,7 +142,8 @@ return function(C, R, UI)
                     Run.Heartbeat:Wait()
                 end
                 if (not moved) and rollbackCF then
-                    local root = hrp(); if root then
+                    local root = hrp()
+                    if root then
                         local cf = rollbackCF
                         local snap = snapshotCollide()
                         setCollideAll(false)
@@ -306,7 +313,8 @@ return function(C, R, UI)
             end
             local targetPos = center.Position + look * offset + Vector3.new(0, 3, 0)
             local g = groundBelow(targetPos)
-            local finalPos = Vector3.new(targetPos.X, g.Y + 2.5, targetPos.Z)
+            local standY = math.max(g.Y + 2.5, center.Position.Y + 0.5)
+            local finalPos = Vector3.new(targetPos.X, standY, targetPos.Z)
             return CFrame.new(finalPos, center.Position)
         end
 
@@ -533,8 +541,8 @@ return function(C, R, UI)
                 if not visitedLost[m] then
                     local mp = mainPart(m)
                     if mp then
-                        local dist = (mp.Position - root.Position).Magnitude
-                        if dist < bestD then bestD, best = dist, m end
+                        local d = (mp.Position - root.Position).Magnitude
+                        if d < bestD then bestD, best = d, m end
                     end
                 end
             end
@@ -546,8 +554,8 @@ return function(C, R, UI)
             for m,_ in pairs(lostEligible) do
                 local mp = mainPart(m)
                 if mp then
-                    local dist = (mp.Position - root.Position).Magnitude
-                    if dist < bestD then bestD, best = dist, m end
+                    local d = (mp.Position - root.Position).Magnitude
+                    if d < bestD then bestD, best = d, m end
                 end
             end
             return best
@@ -629,6 +637,25 @@ return function(C, R, UI)
             end
             return false
         end
+
+        local function markChestOpenedFromPrompt(prompt)
+            if not (prompt and prompt.Parent) then return end
+            local inst = prompt.Parent
+            for _ = 1, 8 do
+                if not inst then break end
+                if inst:IsA("Model") then
+                    local n = inst.Name
+                    if type(n) == "string" and (n:match("Chest%d*$") or n:match("Chest$")) then
+                        pcall(function()
+                            inst:SetAttribute(UID_OPEN_KEY, true)
+                        end)
+                        break
+                    end
+                end
+                inst = inst.Parent
+            end
+        end
+
         local promptDurations = setmetatable({}, { __mode = "k" })
         local shownConn, trigConn, hiddenConn
         local function restorePrompt(prompt)
@@ -648,8 +675,13 @@ return function(C, R, UI)
             trigConn   = PPS.PromptTriggered:Connect(function(prompt, player)
                 if player ~= lp or shouldSkipPrompt(prompt) then return end
                 pcall(function() prompt.Enabled = false end)
-                task.delay(TRIGGER_COOLDOWN, function() if prompt and prompt.Parent then pcall(function() prompt.Enabled = true end) end end)
+                task.delay(TRIGGER_COOLDOWN, function()
+                    if prompt and prompt.Parent then
+                        pcall(function() prompt.Enabled = true end)
+                    end
+                end)
                 restorePrompt(prompt)
+                markChestOpenedFromPrompt(prompt)
             end)
             hiddenConn = PPS.PromptHidden:Connect(function(prompt) if shouldSkipPrompt(prompt) then return end; restorePrompt(prompt) end)
         end
@@ -869,6 +901,7 @@ return function(C, R, UI)
                     return v
                 end
             end
+            return nil
         end
         local function isMossyName(n)
             if n == "Mossy Coin" then return true end
@@ -1004,9 +1037,9 @@ return function(C, R, UI)
         end
         enableNoStreamingPause()
 
-        local function itemsFolder() return WS:FindFirstChild("Items") end
+        local function itemsFolderLocal() return WS:FindFirstChild("Items") end
         local function collectSaplingsSnapshot()
-            local items = itemsFolder(); if not items then return {} end
+            local items = itemsFolderLocal(); if not items then return {} end
             local list = {}
             for _,m in ipairs(items:GetChildren()) do
                 if m:IsA("Model") and m.Name == "Sapling" then
@@ -1154,7 +1187,7 @@ return function(C, R, UI)
                 local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = b
                 return b
             end)()
-            local function itemsFolder() return WS:FindFirstChild("Items") end
+            local function itemsFolderChest() return WS:FindFirstChild("Items") end
             local function mainPart2(m)
                 if not m then return nil end
                 if m:IsA("BasePart") then return m end
@@ -1193,12 +1226,7 @@ return function(C, R, UI)
             end
             local function chestOpened(m)
                 if not m then return false end
-                local attrs = m:GetAttributes()
-                for k,v in pairs(attrs) do
-                    if tostring(k):match("Opened$") and v == true then return true end
-                end
-                if m:GetAttribute("LocalOpened") == true then return true end
-                return false
+                return m:GetAttribute(UID_OPEN_KEY) == true
             end
             local function chestPos(m)
                 local mp = mainPart2(m)
@@ -1214,12 +1242,9 @@ return function(C, R, UI)
                 local rec = chests[m]
                 if not rec then
                     chests[m] = { pos = pos, opened = chestOpened(m), excluded = excluded }
-                    m:GetAttributeChangedSignal("LocalOpened"):Connect(function() local r=chests[m]; if r then r.opened = chestOpened(m) end end)
-                    for k,_ in pairs(m:GetAttributes()) do
-                        if tostring(k):match("Opened$") then
-                            m:GetAttributeChangedSignal(k):Connect(function() local r=chests[m]; if r then r.opened = chestOpened(m) end end)
-                        end
-                    end
+                    m:GetAttributeChangedSignal(UID_OPEN_KEY):Connect(function()
+                        local r = chests[m]; if r then r.opened = chestOpened(m) end
+                    end)
                     m:GetPropertyChangedSignal("PrimaryPart"):Connect(function() local r=chests[m]; if r then r.pos = chestPos(m) or r.pos end end)
                     m.AncestryChanged:Connect(function(_, parent) if not parent then chests[m] = nil end end)
                 else
@@ -1232,7 +1257,7 @@ return function(C, R, UI)
             local function initialScan()
                 chests = {}
                 diamondModel = nil
-                local items = itemsFolder(); if not items then return end
+                local items = itemsFolderChest(); if not items then return end
                 for _,m in ipairs(items:GetChildren()) do markChest(m) end
             end
             local function applyDiamondNeighborExclusion()
@@ -1367,7 +1392,7 @@ return function(C, R, UI)
                 initialScan()
                 applyDiamondNeighborExclusion()
                 excludeNearestToDiamond()
-                local items = itemsFolder()
+                local items = itemsFolderChest()
                 if items then
                     childAdd = items.ChildAdded:Connect(function(c)
                         markChest(c)
@@ -1398,12 +1423,11 @@ return function(C, R, UI)
             local deleteExcl = setmetatable({}, { __mode = "k" })
             local DIAMOND_PAIR_DIST = 9.8
             local DIAMOND_PAIR_TOL  = 2.0
-            local UID_OPEN_KEY = tostring(lp.UserId) .. "Opened"
-            local function isChestName(n)
+            local function isChestNameDel(n)
                 if type(n) ~= "string" then return false end
                 return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
             end
-            local function chestOpened(m)
+            local function chestOpenedDel(m)
                 if not m then return false end
                 return m:GetAttribute(UID_OPEN_KEY) == true
             end
@@ -1434,7 +1458,7 @@ return function(C, R, UI)
                 local diamond, dpos = nil, nil
                 local all = {}
                 for _,m in ipairs(items:GetChildren()) do
-                    if m:IsA("Model") and isChestName(m.Name) then
+                    if m:IsA("Model") and isChestNameDel(m.Name) then
                         all[#all+1] = m
                         if m.Name == "Stronghold Diamond Chest" then
                             diamond = m
@@ -1466,14 +1490,14 @@ return function(C, R, UI)
             local function deleteIfOpenedNow(m)
                 if not deleteOn then return end
                 if not (m and m.Parent) then return end
-                if not isChestName(m.Name) then return end
+                if not isChestNameDel(m.Name) then return end
                 if deleteExcl[m] then return end
-                if chestOpened(m) then
+                if chestOpenedDel(m) then
                     safeHideThenDestroy(m)
                 end
             end
             local function watchChest(m)
-                if not (m and m:IsA("Model") and isChestName(m.Name)) then return end
+                if not (m and m:IsA("Model") and isChestNameDel(m.Name)) then return end
                 if tracked[m] then return end
                 tracked[m] = true
                 m:GetAttributeChangedSignal(UID_OPEN_KEY):Connect(function()
@@ -1494,7 +1518,7 @@ return function(C, R, UI)
                 if not deleteOn then return end
                 local items = WS:FindFirstChild("Items"); if not items then return end
                 for _,m in ipairs(items:GetChildren()) do
-                    if m:IsA("Model") and isChestName(m.Name) then
+                    if m:IsA("Model") and isChestNameDel(m.Name) then
                         deleteIfOpenedNow(m)
                     end
                 end
@@ -1509,7 +1533,7 @@ return function(C, R, UI)
                 if items then
                     addConn = items.ChildAdded:Connect(function(m)
                         if m and m:IsA("Model") then
-                            if m.Name == "Stronghold Diamond Chest" or isChestName(m.Name) then
+                            if m.Name == "Stronghold Diamond Chest" or isChestNameDel(m.Name) then
                                 locateDiamondAndNeighbor()
                             end
                             watchChest(m)
@@ -1517,7 +1541,7 @@ return function(C, R, UI)
                     end)
                     remConn = items.ChildRemoved:Connect(function(m)
                         tracked[m] = nil
-                        if m and (m.Name == "Stronghold Diamond Chest" or isChestName(m.Name)) then
+                        if m and (m.Name == "Stronghold Diamond Chest" or isChestNameDel(m.Name)) then
                             task.delay(0, locateDiamondAndNeighbor)
                         end
                     end)
@@ -1541,216 +1565,7 @@ return function(C, R, UI)
                 end
             })
         end
-
-        ----------------------------------------------------------------
-        -- Auto replant saplings (immediate on spawn)
-        ----------------------------------------------------------------
-        local autoReplantOn   = false
-        local autoReplantConn = nil
-
-        local function autoReplantCalcPos(m)
-            local mp
-            if mainPart2 then
-                mp = mainPart2(m)
-            end
-            if not mp and mainPart then
-                mp = mainPart(m)
-            end
-            if not mp then return nil end
-
-            local center = mp.Position
-            local ground = groundBelow3 and groundBelow3(center) or center
-            local y = math.min(ground.Y, center.Y - (mp.Size.Y * 0.5)) - 0.15
-
-            return Vector3.new(center.X, y, center.Z)
-        end
-
-        local function plantModelAtExactPosition(m, pos)
-            local plantRF = getRemote and getRemote("RequestPlantItem")
-            if not (plantRF and m and m.Parent and pos) then return end
-
-            local startDrag = getRemote("RequestStartDraggingItem")
-            local stopDrag  = getRemote("StopDraggingItem")
-
-            if startDrag then
-                pcall(function() startDrag:FireServer(m) end)
-                pcall(function() startDrag:FireServer(Instance.new("Model")) end)
-            end
-
-            local INTERACTION_DELAY = 0
-            if INTERACTION_DELAY > 0 then
-                task.wait(INTERACTION_DELAY)
-            else
-                Run.Heartbeat:Wait()
-            end
-
-            local ok = pcall(function()
-                if plantRF:IsA("RemoteFunction") then
-                    return plantRF:InvokeServer(m, pos)
-                else
-                    plantRF:FireServer(m, pos)
-                    return true
-                end
-            end)
-
-            if not ok then
-                local dummy = Instance.new("Model")
-                pcall(function()
-                    if plantRF:IsA("RemoteFunction") then
-                        return plantRF:InvokeServer(dummy, pos)
-                    else
-                        plantRF:FireServer(dummy, pos)
-                    end
-                end)
-            end
-
-            if INTERACTION_DELAY > 0 then
-                task.wait(INTERACTION_DELAY)
-            else
-                Run.Heartbeat:Wait()
-            end
-
-            if stopDrag then
-                pcall(function() stopDrag:FireServer(m) end)
-                pcall(function() stopDrag:FireServer(Instance.new("Model")) end)
-            end
-        end
-
-        local function autoReplantPlantModel(m)
-            local pos = autoReplantCalcPos(m)
-            if not pos then return end
-            plantModelAtExactPosition(m, pos)
-        end
-
-        local function handleNewSapling(child)
-            if not (autoReplantOn and child and child:IsA("Model") and child.Name == "Sapling") then
-                return
-            end
-            task.spawn(function()
-                task.wait(0.1)
-                if child and child.Parent then
-                    autoReplantPlantModel(child)
-                end
-            end)
-        end
-
-        local function enableAutoReplant()
-            if autoReplantOn then return end
-            autoReplantOn = true
-            local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
-            if items and not autoReplantConn then
-                autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
-            end
-        end
-
-        local function disableAutoReplant()
-            autoReplantOn = false
-            if autoReplantConn then
-                autoReplantConn:Disconnect()
-                autoReplantConn = nil
-            end
-        end
-
-        ----------------------------------------------------------------
-        -- Circle-plant saplings in air at current position
-        ----------------------------------------------------------------
-        local CIRCLE_SAPLINGS_PER_RING = 20
-        local CIRCLE_RADIUS            = 4.0
-        local CIRCLE_HEIGHT_STEP       = 10.0
-
-        local function actionCirclePlantSaplingsAtPosition()
-            local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
-            if not items then return end
-
-            local saplings = {}
-            for _,m in ipairs(items:GetChildren()) do
-                if m:IsA("Model") and m.Name == "Sapling" then
-                    saplings[#saplings+1] = m
-                end
-            end
-            if #saplings == 0 then return end
-
-            local root = hrp()
-            if not root then return end
-            local origin = root.Position
-
-            for i, m in ipairs(saplings) do
-                if m and m.Parent then
-                    local idx       = i - 1
-                    local ringIndex = math.floor(idx / CIRCLE_SAPLINGS_PER_RING)
-                    local angleIdx  = idx % CIRCLE_SAPLINGS_PER_RING
-                    local theta     = (2 * math.pi / CIRCLE_SAPLINGS_PER_RING) * angleIdx
-
-                    local y = origin.Y + ringIndex * CIRCLE_HEIGHT_STEP
-                    local x = origin.X + math.cos(theta) * CIRCLE_RADIUS
-                    local z = origin.Z + math.sin(theta) * CIRCLE_RADIUS
-                    local pos = Vector3.new(x, y, z)
-
-                    plantModelAtExactPosition(m, pos)
-                end
-            end
-        end
-
-        ----------------------------------------------------------------
-        -- Saplings UI
-        ----------------------------------------------------------------
-        tab:Section({ Title = "Saplings" })
-        tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
-        tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
-
-        tab:Toggle({
-            Title = "Auto Replant Saplings",
-            Value = false,
-            Callback = function(state)
-                if state then
-                    enableAutoReplant()
-                else
-                    disableAutoReplant()
-                end
-            end
-        })
-
-        tab:Button({
-            Title = "Auto Plant Saplings (Circles Here)",
-            Callback = function()
-                actionCirclePlantSaplingsAtPosition()
-            end
-        })
-
-        local function enableLoadDefenseSafe()
-            local f = nil
-            if type(enableLoadDefense) == "function" then f = enableLoadDefense end
-            if not f then
-                local ok, g = pcall(function() return _G and _G.enableLoadDefense end)
-                if ok and type(g) == "function" then f = g end
-            end
-            if f then pcall(f) end
-        end
-        local loadDefenseOnDefault = true
-        if loadDefenseOnDefault then enableLoadDefenseSafe() end
-
-        Players.LocalPlayer.CharacterAdded:Connect(function()
-            local playerGui = lp:WaitForChild("PlayerGui")
-            local edgeGui = playerGui:FindFirstChild("EdgeButtons")
-            if edgeGui and edgeGui.Parent ~= playerGui then edgeGui.Parent = playerGui end
-            if phaseBtn then phaseBtn.Visible = showPhaseEdge end
-            if plantBtn then plantBtn.Visible = showPlantEdge end
-            if tpBtn    then tpBtn.Visible    = showTeleportEdge end
-            if campBtn  then campBtn.Visible  = showCampEdge end
-            if noShadowsOn and not lightConn then enableNoShadows() end
-            if loadDefenseOnDefault then enableLoadDefenseSafe() end
-            pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
-            if coinOn and not coinConn then enableCoin() end
-            if chestFinderOn and enableChestFinder then enableChestFinder() end
-
-            if autoReplantOn and not autoReplantConn then
-                local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
-                if items then
-                    autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
-                end
-            end
-        end)
     end
-    local ok, err = pcall(run)
-    if not ok then warn("[Auto] module error: " .. tostring(err)) end
+
+    run()
 end
