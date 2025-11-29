@@ -1,5 +1,5 @@
 -- auto.lua
-
+------------------------- A -------------------------
 return function(C, R, UI)
     local function run()
         local Players  = (C and C.Services and C.Services.Players)  or game:GetService("Players")
@@ -199,7 +199,7 @@ return function(C, R, UI)
             prefetchRing(targetCF)
             requestStreamAt(targetCF)
             waitGameplayResumed(1.0)
-
+------------------------- B -------------------------
             local hadNoclip = isNoclipNow()
             local snap
             if not hadNoclip then
@@ -388,7 +388,7 @@ return function(C, R, UI)
             local dest = root.Position + root.CFrame.LookVector * PHASE_DIST
             teleportSticky(CFrame.new(dest, dest + root.CFrame.LookVector))
         end)
-
+------------------------- C -------------------------
         local markedCF, HOLD_THRESHOLD, downAt, suppressClick = nil, 0.2, 0, false
         tpBtn.MouseButton1Down:Connect(function() downAt = os.clock(); suppressClick = false end)
         tpBtn.MouseButton1Up:Connect(function()
@@ -610,6 +610,7 @@ return function(C, R, UI)
                 if h then pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end) end
             end)
         end
+        ------------------------- D -------------------------
         local function disableInfJump() infJumpOn = false; if infConn then infConn:Disconnect(); infConn = nil end end
         tab:Toggle({ Title = "Infinite Jump", Value = true, Callback = function(state) if state then enableInfJump() else disableInfJump() end end })
         enableInfJump()
@@ -838,6 +839,7 @@ return function(C, R, UI)
             if n == "TreeBig1" or n == "TreeBig2" or n == "TreeBig3" then return true end
             return (type(n)=="string") and (n:match("^WebbedTreeBig%d*$") ~= nil)
         end
+        ------------------------- E -------------------------
         local hideBigTreesOn, hideConn, hideAcc = false, nil, 0
         local function deleteBigTreesOnce()
             local count = 0
@@ -1110,6 +1112,7 @@ return function(C, R, UI)
                 task.wait(seconds)
             end
         end
+        ------------------------- F -------------------------
         local function computePlantPosFromModel(m)
             local mp = mainPart(m); if not mp then return nil end
             local g  = groundBelow2(mp.Position)
@@ -1413,7 +1416,7 @@ return function(C, R, UI)
                 nextChestBtn.Visible = false
             end
         end
-
+------------------------- G -------------------------
         do
             local deleteOn = false
             local addConn, remConn, sweepHB
@@ -1563,7 +1566,7 @@ return function(C, R, UI)
                 end
             })
         end
-
+------------------------- H -------------------------
         ----------------------------------------------------------------
         -- Auto replant saplings (immediate on spawn)
         ----------------------------------------------------------------
