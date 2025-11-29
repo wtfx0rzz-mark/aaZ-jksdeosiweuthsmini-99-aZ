@@ -79,7 +79,7 @@ return function(C, R, UI)
         if ev then ev:FireServer("FireAllClients", tool) end
     end
 
-    private function ensureEquipped(wantedName)
+    local function ensureEquipped(wantedName)
         if not wantedName then return nil end
         if equippedToolName() == wantedName then
             return findInInventory(wantedName)
@@ -161,66 +161,21 @@ return function(C, R, UI)
         return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
     end
 
-    --------------------------------------------------------------------
-    -- TREE CACHE (GLOBAL LIST OF CANDIDATE TREES)
-    --------------------------------------------------------------------
+    local function collectTreesInRadius(roots, origin, radius)
+        local includeBig = C.State.Toggles.BigTreeAura == true
+        local out, n = {}, 0
 
-    local TreeHitPartCache = setmetatable({}, { __mode = "k" })
-
-    local TreeList  = {}  -- array of models
-    local TreeIndex = {}  -- model -> index in TreeList
-    local TreeKind  = {}  -- model -> "small" | "big"
-    local TreeCacheInitialized = false
-
-    local function classifyTree(model)
-        if not (model and model:IsA("Model")) then return nil end
-        if isSmallTreeModel(model) then
-            return "small"
-        end
-        local n = model.Name
-        if isBigTreeName(n) then
-            return "big"
-        end
-        return nil
-    end
-
-    local function addTreeCandidate(model)
-        if not (model and model:IsA("Model")) then return end
-        if TreeIndex[model] then return end
-
-        local kind = classifyTree(model)
-        if not kind then return end
-
-        local idx = #TreeList + 1
-        TreeList[idx] = model
-        TreeIndex[model] = idx
-        TreeKind[model]  = kind
-    end
-
-    local function removeTreeCandidate(model)
-        local idx = TreeIndex[model]
-        if not idx then return end
-
-        TreeIndex[model] = nil
-        TreeKind[model]  = nil
-        TreeHitPartCache[model] = nil
-
-        local lastIdx = #TreeList
-        local last = TreeList[lastIdx]
-        TreeList[lastIdx] = nil
-
-        if last ~= model then
-            TreeList[idx] = last
-            TreeIndex[last] = idx
-        end
-    end
-
-    local function scanTreeRoot(root)
-        if not root then return end
         local function walk(node)
             if not node then return end
-            if node:IsA("Model") then
-                addTreeCandidate(node)
+            if node:IsA("Model") and (isSmallTreeModel(node) or (includeBig and isBigTreeName(node.Name))) then
+                local trunk = bestTreeHitPart(node)
+                if trunk then
+                    local d = (trunk.Position - origin).Magnitude
+                    if d <= radius then
+                        n = n + 1
+                        out[n] = node
+                    end
+                end
             end
             local ok, children = pcall(node.GetChildren, node)
             if ok and children then
@@ -229,77 +184,18 @@ return function(C, R, UI)
                 end
             end
         end
-        walk(root)
-    end
-
-    local function initTreeCache()
-        if TreeCacheInitialized then return end
-        TreeCacheInitialized = true
-
-        local roots = { WS }
-        local assets = RS:FindFirstChild("Assets")
-        if assets then roots[#roots + 1] = assets end
-        local cutsceneSets = RS:FindFirstChild("CutsceneSets")
-        if cutsceneSets then roots[#roots + 1] = cutsceneSets end
 
         for _, root in ipairs(roots) do
-            scanTreeRoot(root)
-            if root then
-                root.DescendantAdded:Connect(function(desc)
-                    if desc:IsA("Model") then
-                        addTreeCandidate(desc)
-                    end
-                end)
-                root.DescendantRemoving:Connect(function(desc)
-                    if TreeIndex[desc] then
-                        removeTreeCandidate(desc)
-                    end
-                end)
-            end
-        end
-    end
-
-    local function bestTreeHitPartCached(tree)
-        if not (tree and tree:IsA("Model")) then return nil end
-        local cached = TreeHitPartCache[tree]
-        if cached and cached.Parent ~= nil then
-            return cached
-        end
-        local part = bestTreeHitPart(tree)
-        if part then
-            TreeHitPartCache[tree] = part
-        else
-            TreeHitPartCache[tree] = nil
-        end
-        return part
-    end
-
-    local function collectTreesInRadius(origin, radius)
-        initTreeCache()
-
-        local out = {}
-        if not origin or not radius or radius <= 0 then
-            return out
+            walk(root)
         end
 
-        local includeBig = C.State.Toggles.BigTreeAura == true
-        local maxDist = radius
-
-        for i = 1, #TreeList do
-            local tree = TreeList[i]
-            if tree and tree.Parent then
-                local kind = TreeKind[tree]
-                if kind == "small" or (includeBig and kind == "big") then
-                    local trunk = bestTreeHitPartCached(tree)
-                    if trunk then
-                        local dist = (trunk.Position - origin).Magnitude
-                        if dist <= maxDist then
-                            out[#out + 1] = tree
-                        end
-                    end
-                end
-            end
-        end
+        table.sort(out, function(a, b)
+            local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
+            local da = pa and (pa.Position - origin).Magnitude or math.huge
+            local db = pb and (pb.Position - origin).Magnitude or math.huge
+            if da == db then return (a.Name or "") < (b.Name or "") end
+            return da < db
+        end)
 
         return out
     end
@@ -738,7 +634,6 @@ return function(C, R, UI)
         if running.SmallTree then return end
         running.SmallTree = true
         task.spawn(function()
-            initTreeCache()
             while running.SmallTree do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
@@ -747,7 +642,8 @@ return function(C, R, UI)
                 else
                     local origin = (getRayOriginFromChar(ch) or hrp.Position)
                     local radius = tonumber(C.State.AuraRadius) or 150
-                    local allTrees = collectTreesInRadius(origin, radius)
+                    local roots = { WS, RS:FindFirstChild("Assets"), RS:FindFirstChild("CutsceneSets") }
+                    local allTrees = collectTreesInRadius(roots, origin, radius)
                     local total = #allTrees
                     if total > 0 then
                         local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
@@ -758,17 +654,20 @@ return function(C, R, UI)
                             batch[i] = allTrees[idx]
                         end
                         C.State._treeCursor = C.State._treeCursor + batchSize
-
+                        local hopsTree = math.max(0, tonumber(TUNE.RAY_MAX_HOPS_TREE) or 0)
                         local filtered = {}
                         for _, tree in ipairs(batch) do
-                            local hitPart = bestTreeHitPartCached(tree)
+                            local hitPart = bestTreeHitPart(tree)
                             if hitPart then
-                                filtered[#filtered + 1] = tree
+                                local dist = (hitPart.Position - origin).Magnitude
+                                local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
+                                if los or dist <= CLOSE_FAILSAFE then
+                                    filtered[#filtered + 1] = tree
+                                end
                             end
                         end
-
                         if #filtered > 0 then
-                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPartCached, true)
+                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
                         else
                             task.wait(0.3)
                         end
@@ -780,7 +679,7 @@ return function(C, R, UI)
         end)
     end
 
-    private function stopSmallTreeAura()
+    local function stopSmallTreeAura()
         running.SmallTree = false
     end
 
