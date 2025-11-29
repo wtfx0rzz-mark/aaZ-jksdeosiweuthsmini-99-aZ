@@ -1,5 +1,5 @@
 -- auto.lua
-------------------------- A -------------------------
+
 return function(C, R, UI)
     local function run()
         local Players  = (C and C.Services and C.Services.Players)  or game:GetService("Players")
@@ -199,7 +199,7 @@ return function(C, R, UI)
             prefetchRing(targetCF)
             requestStreamAt(targetCF)
             waitGameplayResumed(1.0)
-------------------------- B -------------------------
+
             local hadNoclip = isNoclipNow()
             local snap
             if not hadNoclip then
@@ -388,7 +388,7 @@ return function(C, R, UI)
             local dest = root.Position + root.CFrame.LookVector * PHASE_DIST
             teleportSticky(CFrame.new(dest, dest + root.CFrame.LookVector))
         end)
-------------------------- C -------------------------
+
         local markedCF, HOLD_THRESHOLD, downAt, suppressClick = nil, 0.2, 0, false
         tpBtn.MouseButton1Down:Connect(function() downAt = os.clock(); suppressClick = false end)
         tpBtn.MouseButton1Up:Connect(function()
@@ -610,7 +610,6 @@ return function(C, R, UI)
                 if h then pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end) end
             end)
         end
-        ------------------------- D -------------------------
         local function disableInfJump() infJumpOn = false; if infConn then infConn:Disconnect(); infConn = nil end end
         tab:Toggle({ Title = "Infinite Jump", Value = true, Callback = function(state) if state then enableInfJump() else disableInfJump() end end })
         enableInfJump()
@@ -839,7 +838,6 @@ return function(C, R, UI)
             if n == "TreeBig1" or n == "TreeBig2" or n == "TreeBig3" then return true end
             return (type(n)=="string") and (n:match("^WebbedTreeBig%d*$") ~= nil)
         end
-        ------------------------- E -------------------------
         local hideBigTreesOn, hideConn, hideAcc = false, nil, 0
         local function deleteBigTreesOnce()
             local count = 0
@@ -1112,7 +1110,6 @@ return function(C, R, UI)
                 task.wait(seconds)
             end
         end
-        ------------------------- F -------------------------
         local function computePlantPosFromModel(m)
             local mp = mainPart(m); if not mp then return nil end
             local g  = groundBelow2(mp.Position)
@@ -1416,7 +1413,7 @@ return function(C, R, UI)
                 nextChestBtn.Visible = false
             end
         end
-------------------------- G -------------------------
+
         do
             local deleteOn = false
             local addConn, remConn, sweepHB
@@ -1566,7 +1563,7 @@ return function(C, R, UI)
                 end
             })
         end
-------------------------- H -------------------------
+
         ----------------------------------------------------------------
         -- Auto replant saplings (immediate on spawn)
         ----------------------------------------------------------------
@@ -1574,19 +1571,18 @@ return function(C, R, UI)
         local autoReplantConn = nil
 
         local function autoReplantCalcPos(m)
-            -- Prefer to reuse the same logic as actionPlantAllSaplings
-            if computePlantPosFromModel then
-                return computePlantPosFromModel(m)
+            local mp
+            if mainPart2 then
+                mp = mainPart2(m)
             end
-
-            -- Fallback (should not normally be needed)
-            local mp = mainPart and mainPart(m) or nil
+            if not mp and mainPart then
+                mp = mainPart(m)
+            end
             if not mp then return nil end
 
             local center = mp.Position
-            local groundPos = (groundBelow2 and groundBelow2(center)) or center
-            local baseY = center.Y - (mp.Size.Y * 0.5)
-            local y = math.min(groundPos.Y, baseY) - PLANT_Y_EPSILON
+            local ground = groundBelow3 and groundBelow3(center) or center
+            local y = math.min(ground.Y, center.Y - (mp.Size.Y * 0.5)) - 0.15
 
             return Vector3.new(center.X, y, center.Z)
         end
@@ -1596,7 +1592,7 @@ return function(C, R, UI)
             if not (plantRF and m and m.Parent and pos) then return end
 
             local startDrag = getRemote("RequestStartDraggingItem")
-            local stopDrag  = getRemote("RequestStopDraggingItem") or getRemote("StopDraggingItem")
+            local stopDrag  = getRemote("StopDraggingItem")
 
             if startDrag then
                 pcall(function() startDrag:FireServer(m) end)
@@ -1653,26 +1649,20 @@ return function(C, R, UI)
                 return
             end
             task.spawn(function()
-                -- small delay to ensure the sapling is fully initialized server-side
-                task.wait(0.25)
+                task.wait(0.1)
                 if child and child.Parent then
                     autoReplantPlantModel(child)
                 end
             end)
         end
 
-        local function attachAutoReplantListener()
-            if autoReplantConn then return end
-            local items = (itemsFolder and itemsFolder()) or WS:FindFirstChild("Items")
-            if items then
-                autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
-            end
-        end
-
         local function enableAutoReplant()
             if autoReplantOn then return end
             autoReplantOn = true
-            attachAutoReplantListener()
+            local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
+            if items and not autoReplantConn then
+                autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
+            end
         end
 
         local function disableAutoReplant()
@@ -1776,6 +1766,13 @@ return function(C, R, UI)
             if chestFinderOn and enableChestFinder then enableChestFinder() end
 
             if autoReplantOn and not autoReplantConn then
-                attachAutoReplantListener()
+                local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
+                if items then
+                    autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
+                end
             end
         end)
+    end
+    local ok, err = pcall(run)
+    if not ok then warn("[Auto] module error: " .. tostring(err)) end
+end
