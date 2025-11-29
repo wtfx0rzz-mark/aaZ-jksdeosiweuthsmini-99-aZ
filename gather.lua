@@ -39,12 +39,12 @@ return function(C, R, UI)
     local wantBlueprint, wantForestGem, wantKey, wantFlashlight, wantTamingFlute = false, false, false, false, false
 
     local hoverHeight    = 5
-    local forwardDrop    = 10
+    local forwardDrop    = 5
     local upDrop         = 5
     local scanInterval   = 0.1
 
     local PILE_RADIUS    = 1.25
-    local LAYER_SIZE     = 20
+    local LAYER_SIZE     = 10
     local LAYER_HEIGHT   = 0.35
     local UNANCHOR_BATCH = 10
     local UNANCHOR_STEP  = 0.04
