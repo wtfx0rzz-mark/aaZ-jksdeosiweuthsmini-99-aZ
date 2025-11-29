@@ -37,6 +37,13 @@ return function(C, R, UI)
 
     local TRAP_MAX_RADIUS = 20 -- studs: hard cap for trap aura range
 
+    -- Static tree roots (reused)
+    local TREE_ROOTS = {
+        WS,
+        RS:FindFirstChild("Assets"),
+        RS:FindFirstChild("CutsceneSets"),
+    }
+
     --------------------------------------------------------------------
     -- INVENTORY / TOOL HELPERS
     --------------------------------------------------------------------
@@ -114,6 +121,21 @@ return function(C, R, UI)
         return tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart")
     end
 
+    local TreeHitPart = setmetatable({}, { __mode = "k" })
+
+    local function bestTreeHitPartCached(tree)
+        if not (tree and tree:IsA("Model")) then return nil end
+        local part = TreeHitPart[tree]
+        if part and part.Parent then
+            return part
+        end
+        part = bestTreeHitPart(tree)
+        if part then
+            TreeHitPart[tree] = part
+        end
+        return part
+    end
+
     local function getRayOriginFromChar(ch)
         if not ch then return nil end
         local head = ch:FindFirstChild("Head")
@@ -127,12 +149,12 @@ return function(C, R, UI)
         if not (model and model:IsA("Model")) then return false end
         local name = model.Name
         if TREE_NAMES[name] then
-            return bestTreeHitPart(model) ~= nil
+            return bestTreeHitPartCached(model) ~= nil
         end
         if type(name) ~= "string" then return false end
         local lower = name:lower()
         if lower:find("small", 1, true) and lower:find("tree", 1, true) then
-            return bestTreeHitPart(model) ~= nil
+            return bestTreeHitPartCached(model) ~= nil
         end
         return false
     end
@@ -168,7 +190,7 @@ return function(C, R, UI)
         local function walk(node)
             if not node then return end
             if node:IsA("Model") and (isSmallTreeModel(node) or (includeBig and isBigTreeName(node.Name))) then
-                local trunk = bestTreeHitPart(node)
+                local trunk = bestTreeHitPartCached(node)
                 if trunk then
                     local d = (trunk.Position - origin).Magnitude
                     if d <= radius then
@@ -186,11 +208,13 @@ return function(C, R, UI)
         end
 
         for _, root in ipairs(roots) do
-            walk(root)
+            if root then
+                walk(root)
+            end
         end
 
         table.sort(out, function(a, b)
-            local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
+            local pa, pb = bestTreeHitPartCached(a), bestTreeHitPartCached(b)
             local da = pa and (pa.Position - origin).Magnitude or math.huge
             local db = pb and (pb.Position - origin).Magnitude or math.huge
             if da == db then return (a.Name or "") < (b.Name or "") end
@@ -268,7 +292,7 @@ return function(C, R, UI)
     local function visibleTreeFromHRP(hrp, treeModel, maxHops, targetPart)
         if TUNE.VIS_THROUGH_WALLS then return true end
         if not (hrp and treeModel) then return false end
-        targetPart = targetPart or bestTreeHitPart(treeModel)
+        targetPart = targetPart or bestTreeHitPartCached(treeModel)
         if not targetPart then return false end
         local ch = lp.Character
         local start = getRayOriginFromChar(ch) or hrp.Position
@@ -630,9 +654,19 @@ return function(C, R, UI)
 
     C.State._treeCursor = C.State._treeCursor or 1
 
+    local TREE_MOVE_THRESHOLD = 3       -- studs; "touchy" movement
+    local FAST_SCAN_INTERVAL  = 0.7     -- seconds while moving
+    local IDLE_MODE_AFTER     = 5.0     -- seconds stationary before idle mode
+    local IDLE_SCAN_INTERVAL  = 2.0     -- seconds between scans in idle mode
+
     local function startSmallTreeAura()
         if running.SmallTree then return end
         running.SmallTree = true
+
+        local lastScanPos   = nil
+        local lastScanTime  = 0
+        local lastMoveTime  = 0
+
         task.spawn(function()
             while running.SmallTree do
                 local ch = lp.Character or lp.CharacterAdded:Wait()
@@ -640,11 +674,48 @@ return function(C, R, UI)
                 if not hrp then
                     task.wait(0.2)
                 else
-                    local origin = (getRayOriginFromChar(ch) or hrp.Position)
+                    local now    = os.clock()
+                    local origin = getRayOriginFromChar(ch) or hrp.Position
                     local radius = tonumber(C.State.AuraRadius) or 150
-                    local roots = { WS, RS:FindFirstChild("Assets"), RS:FindFirstChild("CutsceneSets") }
-                    local allTrees = collectTreesInRadius(roots, origin, radius)
+
+                    local needScan = false
+
+                    if not lastScanPos then
+                        needScan   = true
+                        lastMoveTime = now
+                    else
+                        local movedDist = (origin - lastScanPos).Magnitude
+                        if movedDist >= TREE_MOVE_THRESHOLD then
+                            needScan     = true
+                            lastMoveTime = now
+                        end
+                    end
+
+                    if not needScan then
+                        local sinceScan = (lastScanTime > 0) and (now - lastScanTime) or math.huge
+                        local sinceMove = (lastMoveTime > 0) and (now - lastMoveTime) or math.huge
+
+                        if sinceMove >= IDLE_MODE_AFTER then
+                            if sinceScan >= IDLE_SCAN_INTERVAL then
+                                needScan = true
+                            end
+                        else
+                            if sinceScan >= FAST_SCAN_INTERVAL then
+                                needScan = true
+                            end
+                        end
+                    end
+
+                    if needScan then
+                        local allTrees = collectTreesInRadius(TREE_ROOTS, origin, radius)
+                        C.State._treeList = allTrees
+                        lastScanPos  = origin
+                        lastScanTime = now
+                    end
+
+                    local allTrees = C.State._treeList or {}
                     local total = #allTrees
+
                     if total > 0 then
                         local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
                         if C.State._treeCursor > total then C.State._treeCursor = 1 end
@@ -654,20 +725,20 @@ return function(C, R, UI)
                             batch[i] = allTrees[idx]
                         end
                         C.State._treeCursor = C.State._treeCursor + batchSize
-                        local hopsTree = math.max(0, tonumber(TUNE.RAY_MAX_HOPS_TREE) or 0)
+
                         local filtered = {}
                         for _, tree in ipairs(batch) do
-                            local hitPart = bestTreeHitPart(tree)
+                            local hitPart = bestTreeHitPartCached(tree)
                             if hitPart then
                                 local dist = (hitPart.Position - origin).Magnitude
-                                local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
-                                if los or dist <= CLOSE_FAILSAFE then
+                                if dist <= radius then
                                     filtered[#filtered + 1] = tree
                                 end
                             end
                         end
+
                         if #filtered > 0 then
-                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPartCached, true)
                         else
                             task.wait(0.3)
                         end
@@ -832,7 +903,6 @@ return function(C, R, UI)
                         task.wait(1.5)
                     else
                         local origin = getRayOriginFromChar(ch) or hrp.Position
-                        -- Trap aura radius is capped to TRAP_MAX_RADIUS
                         local configured = tonumber(C.State.AuraRadius) or 150
                         local radius = math.min(configured, TRAP_MAX_RADIUS)
 
@@ -946,7 +1016,6 @@ return function(C, R, UI)
         local charsFolder = WS:FindFirstChild("Characters")
         if not charsFolder then return end
 
-        -- Use same capped radius for manual send
         local targets = collectCharactersInRadius(charsFolder, origin, TRAP_MAX_RADIUS)
         if #targets == 0 then return end
 
@@ -1080,7 +1149,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Keep BigTreeAura honest if tools disappear
     task.spawn(function()
         local inv = lp:WaitForChild("Inventory", 10)
         if not inv then return end
@@ -1126,7 +1194,6 @@ return function(C, R, UI)
         end
     })
 
-    -- Restore running states if toggles were on
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
     if C.State.Toggles.TrapAura then startTrapAura() end
     if C.State.Toggles.CharacterAura then startCharacterAura() end
