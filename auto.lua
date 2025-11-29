@@ -1574,18 +1574,19 @@ return function(C, R, UI)
         local autoReplantConn = nil
 
         local function autoReplantCalcPos(m)
-            local mp
-            if mainPart2 then
-                mp = mainPart2(m)
+            -- Prefer to reuse the same logic as actionPlantAllSaplings
+            if computePlantPosFromModel then
+                return computePlantPosFromModel(m)
             end
-            if not mp and mainPart then
-                mp = mainPart(m)
-            end
+
+            -- Fallback (should not normally be needed)
+            local mp = mainPart and mainPart(m) or nil
             if not mp then return nil end
 
             local center = mp.Position
-            local ground = groundBelow3 and groundBelow3(center) or center
-            local y = math.min(ground.Y, center.Y - (mp.Size.Y * 0.5)) - 0.15
+            local groundPos = (groundBelow2 and groundBelow2(center)) or center
+            local baseY = center.Y - (mp.Size.Y * 0.5)
+            local y = math.min(groundPos.Y, baseY) - PLANT_Y_EPSILON
 
             return Vector3.new(center.X, y, center.Z)
         end
@@ -1595,7 +1596,7 @@ return function(C, R, UI)
             if not (plantRF and m and m.Parent and pos) then return end
 
             local startDrag = getRemote("RequestStartDraggingItem")
-            local stopDrag  = getRemote("StopDraggingItem")
+            local stopDrag  = getRemote("RequestStopDraggingItem") or getRemote("StopDraggingItem")
 
             if startDrag then
                 pcall(function() startDrag:FireServer(m) end)
@@ -1652,20 +1653,26 @@ return function(C, R, UI)
                 return
             end
             task.spawn(function()
-                task.wait(0.1)
+                -- small delay to ensure the sapling is fully initialized server-side
+                task.wait(0.25)
                 if child and child.Parent then
                     autoReplantPlantModel(child)
                 end
             end)
         end
 
+        local function attachAutoReplantListener()
+            if autoReplantConn then return end
+            local items = (itemsFolder and itemsFolder()) or WS:FindFirstChild("Items")
+            if items then
+                autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
+            end
+        end
+
         local function enableAutoReplant()
             if autoReplantOn then return end
             autoReplantOn = true
-            local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
-            if items and not autoReplantConn then
-                autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
-            end
+            attachAutoReplantListener()
         end
 
         local function disableAutoReplant()
@@ -1769,13 +1776,6 @@ return function(C, R, UI)
             if chestFinderOn and enableChestFinder then enableChestFinder() end
 
             if autoReplantOn and not autoReplantConn then
-                local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
-                if items then
-                    autoReplantConn = items.ChildAdded:Connect(handleNewSapling)
-                end
+                attachAutoReplantListener()
             end
         end)
-    end
-    local ok, err = pcall(run)
-    if not ok then warn("[Auto] module error: " .. tostring(err)) end
-end
