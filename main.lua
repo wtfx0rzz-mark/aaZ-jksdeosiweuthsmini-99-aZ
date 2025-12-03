@@ -3,13 +3,19 @@ repeat task.wait() until game:IsLoaded()
 -------------------------------------------------------
 -- Load UI (WindUI wrapper)
 -------------------------------------------------------
-local function httpget(u) return game:HttpGet(u) end
+local function httpget(u)
+    return game:HttpGet(u)
+end
+
+local GIT_BASE = "https://raw.githubusercontent.com/wtfx0rzz-mark/aaZ-jksdeosiweuthsmini-99-aZ/main/"
 
 local UI = (function()
     local ok, ret = pcall(function()
-        return loadstring(httpget("https://raw.githubusercontent.com/wtfx0rzz-mark/aaZ-jksdeosiweuthsmini-99-aZ/refs/heads/main/ui.lua"))()
+        return loadstring(httpget(GIT_BASE .. "ui.lua"))()
     end)
-    if ok and type(ret) == "table" then return ret end
+    if ok and type(ret) == "table" then
+        return ret
+    end
     error("ui.lua failed to load")
 end)()
 
@@ -26,26 +32,23 @@ C.Services = C.Services or {
 C.LocalPlayer = C.Services.Players.LocalPlayer
 
 C.Config = C.Config or {
-    CHOP_SWING_DELAY = 0.55,                 -- Delay between tree hits
-    TREE_NAME        = "Small Tree",         -- Model name to detect
-    UID_SUFFIX       = "0000000000",         -- Unique ID suffix for hit tracking
-    ChopPrefer       = { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" }, -- Tool priority
+    CHOP_SWING_DELAY = 0.55,
+    TREE_NAME        = "Small Tree",
+    UID_SUFFIX       = "0000000000",
+    ChopPrefer       = { "Chainsaw", "Strong Axe", "Good Axe", "Old Axe" },
 }
 
 C.State = C.State or { AuraRadius = 150, Toggles = {} }
 
--- expose to global env for other modules
 _G.C  = C
 _G.R  = _G.R or {}
 _G.UI = UI
 
 -------------------------------------------------------
--- 🔧 MODULE LOADER SECTION
+-- MODULE LOADER SECTION
 -------------------------------------------------------
--- Each module attaches its features to the corresponding tab
--- defined in ui.lua (Tabs.Main, Tabs.Combat, Tabs.Bring, Tabs.Auto, Tabs.Visuals)
 
-local base = "https://raw.githubusercontent.com/wtfx0rzz/aaZ-jksdeosiweuthsmini-99-aZ/refs/heads/main/"
+local base = GIT_BASE
 local paths = {
     Combat  = base .. "combat.lua",
     Bring   = base .. "bring.lua",
