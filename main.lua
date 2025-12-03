@@ -7,7 +7,7 @@ local function httpget(u) return game:HttpGet(u) end
 
 local UI = (function()
     local ok, ret = pcall(function()
-        return loadstring(httpget("https://raw.githubusercontent.com/wtfx0rzz/aaZ-jksdeosiweuthsmini-99-aZ/refs/heads/main/ui.lua"))()
+        return loadstring(httpget("https://raw.githubusercontent.com/wtfx0rzz-mark/aaZ-jksdeosiweuthsmini-99-aZ/refs/heads/main/ui.lua"))()
     end)
     if ok and type(ret) == "table" then return ret end
     error("ui.lua failed to load")
