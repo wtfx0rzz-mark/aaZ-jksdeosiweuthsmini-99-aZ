@@ -1035,7 +1035,7 @@ return function(C, R, UI)
         end)
     end
 
-    private function stopTrapAura()
+    local function stopTrapAura()
         running.TrapAura = false
     end
 
