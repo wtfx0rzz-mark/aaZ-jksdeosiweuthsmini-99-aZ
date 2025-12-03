@@ -29,7 +29,7 @@ return function(C, R, UI)
     TUNE.CHAR_CLOSE_FAILSAFE  = TUNE.CHAR_CLOSE_FAILSAFE  or 24
     TUNE.VIS_THROUGH_WALLS    = (TUNE.VIS_THROUGH_WALLS ~= false)
 
-    local running = { SmallTree = false, Character = false, TrapAura = false }
+    local running = { SmallTree = false, BigTree = false, Character = false, TrapAura = false }
 
     local TREE_NAMES = { ["Small Tree"] = true, ["Snowy Small Tree"] = true, ["Small Webbed Tree"] = true }
     local BIG_TREE_NAMES = { TreeBig1 = true, TreeBig2 = true, TreeBig3 = true }
@@ -161,13 +161,13 @@ return function(C, R, UI)
         return tostring(nextN) .. "_" .. TUNE.UID_SUFFIX
     end
 
-    local function collectTreesInRadius(roots, origin, radius)
-        local includeBig = C.State.Toggles.BigTreeAura == true
+    -- small-tree only radius collector
+    local function collectSmallTreesInRadius(roots, origin, radius)
         local out, n = {}, 0
 
         local function walk(node)
             if not node then return end
-            if node:IsA("Model") and (isSmallTreeModel(node) or (includeBig and isBigTreeName(node.Name))) then
+            if node:IsA("Model") and isSmallTreeModel(node) then
                 local trunk = bestTreeHitPart(node)
                 if trunk then
                     local d = (trunk.Position - origin).Magnitude
@@ -187,6 +187,111 @@ return function(C, R, UI)
 
         for _, root in ipairs(roots) do
             walk(root)
+        end
+
+        table.sort(out, function(a, b)
+            local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
+            local da = pa and (pa.Position - origin).Magnitude or math.huge
+            local db = pb and (pb.Position - origin).Magnitude or math.huge
+            if da == db then return (a.Name or "") < (b.Name or "") end
+            return da < db
+        end)
+
+        return out
+    end
+
+    -- big-tree helpers + cache
+    local bigTreeCache = { list = {}, lastBuild = 0 }
+
+    local function collectBigTreesInRadius(roots, origin, radius)
+        local out, n = {}, 0
+
+        local function walk(node)
+            if not node then return end
+            if node:IsA("Model") and isBigTreeName(node.Name) then
+                local trunk = bestTreeHitPart(node)
+                if trunk then
+                    local d = (trunk.Position - origin).Magnitude
+                    if d <= radius then
+                        n = n + 1
+                        out[n] = node
+                    end
+                end
+            end
+            local ok, children = pcall(node.GetChildren, node)
+            if ok and children then
+                for _, ch in ipairs(children) do
+                    walk(ch)
+                end
+            end
+        end
+
+        for _, root in ipairs(roots) do
+            walk(root)
+        end
+
+        table.sort(out, function(a, b)
+            local pa, pb = bestTreeHitPart(a), bestTreeHitPart(b)
+            local da = pa and (pa.Position - origin).Magnitude or math.huge
+            local db = pb and (pb.Position - origin).Magnitude or math.huge
+            if da == db then return (a.Name or "") < (b.Name or "") end
+            return da < db
+        end)
+
+        return out
+    end
+
+    local function rebuildBigTreeCache()
+        local roots = { WS, RS:FindFirstChild("Assets"), RS:FindFirstChild("CutsceneSets") }
+        local out = {}
+        local function walk(node)
+            if not node then return end
+            if node:IsA("Model") and isBigTreeName(node.Name) then
+                local trunk = bestTreeHitPart(node)
+                if trunk then
+                    out[#out + 1] = node
+                end
+            end
+            local ok, children = pcall(node.GetChildren, node)
+            if ok and children then
+                for _, ch in ipairs(children) do
+                    walk(ch)
+                end
+            end
+        end
+        for _, root in ipairs(roots) do
+            walk(root)
+        end
+        bigTreeCache.list = out
+        bigTreeCache.lastBuild = os.clock()
+    end
+
+    local function getBigTreesInRadius(origin, radius)
+        local out = {}
+
+        local function addFrom(source)
+            for _, m in ipairs(source) do
+                if m and m.Parent then
+                    local trunk = bestTreeHitPart(m)
+                    if trunk then
+                        local d = (trunk.Position - origin).Magnitude
+                        if d <= radius then
+                            out[#out + 1] = m
+                        end
+                    end
+                end
+            end
+        end
+
+        if C.State.Toggles.BigTreeCaching then
+            if not bigTreeCache.list or #bigTreeCache.list == 0 then
+                rebuildBigTreeCache()
+            end
+            addFrom(bigTreeCache.list or {})
+        else
+            local roots = { WS, RS:FindFirstChild("Assets"), RS:FindFirstChild("CutsceneSets") }
+            local dynamic = collectBigTreesInRadius(roots, origin, radius)
+            addFrom(dynamic)
         end
 
         table.sort(out, function(a, b)
@@ -465,7 +570,7 @@ return function(C, R, UI)
         return tostring(characterHitSeq) .. "_" .. TUNE.UID_SUFFIX
     end
 
-    local function chopWave(targetModels, swingDelay, hitPartGetter, isTree)
+    local function chopWave(targetModels, swingDelay, hitPartGetter, isTree, isBigTree)
         if not isTree then
             local availableWeapons = collectAvailableCharWeapons()
             if #availableWeapons == 0 then
@@ -544,25 +649,37 @@ return function(C, R, UI)
 
         -- Tree mode
         local toolName
-        if C.State.Toggles.BigTreeAura then
+
+        if isBigTree then
             local bt = hasBigTreeTool()
-            if bt then
-                toolName = bt
-            else
-                C.State.Toggles.BigTreeAura = false
+            if not bt then
+                task.wait(0.5)
+                return
             end
-        end
-        if not toolName then
+            toolName = bt
+        else
             for _, n in ipairs(TUNE.ChopPrefer) do
-                if findInInventory(n) then toolName = n break end
+                if findInInventory(n) then
+                    toolName = n
+                    break
+                end
             end
         end
-        if not toolName then task.wait(0.35) return end
+
+        if not toolName then
+            task.wait(0.35)
+            return
+        end
+
         local tool = ensureEquipped(toolName)
-        if not tool then task.wait(0.35) return end
+        if not tool then
+            task.wait(0.35)
+            return
+        end
 
         for _, mdl in ipairs(targetModels) do
             task.spawn(function()
+                if not (mdl and mdl.Parent) then return end
                 local hitPart = hitPartGetter(mdl)
                 if not hitPart then return end
                 local impactCF = impactCFForTree(mdl, hitPart)
@@ -643,7 +760,7 @@ return function(C, R, UI)
                     local origin = (getRayOriginFromChar(ch) or hrp.Position)
                     local radius = tonumber(C.State.AuraRadius) or 150
                     local roots = { WS, RS:FindFirstChild("Assets"), RS:FindFirstChild("CutsceneSets") }
-                    local allTrees = collectTreesInRadius(roots, origin, radius)
+                    local allTrees = collectSmallTreesInRadius(roots, origin, radius)
                     local total = #allTrees
                     if total > 0 then
                         local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
@@ -657,17 +774,19 @@ return function(C, R, UI)
                         local hopsTree = math.max(0, tonumber(TUNE.RAY_MAX_HOPS_TREE) or 0)
                         local filtered = {}
                         for _, tree in ipairs(batch) do
-                            local hitPart = bestTreeHitPart(tree)
-                            if hitPart then
-                                local dist = (hitPart.Position - origin).Magnitude
-                                local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
-                                if los or dist <= CLOSE_FAILSAFE then
-                                    filtered[#filtered + 1] = tree
+                            if tree and tree.Parent then
+                                local hitPart = bestTreeHitPart(tree)
+                                if hitPart then
+                                    local dist = (hitPart.Position - origin).Magnitude
+                                    local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
+                                    if los or dist <= CLOSE_FAILSAFE then
+                                        filtered[#filtered + 1] = tree
+                                    end
                                 end
                             end
                         end
                         if #filtered > 0 then
-                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true)
+                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true, false)
                         else
                             task.wait(0.3)
                         end
@@ -681,6 +800,66 @@ return function(C, R, UI)
 
     local function stopSmallTreeAura()
         running.SmallTree = false
+    end
+
+    --------------------------------------------------------------------
+    -- BIG TREE AURA (BIG TREES ONLY)
+    --------------------------------------------------------------------
+
+    C.State._bigTreeCursor = C.State._bigTreeCursor or 1
+
+    local function startBigTreeAura()
+        if running.BigTree then return end
+        running.BigTree = true
+        task.spawn(function()
+            while running.BigTree do
+                local ch = lp.Character or lp.CharacterAdded:Wait()
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if not hrp then
+                    task.wait(0.2)
+                else
+                    local origin = (getRayOriginFromChar(ch) or hrp.Position)
+                    local radius = tonumber(C.State.AuraRadius) or 150
+                    local allTrees = getBigTreesInRadius(origin, radius)
+                    local total = #allTrees
+                    if total > 0 then
+                        local batchSize = math.min(TUNE.MAX_TARGETS_PER_WAVE, total)
+                        if C.State._bigTreeCursor > total then C.State._bigTreeCursor = 1 end
+                        local batch = table.create(batchSize)
+                        for i = 1, batchSize do
+                            local idx = ((C.State._bigTreeCursor + i - 2) % total) + 1
+                            batch[i] = allTrees[idx]
+                        end
+                        C.State._bigTreeCursor = C.State._bigTreeCursor + batchSize
+                        local hopsTree = math.max(0, tonumber(TUNE.RAY_MAX_HOPS_TREE) or 0)
+                        local filtered = {}
+                        for _, tree in ipairs(batch) do
+                            if tree and tree.Parent then
+                                local hitPart = bestTreeHitPart(tree)
+                                if hitPart then
+                                    local dist = (hitPart.Position - origin).Magnitude
+                                    local los = visibleTreeFromHRP(hrp, tree, hopsTree, hitPart)
+                                    if los or dist <= CLOSE_FAILSAFE then
+                                        filtered[#filtered + 1] = tree
+                                    end
+                                end
+                            end
+                        end
+                        if #filtered > 0 then
+                            chopWave(filtered, TUNE.CHOP_SWING_DELAY, bestTreeHitPart, true, true)
+                        else
+                            task.wait(0.3)
+                        end
+                    else
+                        task.wait(0.5)
+                    end
+                end
+            end
+        end)
+    end
+
+    local function stopBigTreeAura()
+        running.BigTree = false
     end
 
     --------------------------------------------------------------------
@@ -832,7 +1011,6 @@ return function(C, R, UI)
                         task.wait(1.5)
                     else
                         local origin = getRayOriginFromChar(ch) or hrp.Position
-                        -- Trap aura radius is capped to TRAP_MAX_RADIUS
                         local configured = tonumber(C.State.AuraRadius) or 150
                         local radius = math.min(configured, TRAP_MAX_RADIUS)
 
@@ -857,7 +1035,7 @@ return function(C, R, UI)
         end)
     end
 
-    local function stopTrapAura()
+    private function stopTrapAura()
         running.TrapAura = false
     end
 
@@ -946,7 +1124,6 @@ return function(C, R, UI)
         local charsFolder = WS:FindFirstChild("Characters")
         if not charsFolder then return end
 
-        -- Use same capped radius for manual send
         local targets = collectCharactersInRadius(charsFolder, origin, TRAP_MAX_RADIUS)
         if #targets == 0 then return end
 
@@ -1043,15 +1220,6 @@ return function(C, R, UI)
     })
 
     CombatTab:Toggle({
-        Title = "Trap Aura (Bear Traps, max 20 studs)",
-        Value = C.State.Toggles.TrapAura or false,
-        Callback = function(on)
-            C.State.Toggles.TrapAura = on
-            if on then startTrapAura() else stopTrapAura() end
-        end
-    })
-
-    CombatTab:Toggle({
         Title = "Small Tree Aura",
         Value = C.State.Toggles.SmallTreeAura or false,
         Callback = function(on)
@@ -1062,13 +1230,14 @@ return function(C, R, UI)
 
     local bigToggle
     bigToggle = CombatTab:Toggle({
-        Title = "Big Trees (Strong Axe or Chainsaw)",
+        Title = "Big Tree Aura (Strong Axe or Chainsaw)",
         Value = C.State.Toggles.BigTreeAura or false,
         Callback = function(on)
             if on then
                 local bt = hasBigTreeTool()
                 if bt then
                     C.State.Toggles.BigTreeAura = true
+                    startBigTreeAura()
                 else
                     C.State.Toggles.BigTreeAura = false
                     pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
@@ -1076,27 +1245,22 @@ return function(C, R, UI)
                 end
             else
                 C.State.Toggles.BigTreeAura = false
+                stopBigTreeAura()
             end
         end
     })
 
-    -- Keep BigTreeAura honest if tools disappear
-    task.spawn(function()
-        local inv = lp:WaitForChild("Inventory", 10)
-        if not inv then return end
-        local function check()
-            if C.State.Toggles.BigTreeAura and not hasBigTreeTool() then
-                C.State.Toggles.BigTreeAura = false
-                pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
-                pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
+    CombatTab:Toggle({
+        Title = "Big tree caching",
+        Value = C.State.Toggles.BigTreeCaching or false,
+        Callback = function(on)
+            C.State.Toggles.BigTreeCaching = on
+            if not on then
+                bigTreeCache.list = {}
+                bigTreeCache.lastBuild = 0
             end
         end
-        inv.ChildRemoved:Connect(check)
-        while true do
-            task.wait(2.0)
-            check()
-        end
-    end)
+    })
 
     CombatTab:Slider({
         Title = "Distance",
@@ -1114,6 +1278,15 @@ return function(C, R, UI)
     })
 
     CombatTab:Toggle({
+        Title = "Trap Aura (Bear Traps, max 20 studs)",
+        Value = C.State.Toggles.TrapAura or false,
+        Callback = function(on)
+            C.State.Toggles.TrapAura = on
+            if on then startTrapAura() else stopTrapAura() end
+        end
+    })
+
+    CombatTab:Toggle({
         Title = "Trap Manual Controls",
         Value = C.State.Toggles.TrapManualControls or false,
         Callback = function(on)
@@ -1126,8 +1299,28 @@ return function(C, R, UI)
         end
     })
 
+    -- Keep BigTreeAura honest if tools disappear
+    task.spawn(function()
+        local inv = lp:WaitForChild("Inventory", 10)
+        if not inv then return end
+        local function check()
+            if C.State.Toggles.BigTreeAura and not hasBigTreeTool() then
+                C.State.Toggles.BigTreeAura = false
+                stopBigTreeAura()
+                pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
+                pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
+            end
+        end
+        inv.ChildRemoved:Connect(check)
+        while true do
+            task.wait(2.0)
+            check()
+        end
+    end)
+
     -- Restore running states if toggles were on
     if C.State.Toggles.SmallTreeAura then startSmallTreeAura() end
+    if C.State.Toggles.BigTreeAura then startBigTreeAura() end
     if C.State.Toggles.TrapAura then startTrapAura() end
     if C.State.Toggles.CharacterAura then startCharacterAura() end
     if C.State.Toggles.TrapManualControls then createTrapPanel() end
