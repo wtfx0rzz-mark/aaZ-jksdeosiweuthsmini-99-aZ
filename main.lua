@@ -7,7 +7,7 @@ local function httpget(u) return game:HttpGet(u) end
 
 local UI = (function()
     local ok, ret = pcall(function()
-        return loadstring(httpget("https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/ui.lua"))()
+        return loadstring(httpget("https://raw.githubusercontent.com/wtfx0rzz/aaZ-jksdeosiweuthsmini-99-aZ/refs/heads/main/ui.lua"))()
     end)
     if ok and type(ret) == "table" then return ret end
     error("ui.lua failed to load")
@@ -45,19 +45,18 @@ _G.UI = UI
 -- Each module attaches its features to the corresponding tab
 -- defined in ui.lua (Tabs.Main, Tabs.Combat, Tabs.Bring, Tabs.Auto, Tabs.Visuals)
 
+local base = "https://raw.githubusercontent.com/wtfx0rzz/aaZ-jksdeosiweuthsmini-99-aZ/refs/heads/main/"
 local paths = {
-    Combat  = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/combat.lua",
-    Bring   = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/bring.lua",
-    Gather    = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/gather.lua",
-    Player   = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/player.lua",
-    Auto    = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/auto.lua",
-    Visuals = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/visuals.lua",
-    TPBring = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/tpbring.lua",
-    Debug = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/debug.lua",
-    Troll = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/troll.lua",
-    Nudge = "https://raw.githubusercontent.com/wtfx0rzz-mark/aZ8rY2dLq4NfX1pT9sGv/refs/heads/main/nudge.lua"
-
-
+    Combat  = base .. "combat.lua",
+    Bring   = base .. "bring.lua",
+    Gather  = base .. "gather.lua",
+    Player  = base .. "player.lua",
+    Auto    = base .. "auto.lua",
+    Visuals = base .. "visuals.lua",
+    TPBring = base .. "tpbring.lua",
+    Debug   = base .. "debug.lua",
+    Troll   = base .. "troll.lua",
+    Nudge   = base .. "nudge.lua",
 }
 
 for name, url in pairs(paths) do
